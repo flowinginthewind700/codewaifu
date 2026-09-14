@@ -21,6 +21,18 @@ export const backupsDir = path.join(stateDir, 'backups')
 export const configFile = path.join(stateDir, 'config.json')
 export const endpointFile = path.join(stateDir, 'endpoint.env')
 export const logFile = path.join(stateDir, 'codewaifu.log')
+/** Downloaded Live2D characters + Cubism Core (see main/assets.ts). */
+export const assetRoot = path.join(stateDir, 'assets')
+/** Scratch space for TTS rendered to a file so the renderer can lip-sync it. */
+export const ttsDir = path.join(stateDir, 'tts')
+/**
+ * Neural TTS (Matcha) weights, downloaded on first run. Override to reuse an
+ * existing checkout across dev runs: `CODEWAIFU_MATCHA_DIR=/path/to/models`.
+ */
+export const matchaDir = resolveOverride(
+  process.env.CODEWAIFU_MATCHA_DIR,
+  path.join(stateDir, 'models', 'matcha')
+)
 
 /** Honour the agents' own home overrides so a relocated config is still found. */
 export const codexHome = resolveOverride(process.env.CODEX_HOME, path.join(home, '.codex'))

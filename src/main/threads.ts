@@ -61,6 +61,32 @@ export class ThreadTracker {
     return [...this.live.values()].sort((a, b) => b.at - a.at)
   }
 
+  /**
+   * Look one thread up without triggering a scan: the chat view polls this on
+   * every refresh, and re-walking both agents' session trees 2x/second would
+   * cost more than the transcript read itself. Falls back to the live map, so
+   * a thread that has not been listed yet still resolves.
+   */
+  peek(agent: Agent, sessionId: string): ThreadInfo | null {
+    const key = `${agent}:${sessionId}`
+    const cached = this.cache?.threads.find((thread) => thread.key === key)
+    if (cached) return cached
+    const session = this.live.get(key)
+    if (!session) return null
+    return {
+      key,
+      agent: session.agent,
+      id: session.sessionId,
+      title: session.title || shortPath(session.cwd) || session.sessionId.slice(0, 8),
+      cwd: session.cwd,
+      updatedAt: session.at,
+      live: true,
+      lastKind: session.lastKind,
+      lastDetail: session.lastDetail,
+      steerable: session.agent === 'codex'
+    }
+  }
+
   async list(): Promise<ThreadInfo[]> {
     if (this.cache && Date.now() - this.cache.at < CACHE_MS) return this.cache.threads
     const [codex, claude] = await Promise.all([safe(() => codexThreads(), []), safe(() => claudeThreads(), [])])

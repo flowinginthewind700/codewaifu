@@ -15,7 +15,9 @@ const KIND_LABEL: Record<string, { zh: string; en: string }> = {
   compact: { zh: '压缩上下文', en: 'compacting' },
   subagent: { zh: '子任务', en: 'subagent' },
   interrupt: { zh: '已中断', en: 'interrupted' },
-  prompt: { zh: '输入', en: 'prompt' }
+  prompt: { zh: '输入', en: 'prompt' },
+  /** The status read-out she composes when you tap the report button. */
+  report: { zh: '状态汇报', en: 'status' }
 }
 
 interface BubbleProps {

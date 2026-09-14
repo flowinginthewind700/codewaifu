@@ -49,6 +49,12 @@ export function renderHookSh(): string {
     'CODEWAIFU_AGENT="${1:-unknown}"',
     '# Drain stdin first so an early exit never leaves the agent with EPIPE.',
     'BODY=`cat 2>/dev/null`',
+    '# ⛔ Not `${BODY:-{}}`: POSIX ends the expansion at the first `}`, so that',
+    '# form appends a stray brace to every non-empty payload and the relay logs an',
+    '# empty event. Default it on its own line instead.',
+    'case "$BODY" in',
+    "  '') BODY='{}' ;;",
+    'esac',
     'STATE="${CODEWAIFU_HOME:-$HOME/.codewaifu}/endpoint.env"',
     '[ -f "$STATE" ] || exit 0',
     '# shellcheck disable=SC1090',
@@ -66,7 +72,7 @@ export function renderHookSh(): string {
     '  -X POST "${BASE}/hook/${CODEWAIFU_AGENT}" \\',
     '  -H "Content-Type: application/json" \\',
     '  -H "X-CodeWaifu-Token: ${CODEWAIFU_TOKEN:-}" \\',
-    "  --data-binary \"${BODY:-{}}\" 2>/dev/null || true",
+    '  --data-binary "$BODY" 2>/dev/null || true',
     'exit 0',
     ''
   ].join('\n')

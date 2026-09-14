@@ -52,7 +52,10 @@ export function createTestRelay(patch?: Partial<AppConfig>): TestRelay {
       codexTrustNeeded: false
     },
     agents: { codex: false, claude: false },
-    voices: []
+    voices: [],
+    // The relay never synthesizes; this is the shape the widget expects.
+    neural: { phase: 'unavailable', received: 0, total: 0, file: '', error: '', dir: '', sampleRate: 0, loadMs: 0 },
+    systemLang: 'zh'
   })
 
   const deps: ServerDeps = {

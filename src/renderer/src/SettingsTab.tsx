@@ -1,27 +1,46 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { FolderOpen, Image as ImageIcon, Volume2 } from 'lucide-react'
+import { FolderOpen, Image as ImageIcon, RefreshCw, Volume2 } from 'lucide-react'
 import type { ConfigPatch } from '@shared/config'
+import { acceleratorFromCombo, formatAccelerator } from '@shared/hotkey'
 import { normalizeRequestedPort } from '@shared/portPolicy'
-import type { RedactedConfig, RuntimeState } from '@shared/protocol'
+import type { NeuralPhase, NeuralStatus, RedactedConfig, RuntimeState, VoiceEngine } from '@shared/protocol'
+import { LIVE2D_CATALOG } from '@shared/live2dCatalog'
 import type { Translate } from './i18n'
+import { assetUrl } from './live2d/assets'
 import { platform, versions } from './api'
 
 interface SettingsTabProps {
   config: RedactedConfig
   runtime: RuntimeState
   t: Translate
+  lang: 'zh' | 'en'
   onChange: (patch: ConfigPatch) => void
   onSay: (text: string) => void
   onPickImage: () => void
   onOpenPath: (path: string) => void
   onHooksInstall: () => void
   onHooksUninstall: () => void
+  onNeuralRetry: () => void
   onQuit: () => void
 }
 
 export function SettingsTab(props: SettingsTabProps): ReactElement {
-  const { config, runtime, t, onChange, onSay, onPickImage, onOpenPath, onHooksInstall, onHooksUninstall, onQuit } = props
+  const {
+    config,
+    runtime,
+    t,
+    lang,
+    onChange,
+    onSay,
+    onPickImage,
+    onOpenPath,
+    onHooksInstall,
+    onHooksUninstall,
+    onNeuralRetry,
+    onQuit
+  } = props
   const relay = runtime.relay
+  const neural = config.voice.engine === 'matcha'
 
   return (
     <div className="panel-body">
@@ -50,20 +69,43 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
           ]}
           onChange={(v) => onChange({ lang: v as ConfigPatch['lang'] })}
         />
-        <Select
-          label={t('voiceZh')}
-          value={config.voice.zh}
-          placeholder={t('voiceAuto')}
-          options={voiceOptions(runtime.voices, 'zh')}
-          onChange={(v) => onChange({ voice: { ...config.voice, zh: v } })}
+        <Segmented
+          label={t('voiceEngine')}
+          value={config.voice.engine}
+          options={[
+            { value: 'matcha', label: t('engineMatcha') },
+            { value: 'system', label: t('engineSystem') }
+          ]}
+          onChange={(v) => onChange({ voice: { ...config.voice, engine: v as VoiceEngine } })}
         />
-        <Select
-          label={t('voiceEn')}
-          value={config.voice.en}
-          placeholder={t('voiceAuto')}
-          options={voiceOptions(runtime.voices, 'en')}
-          onChange={(v) => onChange({ voice: { ...config.voice, en: v } })}
-        />
+        <div className="hint">{neural ? t('engineMatchaHint') : t('engineSystemHint')}</div>
+        {neural ? (
+          <>
+            <Toggle
+              label={t('autoDownload')}
+              checked={config.voice.autoDownload}
+              onChange={(v) => onChange({ voice: { ...config.voice, autoDownload: v } })}
+            />
+            <NeuralRow neural={runtime.neural} t={t} onRetry={onNeuralRetry} onOpenPath={onOpenPath} />
+          </>
+        ) : (
+          <>
+            <Select
+              label={t('voiceZh')}
+              value={config.voice.zh}
+              placeholder={t('voiceAuto')}
+              options={voiceOptions(runtime.voices, 'zh')}
+              onChange={(v) => onChange({ voice: { ...config.voice, zh: v } })}
+            />
+            <Select
+              label={t('voiceEn')}
+              value={config.voice.en}
+              placeholder={t('voiceAuto')}
+              options={voiceOptions(runtime.voices, 'en')}
+              onChange={(v) => onChange({ voice: { ...config.voice, en: v } })}
+            />
+          </>
+        )}
         <Slider
           label={t('rate')}
           value={config.voice.rate}
@@ -76,7 +118,11 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
         <div className="row">
           <div className="row-label" />
           <div className="row-control">
-            <button className="text-btn" type="button" onClick={() => onSay(config.lang === 'en' ? 'Testing, one two three.' : '测试一下，我在。')}>
+            <button
+              className="text-btn"
+              type="button"
+              onClick={() => onSay(lang === 'en' ? 'Testing, one two three.' : '测试一下，我在。')}
+            >
               <Volume2 size={13} /> {t('testVoice')}
             </button>
           </div>
@@ -99,6 +145,39 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
       {/* ---- appearance ----------------------------------------------- */}
       <section className="section">
         <h3 className="section-title">{t('secLook')}</h3>
+        <Select
+          label={t('uiLang')}
+          value={config.uiLang}
+          options={[
+            { value: 'auto', label: t('uiLangAuto') },
+            { value: 'zh', label: '中文' },
+            { value: 'en', label: 'English' }
+          ]}
+          onChange={(v) => onChange({ uiLang: v as ConfigPatch['uiLang'] })}
+        />
+        <div className="hint">{t('uiLangHint')}</div>
+        <Segmented
+          label={t('surface')}
+          value={config.appearance.surface}
+          options={[
+            { value: 'glass', label: t('surfaceGlass') },
+            { value: 'solid', label: t('surfaceSolid') }
+          ]}
+          onChange={(v) =>
+            onChange({ appearance: { ...config.appearance, surface: v === 'solid' ? 'solid' : 'glass' } })
+          }
+        />
+        <div className="hint">{t('surfaceHint')}</div>
+        {config.avatar.mode === 'live2d' ? (
+          <>
+            <Toggle
+              label={t('clearStage')}
+              checked={config.appearance.clearStage}
+              onChange={(v) => onChange({ appearance: { ...config.appearance, clearStage: v } })}
+            />
+            <div className="hint">{t('clearStageHint')}</div>
+          </>
+        ) : null}
         <Slider
           label={t('opacity')}
           value={config.opacity}
@@ -130,6 +209,9 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
           <div className="row-label">{t('avatar')}</div>
           <div className="row-control">
             <div className="segmented" style={{ flex: '0 0 auto' }}>
+              <button type="button" aria-selected={config.avatar.mode === 'live2d'} onClick={() => onChange({ avatar: { ...config.avatar, mode: 'live2d' } })}>
+                {t('avatarLive2d')}
+              </button>
               <button type="button" aria-selected={config.avatar.mode === 'builtin'} onClick={() => onChange({ avatar: { ...config.avatar, mode: 'builtin' } })}>
                 {t('avatarBuiltin')}
               </button>
@@ -139,6 +221,37 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
             </div>
           </div>
         </div>
+        {config.avatar.mode === 'live2d' ? (
+          <>
+            <div className="row">
+              <div className="row-label">{t('character')}</div>
+              <div className="row-control">
+                <div className="chars">
+                  {LIVE2D_CATALOG.characters.map((character) => {
+                    const selected = character.id === config.avatar.character
+                    const label = lang === 'zh' ? character.labelZh : character.labelEn
+                    return (
+                      <button
+                        key={character.id}
+                        type="button"
+                        className="char"
+                        aria-pressed={selected}
+                        title={lang === 'zh' ? character.blurbZh : character.blurbEn}
+                        onClick={() => onChange({ avatar: { ...config.avatar, character: character.id } })}
+                      >
+                        {character.thumbUrl ? (
+                          <img src={assetUrl(character.thumbUrl)} alt="" draggable={false} loading="lazy" />
+                        ) : null}
+                        <span>{label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="hint">{t('live2dHint')}</div>
+          </>
+        ) : null}
         {config.avatar.mode === 'image' && config.avatar.imagePath ? (
           <div className="row">
             <div className="row-label">
@@ -151,6 +264,12 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
             </div>
           </div>
         ) : null}
+      </section>
+
+      {/* ---- window & hotkey ----------------------------------------- */}
+      <section className="section">
+        <h3 className="section-title">{t('secWindow')}</h3>
+        <HotkeyRow t={t} value={config.hotkey} onChange={(hotkey) => onChange({ hotkey })} />
       </section>
 
       {/* ---- relay / port --------------------------------------------- */}
@@ -326,6 +445,76 @@ function HookRow({
   )
 }
 
+/**
+ * Recorder row for the system-wide summon hotkey. Recording captures the next
+ * keydown at the window (capture phase, so the panel's own shortcuts stay out
+ * of it) and refuses bare keys: a global grab of a plain letter would swallow
+ * typing in every other app on the machine.
+ */
+function HotkeyRow({
+  t,
+  value,
+  onChange
+}: {
+  t: Translate
+  value: string
+  onChange: (hotkey: string) => void
+}): ReactElement {
+  const [recording, setRecording] = useState(false)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    if (!recording) return
+    const onKey = (event: KeyboardEvent): void => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') {
+        setRecording(false)
+        setError(false)
+        return
+      }
+      const accelerator = acceleratorFromCombo({
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        code: event.code,
+        key: event.key
+      })
+      if (!accelerator) {
+        setError(true)
+        return
+      }
+      setError(false)
+      setRecording(false)
+      onChange(accelerator)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [recording, onChange])
+
+  return (
+    <>
+      <div className="row">
+        <div className="row-label">{t('hotkey')}</div>
+        <div className="row-control">
+          <button
+            type="button"
+            className={recording ? 'text-btn recording' : 'text-btn'}
+            onClick={() => {
+              setRecording((was) => !was)
+              setError(false)
+            }}
+          >
+            {recording ? t('hotkeyRecord') : formatAccelerator(value, platform === 'darwin')}
+          </button>
+        </div>
+      </div>
+      {error ? <div className="hint warn">{t('hotkeyInvalid')}</div> : <div className="hint">{t('hotkeyHint')}</div>}
+    </>
+  )
+}
+
 function Toggle({
   label,
   checked,
@@ -346,9 +535,133 @@ function Toggle({
           aria-checked={checked}
           aria-label={label}
           onClick={() => onChange(!checked)}
-        />
+      />
       </div>
     </div>
+  )
+}
+
+/** Two-or-three-way choice, drawn as the same segmented control the tabs use. */
+function Segmented({
+  label,
+  value,
+  options,
+  onChange
+}: {
+  label: string
+  value: string
+  options: Array<{ value: string; label: string }>
+  onChange: (value: string) => void
+}): ReactElement {
+  return (
+    <div className="row">
+      <div className="row-label">{label}</div>
+      <div className="row-control">
+        <div className="segmented" style={{ flex: '0 0 auto' }}>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              aria-selected={option.value === value}
+              onClick={() => onChange(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const NEURAL_LABEL: Record<NeuralPhase, Parameters<Translate>[0]> = {
+  ready: 'neuralReady',
+  downloading: 'neuralDownloading',
+  extracting: 'neuralExtracting',
+  loading: 'neuralLoading',
+  missing: 'neuralMissing',
+  unavailable: 'neuralUnavailable',
+  error: 'neuralError'
+}
+
+/**
+ * The 134MB weight download, honestly reported. It runs in the background and
+ * the OS voice covers for it, so the only thing this row has to do is tell the
+ * user whether it is coming, here, or stuck — and give a way to push it.
+ */
+function NeuralRow({
+  neural,
+  t,
+  onRetry,
+  onOpenPath
+}: {
+  neural: NeuralStatus
+  t: Translate
+  onRetry: () => void
+  onOpenPath: (path: string) => void
+}): ReactElement {
+  const phase = neural.phase
+  const busy = phase === 'downloading' || phase === 'extracting' || phase === 'loading'
+  const pct = neural.total > 0 ? Math.min(100, Math.round((neural.received / neural.total) * 100)) : 0
+  const state = phase === 'ready' ? 'ok' : phase === 'error' || phase === 'unavailable' ? 'warn' : 'live'
+  const mb = (n: number): string => (n / 1e6).toFixed(1)
+  const sub =
+    phase === 'downloading' && neural.file
+      ? neural.file
+      : phase === 'error'
+        ? [neural.error, neural.dir].filter(Boolean).join(' · ')
+        : phase === 'ready' && neural.loadMs
+          ? t('neuralColdLoad').replace('{ms}', String(neural.loadMs))
+          : ''
+
+  return (
+    <>
+      <div className="row">
+        <div className="row-label">
+          {t('neuralModel')}
+          {sub ? <div className="row-sub">{sub}</div> : null}
+        </div>
+        <div className="row-control">
+          <span className="chip" data-state={state}>
+            <span className={busy ? 'dot pulse' : 'dot'} />
+            {phase === 'downloading' ? `${pct}%` : t(NEURAL_LABEL[phase])}
+          </span>
+        </div>
+      </div>
+      {busy ? (
+        <div className="row">
+          <div className="row-label">
+            <div className="row-sub">
+              {neural.total > 0 ? `${mb(neural.received)} / ${mb(neural.total)} MB` : mb(neural.received) + ' MB'}
+            </div>
+          </div>
+          <div className="row-control">
+            <span className="meter">
+              <span
+                className="meter-fill"
+                data-indeterminate={phase === 'downloading' ? undefined : '1'}
+                style={{ width: phase === 'downloading' ? `${pct}%` : undefined }}
+              />
+            </span>
+          </div>
+        </div>
+      ) : null}
+      {phase === 'error' || phase === 'missing' ? (
+        <div className="row">
+          <div className="row-label" />
+          <div className="row-control">
+            <button className="text-btn" type="button" onClick={onRetry}>
+              <RefreshCw size={13} /> {phase === 'error' ? t('neuralRetry') : t('neuralDownload')}
+            </button>
+            {neural.dir ? (
+              <button className="text-btn" type="button" onClick={() => onOpenPath(neural.dir)}>
+                <FolderOpen size={13} /> {t('openFolder')}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </>
   )
 }
 

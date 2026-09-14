@@ -11,9 +11,20 @@ export { IPC }
 
 export interface UiHooks {
   setExpanded: (expanded: boolean) => void
+  setChatMode: (on: boolean) => void
   setClickThrough: (through: boolean) => void
   /** Push window-level config (opacity, alwaysOnTop) that only main can apply. */
   applyConfig: (config: AppConfig) => void
+  /** The renderer measured its card; resize the frame to exactly that height. */
+  fitHeight: (height: number) => void
+  /** Drag the frame by a screen-space delta (JS drag over the Live2D canvas). */
+  moveWindow: (dx: number, dy: number) => void
+  /** The renderer's Web Audio player mounted (true) or went away (false). */
+  voiceReady: (ready: boolean) => void
+  /** One line of speech finished playing in the renderer. */
+  speechAck: (id: string, ok: boolean, error?: string) => void
+  /** A non-empty input gained/lost focus in our window (hotkey guard). */
+  setInputActive: (active: boolean) => void
   hide: () => void
   quit: () => void
 }
@@ -64,6 +75,25 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
 
   handle(IPC.threads, async () => ({ ok: true, threads: await core.threads() }))
 
+  handle(IPC.transcript, (payload) => {
+    const body = (payload || {}) as { agent?: Agent; threadId?: string; limit?: number; fresh?: boolean }
+    const agent: Agent = body.agent === 'codex' || body.agent === 'claude' ? body.agent : 'unknown'
+    if (agent === 'unknown') return { ok: false, transcript: null, error: 'unknown agent' }
+    const limit = Number(body.limit) || undefined
+    const transcript = core.transcript(agent, String(body.threadId || ''), { limit, fresh: Boolean(body.fresh) })
+    return { ok: Boolean(transcript), transcript }
+  })
+
+  handle(IPC.chatMode, (payload) => {
+    ui.setChatMode(Boolean(payload))
+    return { ok: true }
+  })
+
+  handle(IPC.inputActive, (payload) => {
+    ui.setInputActive(Boolean(payload))
+    return { ok: true }
+  })
+
   handle(IPC.steer, async (payload) => {
     const body = (payload || {}) as { agent?: Agent; threadId?: string; message?: string }
     const agent: Agent = body.agent === 'codex' || body.agent === 'claude' ? body.agent : 'unknown'
@@ -86,6 +116,31 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
   handle(IPC.hooksInstall, () => ({ ok: true, report: core.reinstallHooks() }))
   handle(IPC.hooksUninstall, () => ({ ok: true, report: core.removeHooks() }))
   handle(IPC.voices, async () => ({ ok: true, voices: await core.voices() }))
+
+  handle(IPC.neuralRetry, () => ({ ok: true, neural: core.retryNeural() }))
+
+  handle(IPC.fitHeight, (payload) => {
+    ui.fitHeight(Number(payload))
+    return { ok: true }
+  })
+
+  handle(IPC.moveWindow, (payload) => {
+    const body = (payload || {}) as { dx?: number; dy?: number }
+    ui.moveWindow(Number(body.dx) || 0, Number(body.dy) || 0)
+    return { ok: true }
+  })
+
+  handle(IPC.voiceReady, (payload) => {
+    ui.voiceReady(Boolean(payload))
+    return { ok: true }
+  })
+
+  handle(IPC.speechAck, (payload) => {
+    const body = (payload || {}) as { id?: string; ok?: boolean; error?: string }
+    const id = String(body.id || '')
+    if (id) ui.speechAck(id, Boolean(body.ok), body.error)
+    return { ok: true }
+  })
 
   handle(IPC.expanded, (payload) => {
     ui.setExpanded(Boolean(payload))

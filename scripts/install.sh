@@ -9,6 +9,7 @@
 #   --purge       with --uninstall, also delete the app bundle
 #   --hooks-only  register hooks for an app that is already installed
 #   --version vX  pin a release tag instead of the latest one
+#   --from PATH   install from a local .zip / .app / build dir instead of downloading
 set -euo pipefail
 
 REPO="${CODEWAIFU_REPO:-flowinginthewind700/codewaifu}"
@@ -16,6 +17,7 @@ TAG=""
 UNINSTALL=0
 PURGE=0
 HOOKS_ONLY=0
+LOCAL=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,6 +25,7 @@ while [ $# -gt 0 ]; do
     --purge) PURGE=1 ;;
     --hooks-only) HOOKS_ONLY=1 ;;
     --version) TAG="$2"; shift ;;
+    --from) LOCAL="$2"; shift ;;
     -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -88,20 +91,48 @@ fi
 if [ "$HOOKS_ONLY" != "1" ]; then
   [ "$OS" = "Darwin" ] || die "automated app install is macOS-only for now; on Linux grab the AppImage from the release page, then re-run with --hooks-only"
 
-  if [ -z "$TAG" ]; then
+  if [ -n "$LOCAL" ]; then
+    # Local artifact: same unpack + place + hook steps as a download, so a build
+    # can be dogfooded through the exact path users take.
+    [ -e "$LOCAL" ] || die "no such file or directory: $LOCAL"
+    SRC_APP=""
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+    case "$LOCAL" in
+      *.app) SRC_APP="$LOCAL" ;;
+      *.zip)
+        say "unpacking $LOCAL"
+        mkdir -p "$TMP/app"
+        ditto -x -k "$LOCAL" "$TMP/app" 2>/dev/null || unzip -q "$LOCAL" -d "$TMP/app"
+        SRC_APP="$TMP/app/CodeWaifu.app"
+        [ -d "$SRC_APP" ] || SRC_APP="$(find "$TMP/app" -maxdepth 3 -name CodeWaifu.app -type d | head -1)"
+        ;;
+      *)
+        SRC_APP="$(find "$LOCAL" -maxdepth 3 -name CodeWaifu.app -type d | head -1)"
+        ;;
+    esac
+    [ -n "$SRC_APP" ] && [ -d "$SRC_APP" ] || die "could not find CodeWaifu.app in $LOCAL"
+  elif [ -z "$TAG" ]; then
     say "looking up the latest release of $REPO"
     TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
       | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//')"
   fi
-  [ -n "$TAG" ] || die "could not resolve a release tag (is the repo public and does a release exist?)"
 
-  ASSET="CodeWaifu-${TAG#v}-mac-$ARCH.zip"
-  URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
-  TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT
+  if [ -z "$LOCAL" ]; then
+    [ -n "$TAG" ] || die "could not resolve a release tag (is the repo public and does a release exist?)"
 
-  say "downloading $ASSET ($TAG)"
-  curl -fL --retry 3 -o "$TMP/$ASSET" "$URL" || die "download failed: $URL"
+    ASSET="CodeWaifu-${TAG#v}-mac-$ARCH.zip"
+    URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+
+    say "downloading $ASSET ($TAG)"
+    curl -fL --retry 3 -o "$TMP/$ASSET" "$URL" || die "download failed: $URL"
+    mkdir -p "$TMP/app"
+    ditto -x -k "$TMP/$ASSET" "$TMP/app" 2>/dev/null || unzip -q "$TMP/$ASSET" -d "$TMP/app"
+    SRC_APP="$TMP/app/CodeWaifu.app"
+    [ -d "$SRC_APP" ] || die "the archive did not contain CodeWaifu.app"
+  fi
 
   APP_DIR="/Applications"
   if [ ! -w "$APP_DIR" ]; then
@@ -113,16 +144,24 @@ if [ "$HOOKS_ONLY" != "1" ]; then
   osascript -e 'tell application "CodeWaifu" to quit' 2>/dev/null || true
   sleep 1
 
-  say "unpacking into $APP_DIR"
-  rm -rf "$TMP/app"
-  mkdir -p "$TMP/app"
-  ditto -x -k "$TMP/$ASSET" "$TMP/app" 2>/dev/null || unzip -q "$TMP/$ASSET" -d "$TMP/app"
-  [ -d "$TMP/app/CodeWaifu.app" ] || die "the archive did not contain CodeWaifu.app"
-
+  say "installing into $APP_DIR"
   rm -rf "$APP_DIR/CodeWaifu.app"
-  ditto "$TMP/app/CodeWaifu.app" "$APP_DIR/CodeWaifu.app" 2>/dev/null || cp -R "$TMP/app/CodeWaifu.app" "$APP_DIR/CodeWaifu.app"
+  ditto "$SRC_APP" "$APP_DIR/CodeWaifu.app" 2>/dev/null || cp -R "$SRC_APP" "$APP_DIR/CodeWaifu.app"
   # Unsigned build: drop the quarantine flag so the first launch is not blocked.
-  xattr -dr com.apple.quarantine "$APP_DIR/CodeWaifu.app" 2>/dev/null || true
+  # /usr/bin/xattr explicitly — a pip-installed `xattr` shadows it on some
+  # machines and that one has no -r, so the recursive clear silently fails.
+  clear_quarantine() {
+    local xbin
+    for xbin in /usr/bin/xattr "$(command -v xattr || true)"; do
+      [ -n "$xbin" ] && [ -x "$xbin" ] || continue
+      "$xbin" -dr com.apple.quarantine "$APP_DIR/CodeWaifu.app" >/dev/null 2>&1 || true
+    done
+    # A missing attribute is not a failure, so only complain if it survived.
+    if /usr/bin/xattr -p com.apple.quarantine "$APP_DIR/CodeWaifu.app" >/dev/null 2>&1; then
+      warn "com.apple.quarantine is still set; right-click > Open if Gatekeeper blocks the launch"
+    fi
+  }
+  clear_quarantine
   BINARY="$APP_DIR/CodeWaifu.app/Contents/MacOS/CodeWaifu"
 fi
 

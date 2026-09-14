@@ -393,6 +393,13 @@ function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
         const parsed = JSON.parse(text) as unknown
         finish(parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {})
       } catch {
+        // Still answer 200 (the agent must never be blocked by us), but leave a
+        // trace: a mangled body silently degrades into an empty "other" event,
+        // which is exactly how a quoting bug in the runner once went unnoticed.
+        log('warn', 'request body is not valid JSON; treating it as empty', {
+          bytes: text.length,
+          head: text.slice(0, 120)
+        })
         finish({})
       }
     })

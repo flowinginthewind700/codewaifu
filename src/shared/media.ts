@@ -1,5 +1,25 @@
 export type MediaCommand = 'toggle' | 'play' | 'pause' | 'next' | 'previous'
 
+/**
+ * The transport bar ships dark.
+ *
+ * Windows (SMTC) and Linux (MPRIS) are done and correct, but macOS can only
+ * see scriptable players: Music and Spotify expose AppleScript dictionaries,
+ * while QQ Music, NetEase Cloud Music and friends do not, so a mac user with
+ * exactly those players open was told "no player found" while music played.
+ *
+ * The honest fix needs two things macOS gates on purpose — the private
+ * MediaRemote now-playing API (returns an empty dictionary on macOS 26 for a
+ * third-party process) and synthetic media-key events, which are dropped
+ * unless the user grants Accessibility. That is a real feature with a real
+ * permission prompt, so it is parked rather than half-shown: a bar that says
+ * "no player found" next to audible music is worse than no bar at all.
+ *
+ * Everything below stays intact and tested; flip this to `true` once the mac
+ * detection + Accessibility flow lands.
+ */
+export const MEDIA_UI_ENABLED = false
+
 export interface MediaState {
   /** False when no controllable player was found. */
   available: boolean

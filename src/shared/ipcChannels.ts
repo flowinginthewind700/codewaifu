@@ -8,6 +8,7 @@ export const IPC = {
   getState: 'cw:get-state',
   setConfig: 'cw:set-config',
   threads: 'cw:threads',
+  transcript: 'cw:transcript',
   steer: 'cw:steer',
   say: 'cw:say',
   mediaState: 'cw:media-state',
@@ -21,6 +22,23 @@ export const IPC = {
   quit: 'cw:quit',
   pickImage: 'cw:pick-image',
   openPath: 'cw:open-path',
+  chatMode: 'cw:chat-mode',
+  /** Renderer reports whether a non-empty input is focused (hotkey guard). */
+  inputActive: 'cw:input-active',
+  /**
+   * Drag the frame by a screen-space delta. The Live2D canvas has to keep
+   * receiving pointer events (tapping her triggers motions), so CSS
+   * `app-region: drag` cannot cover it; the renderer drags with JS instead.
+   */
+  moveWindow: 'cw:move-window',
+  /** Settings asked for another attempt at the neural voice weights. */
+  neuralRetry: 'cw:neural-retry',
+  /** Renderer measured the card; main resizes the frame to fit it exactly. */
+  fitHeight: 'cw:fit-height',
+  /** Renderer's Web Audio player is mounted and can accept speech bytes. */
+  voiceReady: 'cw:voice-ready',
+  /** Renderer finished (or failed) playing one line of speech. */
+  speechAck: 'cw:speech-ack',
   pushEvent: 'cw:event',
   pushSpeaking: 'cw:speaking',
   pushConfig: 'cw:config',
@@ -28,6 +46,10 @@ export const IPC = {
   pushBubble: 'cw:bubble',
   pushRelay: 'cw:relay',
   pushExpanded: 'cw:expanded-changed',
+  /** Neural voice bring-up: download progress, engine load, readiness. */
+  pushNeural: 'cw:neural',
+  pushSpeech: 'cw:speech',
+  pushSpeechStop: 'cw:speech-stop',
   openPanel: 'cw:open-panel'
 } as const
 
@@ -38,6 +60,7 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.getState,
   IPC.setConfig,
   IPC.threads,
+  IPC.transcript,
   IPC.steer,
   IPC.say,
   IPC.mediaState,
@@ -50,7 +73,14 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.hide,
   IPC.quit,
   IPC.pickImage,
-  IPC.openPath
+  IPC.openPath,
+  IPC.chatMode,
+  IPC.inputActive,
+  IPC.moveWindow,
+  IPC.neuralRetry,
+  IPC.fitHeight,
+  IPC.voiceReady,
+  IPC.speechAck
 ]
 
 /** Main -> renderer pushes the preload is willing to subscribe to. */
@@ -62,5 +92,8 @@ export const PUSH_CHANNELS: readonly IpcChannel[] = [
   IPC.pushBubble,
   IPC.pushRelay,
   IPC.pushExpanded,
+  IPC.pushNeural,
+  IPC.pushSpeech,
+  IPC.pushSpeechStop,
   IPC.openPanel
 ]

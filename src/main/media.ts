@@ -6,6 +6,7 @@ import {
   macCommandScript,
   macStateScript,
   MAC_PLAYERS,
+  MEDIA_UI_ENABLED,
   parseLinuxState,
   parseMacState,
   prettyApp,
@@ -156,6 +157,12 @@ async function linuxState(): Promise<MediaState> {
   return { ...parsed, app: prettyApp(parsed.app) }
 }
 
+/**
+ * False while the transport bar ships dark (`MEDIA_UI_ENABLED`). Main uses this
+ * to decide whether to poll at all, so a parked feature costs nothing: no
+ * osascript every four seconds, no push traffic, no bar in the UI. The
+ * on-demand IPC and relay routes stay wired for the day it comes back.
+ */
 export function platformSupportsMedia(): boolean {
-  return isMac || isWindows || isLinux
+  return MEDIA_UI_ENABLED && (isMac || isWindows || isLinux)
 }

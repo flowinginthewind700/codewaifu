@@ -9,3 +9,4 @@ release/
 coverage/
 .vite/
 *.tsbuildinfo
+.trash/

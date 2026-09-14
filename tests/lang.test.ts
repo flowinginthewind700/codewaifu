@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { clipAtBoundary, detectLang, hasCjk, resolveLang, toSpeakable } from '../src/shared/lang'
+import {
+  clipAtBoundary,
+  detectLang,
+  hasCjk,
+  resolveLang,
+  resolveUiLang,
+  systemLangFromLocales,
+  toSpeakable
+} from '../src/shared/lang'
 
 describe('detectLang', () => {
   it('switches to Chinese on a single CJK character, because mixed output reads better in a zh voice', () => {
@@ -26,6 +34,29 @@ describe('detectLang', () => {
   it('hasCjk is the single source of truth for the check', () => {
     expect(hasCjk('漢字')).toBe(true)
     expect(hasCjk('kanji')).toBe(false)
+  })
+})
+
+describe('systemLangFromLocales', () => {
+  it('reads the shapes the OS actually hands us', () => {
+    expect(systemLangFromLocales(['zh-Hans-CN', 'en-US'])).toBe('zh')
+    expect(systemLangFromLocales(['zh-Hant-TW'])).toBe('zh')
+    expect(systemLangFromLocales(['en-GB', 'fr-FR'])).toBe('en')
+    expect(systemLangFromLocales(['ZH_cn'])).toBe('zh')
+    expect(systemLangFromLocales(['ja-JP', 'zh-CN'])).toBe('zh')
+  })
+
+  it('skips junk and settles on a supported language', () => {
+    expect(systemLangFromLocales(['', '  ', 'klingon'])).toMatch(/^(zh|en)$/)
+    expect(systemLangFromLocales([])).toMatch(/^(zh|en)$/)
+    expect(systemLangFromLocales(['fr-FR', 'en-US'])).toBe('en')
+  })
+
+  it('resolveUiLang follows the system only when the user asked it to', () => {
+    expect(resolveUiLang('auto', 'en')).toBe('en')
+    expect(resolveUiLang('auto', 'zh')).toBe('zh')
+    expect(resolveUiLang('zh', 'en')).toBe('zh')
+    expect(resolveUiLang('en', 'zh')).toBe('en')
   })
 })
 

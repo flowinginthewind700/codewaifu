@@ -3,9 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <title>CodeWaifu</title>
+    <!--
+      `blob:` in script-src is the Cubism Core UMD bundle (evaluated from a blob
+      because it is not an ES module); `blob:` in connect-src is host.ts turning
+      decoded texture bytes into an object URL before createImageBitmap. Both
+      blobs are built from bytes we already hold locally — nothing remote is
+      reachable through them, and `cw-asset:` is the only network-ish origin.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file:; media-src 'self' file:; font-src 'self' data:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file: cw-asset:; media-src 'self' blob: file:; font-src 'self' data:; connect-src 'self' blob: cw-asset:"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   </head>

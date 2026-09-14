@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { applyPatch, CONFIG_PATCH_KEYS, DEFAULT_CONFIG, parseConfig, type AppConfig } from '../src/shared/config'
+import {
+  applyPatch,
+  CONFIG_PATCH_KEYS,
+  CONFIG_VERSION,
+  DEFAULT_CONFIG,
+  migrateConfig,
+  parseConfig,
+  type AppConfig
+} from '../src/shared/config'
 
 describe('parseConfig', () => {
   it('returns the defaults for an empty or malformed file', () => {
     for (const junk of [{}, null, undefined, 'text', 42, [], { version: 99 }]) {
       const config = parseConfig(junk)
-      expect(config.version).toBe(1)
+      expect(config.version).toBe(CONFIG_VERSION)
       expect(config.speak).toBe(DEFAULT_CONFIG.speak)
       expect(config.events).toEqual(DEFAULT_CONFIG.events)
       expect(config.voice).toEqual(DEFAULT_CONFIG.voice)
@@ -31,6 +39,36 @@ describe('parseConfig', () => {
     expect(parseConfig({ bubbleMs: '5000' }).bubbleMs).toBe(5000)
   })
 
+  it('keeps the interface language separate from the spoken language', () => {
+    expect(parseConfig({}).uiLang).toBe('auto')
+    expect(parseConfig({ uiLang: 'en' }).uiLang).toBe('en')
+    expect(parseConfig({ uiLang: 'fr' }).uiLang).toBe('auto')
+    // A Chinese UI over an English-speaking agent is a supported combination.
+    const config = parseConfig({ uiLang: 'zh', lang: 'en' })
+    expect(config.uiLang).toBe('zh')
+    expect(config.lang).toBe('en')
+  })
+
+  it('parses appearance, and refuses to invent a surface', () => {
+    expect(parseConfig({}).appearance).toEqual({ surface: 'glass', clearStage: true })
+    expect(parseConfig({ appearance: { surface: 'solid' } }).appearance).toEqual({
+      surface: 'solid',
+      clearStage: true
+    })
+    expect(parseConfig({ appearance: { surface: 'acrylic', clearStage: false } }).appearance).toEqual({
+      surface: 'glass',
+      clearStage: false
+    })
+    expect(parseConfig({ appearance: 'nope' }).appearance).toEqual(DEFAULT_CONFIG.appearance)
+  })
+
+  it('round-trips appearance through a Settings patch without losing a sibling key', () => {
+    const base = parseConfig({})
+    const next = applyPatch(base, { appearance: { ...base.appearance, clearStage: false } })
+    expect(next.appearance).toEqual({ surface: 'glass', clearStage: false })
+    expect(next.avatar).toEqual(base.avatar)
+  })
+
   it('truncates fractional counts', () => {
     expect(parseConfig({ bubbleMs: 4321.9 }).bubbleMs).toBe(4321)
     expect(parseConfig({ maxQueue: 3.7 }).maxQueue).toBe(3)
@@ -51,11 +89,22 @@ describe('parseConfig', () => {
   })
 
   it('never lets an unknown avatar mode through', () => {
-    expect(parseConfig({ avatar: { mode: 'live2d', imagePath: '/a.png' } }).avatar).toEqual({
-      mode: 'builtin',
+    // live2d is the default face now, so the fallback has to be an id that is
+    // genuinely not in the union; the character id is filled from the default.
+    expect(parseConfig({ avatar: { mode: 'hologram', imagePath: '/a.png' } }).avatar).toEqual({
+      mode: 'live2d',
       imagePath: '/a.png',
-      expression: 'idle'
+      expression: 'idle',
+      character: DEFAULT_CONFIG.avatar.character
     })
+    expect(parseConfig({ avatar: { mode: 'builtin' } }).avatar.mode).toBe('builtin')
+    expect(parseConfig({ avatar: { mode: 'image' } }).avatar.mode).toBe('image')
+    expect(parseConfig({ avatar: { mode: 'live2d' } }).avatar.mode).toBe('live2d')
+  })
+
+  it('collapses a blank character id to the shipped default', () => {
+    expect(parseConfig({ avatar: { character: '   ' } }).avatar.character).toBe(DEFAULT_CONFIG.avatar.character)
+    expect(parseConfig({ avatar: { character: 'RiceBunny' } }).avatar.character).toBe('RiceBunny')
   })
 
   it('keeps a stored window position but rejects an off-screen one', () => {
@@ -74,7 +123,7 @@ describe('applyPatch', () => {
   it('only accepts whitelisted keys', () => {
     const next = applyPatch(base, { speak: false, version: 99, token: 'stolen', bogus: true })
     expect(next.speak).toBe(false)
-    expect(next.version).toBe(1)
+    expect(next.version).toBe(CONFIG_VERSION)
     expect(next.token).toBe(base.token)
     expect('bogus' in next).toBe(false)
     expect('version' in next).toBe(true)
@@ -108,5 +157,46 @@ describe('applyPatch', () => {
     expect(CONFIG_PATCH_KEYS).not.toContain('token')
     const patchable = Object.keys(DEFAULT_CONFIG).filter((k) => k !== 'version' && k !== 'token')
     expect([...CONFIG_PATCH_KEYS].sort()).toEqual(patchable.sort())
+  })
+})
+
+describe('migrateConfig', () => {
+  /** A config exactly as 0.1.0 (pre-Live2D) wrote it. */
+  const v1 = {
+    version: 1,
+    port: 58361,
+    speak: true,
+    avatar: { mode: 'builtin', imagePath: '', expression: 'idle' }
+  }
+
+  it('moves a pre-Live2D install onto the companion face', () => {
+    const next = parseConfig(migrateConfig(v1))
+    expect(next.avatar.mode).toBe('live2d')
+    expect(next.avatar.character).toBe(DEFAULT_CONFIG.avatar.character)
+    // Everything the user actually set survives the rewrite.
+    expect(next.port).toBe(58361)
+    expect(next.speak).toBe(true)
+    expect(next.version).toBe(CONFIG_VERSION)
+  })
+
+  it('keeps an image avatar the user picked themselves', () => {
+    const next = parseConfig(migrateConfig({ ...v1, avatar: { mode: 'image', imagePath: '/me.png' } }))
+    expect(next.avatar.mode).toBe('image')
+    expect(next.avatar.imagePath).toBe('/me.png')
+  })
+
+  it('never touches a config that already knows about characters', () => {
+    const current = { ...v1, version: CONFIG_VERSION, avatar: { mode: 'builtin', character: 'Mao' } }
+    expect(parseConfig(migrateConfig(current)).avatar).toEqual({
+      mode: 'builtin',
+      imagePath: '',
+      expression: 'idle',
+      character: 'Mao'
+    })
+  })
+
+  it('is a no-op for junk and for a fresh install', () => {
+    for (const junk of [null, undefined, 'text', 42, []]) expect(migrateConfig(junk)).toBe(junk)
+    expect(parseConfig(migrateConfig({}))).toEqual(DEFAULT_CONFIG)
   })
 })

@@ -7,6 +7,8 @@ interface AvatarProps {
   scale: number
   imagePath: string
   imageMode: boolean
+  /** Shrink for the chat layout, where the conversation owns the height. */
+  compact?: boolean
 }
 
 /**
@@ -14,8 +16,8 @@ interface AvatarProps {
  * stays crisp at any `scale` and needs no binary asset in the repo. Every
  * expression is a different eye/mouth pair on the same head geometry.
  */
-export function Avatar({ expression, speaking, scale, imagePath, imageMode }: AvatarProps): ReactElement {
-  const size = Math.round(132 * scale)
+export function Avatar({ expression, speaking, scale, imagePath, imageMode, compact }: AvatarProps): ReactElement {
+  const size = compact ? Math.min(92, Math.round(132 * scale * 0.6)) : Math.round(132 * scale)
 
   if (imageMode && imagePath) {
     return (

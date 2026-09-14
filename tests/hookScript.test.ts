@@ -49,8 +49,22 @@ describe('run-hook.sh', () => {
   })
 
   it('forwards stdin verbatim and sends the token header', () => {
-    expect(sh).toContain('--data-binary "${BODY:-{}}"')
+    expect(sh).toContain('--data-binary "$BODY"')
     expect(sh).toContain('X-CodeWaifu-Token')
+  })
+
+  it('never defaults the body with ${BODY:-{}} — POSIX closes at the first brace', () => {
+    // That form yields `$BODY` + a literal `}` for every non-empty payload, so
+    // the relay receives invalid JSON and logs an empty event. Guard the string
+    // here; tests/hookRunnerExec.test.ts proves it by running the script.
+    // Comments are prose: the script documents the trap by naming it. Only the
+    // executable lines may contain it.
+    const code = sh
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n')
+    expect(code).not.toContain('${BODY:-{}}')
+    expect(sh).toMatch(/case "\$BODY" in\s*\n\s*''\) BODY='\{\}' ;;/)
   })
 
   it('bails when endpoint.env is missing or names no port', () => {

@@ -72,6 +72,60 @@ export interface VoiceInfo {
   lang: string
 }
 
+/**
+ * Which voice renders the notices.
+ *
+ * `matcha` is a local neural engine (Matcha-TTS + vocos via sherpa-onnx) — the
+ * same weights robotworld.top serves, so mixed Chinese/English reads as one
+ * voice instead of two engines fighting over a sentence. It needs a 134MB
+ * one-time download. `system` is the zero-install path: macOS `say`, Windows
+ * SAPI, Linux espeak-ng.
+ */
+export type VoiceEngine = 'matcha' | 'system'
+
+export type NeuralPhase =
+  | 'unavailable'
+  | 'missing'
+  | 'downloading'
+  | 'extracting'
+  | 'loading'
+  | 'ready'
+  | 'error'
+
+/** Snapshot of the neural engine, surfaced in Settings and on the status chip. */
+export interface NeuralStatus {
+  phase: NeuralPhase
+  received: number
+  total: number
+  /** File currently being fetched. */
+  file: string
+  error: string
+  dir: string
+  sampleRate: number
+  /** Milliseconds the cold load took; 0 before the first load. */
+  loadMs: number
+}
+
+/**
+ * One audio push from main to the widget. Speech is streamed sentence by
+ * sentence, so a notice arrives as several chunks sharing an `id`; `end` marks
+ * the last one. A chunk may carry no `wav` at all when it is only the end
+ * marker (the producer failed mid-line and is closing the session).
+ */
+export interface SpeechChunk {
+  id: string
+  wav?: Uint8Array
+  ms: number
+  end: boolean
+}
+
+/** The widget's report on one line of speech. */
+export interface SpeechAck {
+  id: string
+  ok: boolean
+  error?: string
+}
+
 export interface RuntimeState {
   version: string
   relay: RelayStatus
@@ -80,6 +134,13 @@ export interface RuntimeState {
   hooks: HooksReport
   agents: { codex: boolean; claude: boolean }
   voices: VoiceInfo[]
+  neural: NeuralStatus
+  /**
+   * OS language, resolved once per launch. `config.uiLang === 'auto'` reads this
+   * instead of asking the renderer for `navigator.language`, so the widget and
+   * the CLI agree and a sandboxed renderer cannot drift from the desktop.
+   */
+  systemLang: Lang
 }
 
 /** Everything the UI needs to explain where the relay ended up and why. */
@@ -118,8 +179,31 @@ export interface HooksReport {
   codexTrustNeeded: boolean
 }
 
+/**
+ * What actually happened to a steer message. `codex queue` exits 0 for every
+ * thread, running or idle, so the exit code cannot tell the user whether the
+ * agent ever saw the text — this can. The renderer localizes off `reason`;
+ * `message` stays as the English log line and the fallback.
+ */
+export type SteerReason =
+  /** Confirmed inside the agent's own transcript. */
+  | 'sent'
+  /** Accepted by the CLI; an idle session picks it up when it resumes. */
+  | 'queued'
+  /** Accepted, but the working session never read the queue — clipboard instead. */
+  | 'undelivered'
+  /** No `codex` binary on PATH. */
+  | 'no-cli'
+  /** The CLI itself failed. */
+  | 'failed'
+  /** Nothing to send. */
+  | 'empty'
+  /** Claude Code has no injection API: clipboard by design, not by failure. */
+  | 'clipboard'
+
 export interface SteerResult {
   ok: boolean
   method: 'queue' | 'clipboard' | 'none'
   message: string
+  reason?: SteerReason
 }

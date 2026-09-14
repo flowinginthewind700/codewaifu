@@ -25,6 +25,7 @@
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "bin/**/*.mjs",
+    "scripts/**/*.d.mts",
     "tests/**/*.ts",
     "electron.vite.config.ts",
     "vitest.config.ts"

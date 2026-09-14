@@ -1,14 +1,19 @@
-import { app, Notification } from 'electron'
+import { app, Notification, globalShortcut } from 'electron'
 import crypto from 'node:crypto'
 import type { EventPlan } from '../shared/protocol'
 import type { BubbleMessage } from '../shared/ui'
+import { systemLangFromLocales } from '../shared/lang'
+import { LIVE2D_KEEP_URLS } from '../shared/live2dCatalog'
+import { prewarmAssets, registerAssetProtocol, registerAssetScheme } from './assets'
 import { runCli } from './cli'
 import { Core } from './core'
 import { isMac } from './env'
 import { IPC, registerIpc, send } from './ipc'
 import { closeLog, log } from './log'
 import { getMediaState, platformSupportsMedia } from './media'
+import * as neuralTts from './neuralTts'
 import { effectivePath } from './shellPath'
+import { RendererVoice } from './voiceBridge'
 import { createWindow, type WindowHandle } from './window'
 
 /**
@@ -23,8 +28,23 @@ const cliArgs = cliAt >= 0 ? process.argv.slice(cliAt + 1) : []
 
 const MEDIA_POLL_MS = 4000
 
+/**
+ * How long the launch greeting waits for a voice before it speaks anyway.
+ * Both bounds are generous but finite: a companion that never says hello is
+ * worse than one that says it in the fallback voice.
+ */
+const GREET_VOICE_MS = 6000
+/** Loading Matcha is ~1.6s from disk, minutes on a first run that downloads it. */
+const GREET_NEURAL_MS = 30000
+
+// Privileged schemes have to be declared before `app.ready`; Electron rejects
+// them afterwards. This is what lets the widget load Live2D models from
+// ~/.codewaifu/assets through `cw-asset://` instead of the network.
+registerAssetScheme()
+
 let core: Core | null = null
 let handle: WindowHandle | null = null
+let rendererVoice: RendererVoice | null = null
 let mediaTimer: NodeJS.Timeout | null = null
 let lastMediaJson = ''
 let greeted = false
@@ -50,9 +70,36 @@ function notify(title: string, body: string): void {
   }
 }
 
+/**
+ * Her first line is the proof that the voice works, so it does not get spent
+ * before there is one. On launch the renderer attaches its Web Audio player
+ * after the window paints and Matcha loads after that; greeting on
+ * `did-finish-load` found no transport and fell back to the OS voice — the one
+ * voice this app is not. Both waits are bounded, so the greeting always lands.
+ */
+async function greetWhenAudible(instance: Core): Promise<void> {
+  const cfg = instance.config
+  const started = Date.now()
+  const waits: Array<Promise<unknown>> = [
+    rendererVoice?.waitUntilAvailable(GREET_VOICE_MS) ?? Promise.resolve(false)
+  ]
+  if (cfg.enabled && cfg.speak && cfg.voice.engine === 'matcha') {
+    waits.push(neuralTts.warm(GREET_NEURAL_MS))
+  }
+  await Promise.all(waits)
+  log('info', 'greeting', {
+    waitedMs: Date.now() - started,
+    neural: neuralTts.available(),
+    renderer: Boolean(rendererVoice?.available?.())
+  })
+  const greeting = instance.greet()
+  if (greeting) bubble(greeting.text, greeting.lang, 'greeting')
+}
+
 function uiLang(): 'zh' | 'en' {
-  const lang = core?.config.lang
-  return lang === 'zh' || lang === 'en' ? lang : 'zh'
+  // Port-conflict notices are about the window, so they follow the interface
+  // language rather than the language notices happen to be spoken in.
+  return core?.uiLang() ?? 'zh'
 }
 
 /** Explain a port that moved instead of letting the user wonder about it. */
@@ -101,11 +148,26 @@ async function boot(): Promise<void> {
   const instance = core ?? new Core(app.getVersion())
   core = instance
 
+  // Read the OS language before the first runtimeState() so `uiLang: 'auto'`
+  // has something to resolve against on the very first paint.
+  try {
+    const locales = app.getPreferredSystemLanguages?.() ?? [app.getLocale()]
+    instance.systemLang = systemLangFromLocales(locales)
+  } catch (error) {
+    log('warn', 'system language detection failed', String(error))
+  }
+  log('info', 'ui language', { system: instance.systemLang, pref: instance.config.uiLang })
+
   // Warm the repaired PATH before anything shells out to codex/claude/curl.
   void effectivePath().catch(() => undefined)
 
   const relay = await instance.start()
   log('info', 'relay ready', { port: relay.port, reason: relay.reason, boot: relay.boot })
+
+  registerAssetProtocol()
+  // Warm the avatar cache in the background: the first paint then reads from
+  // disk, and an offline launch still shows a companion once cached.
+  prewarmAssets(LIVE2D_KEEP_URLS)
 
   handle = createWindow(instance.config, {
     onExpanded: (expanded) => send(handle?.win ?? null, IPC.pushExpanded, expanded),
@@ -131,15 +193,29 @@ async function boot(): Promise<void> {
 
   registerIpc(instance, () => handle?.win ?? null, {
     setExpanded: (expanded) => handle?.setExpanded(expanded),
+    setChatMode: (on) => handle?.setChatMode(on),
     setClickThrough: (through) => handle?.setClickThrough(through),
     applyConfig: (config) => handle?.applyConfig(config),
+    fitHeight: (height) => handle?.fitHeight(height),
+    moveWindow: (dx, dy) => handle?.moveBy(dx, dy),
+    voiceReady: (ready) => rendererVoice?.setReady(ready),
+    speechAck: (id, ok, error) => rendererVoice?.ack(id, ok, error),
+    setInputActive: (active) => handle?.setInputActive(active),
     hide: () => handle?.hide(),
     quit: () => app.quit()
   })
 
+  // The widget owns the audible path: its Web Audio graph is the only place an
+  // analyser can sit, and the analyser is what moves her mouth.
+  const voice = new RendererVoice(() => handle?.win ?? null)
+  rendererVoice = voice
+  instance.speaker.setTransport(voice)
+
   instance.onShow(() => {
     handle?.show(false)
-    handle?.setExpanded(true)
+    // "/show" means "bring her back": the simple stage, not the panel.
+    // The panel stays one explicit click away (stage tool or tray menu).
+    handle?.setExpanded(false)
   })
 
   instance.addEventListener((plan: EventPlan) => {
@@ -150,12 +226,18 @@ async function boot(): Promise<void> {
     send(handle?.win ?? null, IPC.pushSpeaking, { speaking, queueLength })
   })
 
+  instance.addNeuralListener((neural) => {
+    send(handle?.win ?? null, IPC.pushNeural, neural)
+  })
+
   handle.win.webContents.on('did-finish-load', () => {
+    // She lives on the desktop: appear on the simple stage as soon as the
+    // renderer is up, instead of waiting for a tray click or a hook event.
+    handle?.show(false)
     reportRelay()
     if (greeted) return
     greeted = true
-    const greeting = instance.greet()
-    if (greeting) bubble(greeting.text, greeting.lang, 'greeting')
+    void greetWhenAudible(instance)
   })
 
   if (platformSupportsMedia()) {
@@ -191,7 +273,7 @@ async function main(): Promise<void> {
 
   app.on('second-instance', () => {
     handle?.show(true)
-    handle?.setExpanded(true)
+    // Focus whatever view is already up; never yank the user into the panel.
   })
 
   app.on('window-all-closed', () => {
@@ -202,7 +284,9 @@ async function main(): Promise<void> {
   app.on('activate', () => handle?.show(true))
 
   app.on('before-quit', () => {
+    globalShortcut.unregisterAll()
     if (mediaTimer) clearInterval(mediaTimer)
+    rendererVoice?.shutdown()
     core?.shutdown()
     closeLog()
   })

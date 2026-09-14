@@ -9,10 +9,29 @@ files:
   - package.json
   - plugin/**/*
   - LICENSE
+  # The neural voice is native code, not something `out/` can carry. Two halves
+  # have to ride along: the sherpa-onnx binary package, which is where
+  # `libsherpa-onnx-c-api` lives, and koffi, which is how the main process calls
+  # it (see src/main/matchaNative.ts for why the official Node addon cannot be
+  # used inside Electron at all).
+  - node_modules/sherpa-onnx-node/**/*
+  - node_modules/sherpa-onnx-*/**/*
+  - node_modules/koffi/**/*
+  - node_modules/@koromix/**/*
 asar: true
 asarUnpack:
   - 'plugin/**'
+  # dlopen cannot read out of an asar, and both the sherpa C API and koffi's own
+  # addon resolve their siblings relative to themselves (@loader_path rpath for
+  # the dylibs, a `./<triplet>/koffi.node` require for koffi), so each package
+  # has to land on real disk with its layout intact.
+  - 'node_modules/sherpa-onnx-*/**'
+  - 'node_modules/koffi/**'
+  - 'node_modules/@koromix/**'
 npmRebuild: false
+# A mac build machine usually holds both arch flavours of every native package;
+# the hook drops the ones this target cannot load.
+afterPack: ./scripts/after-pack.mjs
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 mac:
   category: public.app-category.developer-tools

@@ -23,6 +23,38 @@ export function resolveLang(pref: Lang | 'auto', text: string): Lang {
 }
 
 /**
+ * The language the interface is written in, as opposed to the language a given
+ * notice happens to be in. `auto` follows the OS, so a fresh install on a
+ * Chinese Mac reads Chinese and on an English Windows reads English without
+ * anybody having found the setting first.
+ */
+export function resolveUiLang(pref: Lang | 'auto', system: Lang): Lang {
+  return pref === 'auto' ? system : pref
+}
+
+/**
+ * Pick a UI language from the OS's preferred-language list (`zh-Hans-CN`,
+ * `en-GB`, …). Falls back to the usual POSIX locale variables so the headless
+ * CLI reports the same language the widget would, and to `zh` when nothing is
+ * known — the companion's own copy is Chinese-first.
+ */
+export function systemLangFromLocales(locales: readonly string[]): Lang {
+  const candidates = [
+    ...locales,
+    process.env.LC_ALL ?? '',
+    process.env.LC_MESSAGES ?? '',
+    process.env.LANG ?? ''
+  ]
+  for (const raw of candidates) {
+    const value = String(raw || '').trim().toLowerCase()
+    if (!value) continue
+    if (value.startsWith('zh') || value.startsWith('cmn')) return 'zh'
+    if (value.startsWith('en')) return 'en'
+  }
+  return 'zh'
+}
+
+/**
  * Strip what a TTS engine chokes on: markdown fences, URLs, long code, ANSI
  * escapes and control characters. Spoken text should be prose, not source.
  */

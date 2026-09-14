@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { parseConfig, type AppConfig } from '../shared/config'
+import { migrateConfig, parseConfig, type AppConfig } from '../shared/config'
 import { isSafeToken } from '../shared/endpoint'
 import { normalizeRequestedPort } from '../shared/portPolicy'
 import { configFile, stateDir } from './env'
@@ -18,7 +18,7 @@ export function readConfig(): AppConfig {
   } catch {
     raw = {}
   }
-  return ensureIdentity(parseConfig(raw))
+  return ensureIdentity(parseConfig(migrateConfig(raw)))
 }
 
 export function writeConfig(config: AppConfig): AppConfig {

@@ -1,10 +1,10 @@
 import { useState, type ReactElement } from 'react'
 import { Activity, ChevronsUpDown, ListTree, Settings2 } from 'lucide-react'
-import type { MediaState } from '@shared/media'
 import type { HookEvent, RedactedConfig, RuntimeState, SteerResult, ThreadInfo } from '@shared/protocol'
 import type { PanelTab } from '@shared/ui'
 import type { ConfigPatch } from '@shared/config'
 import type { Translate } from './i18n'
+import { ChatView } from './ChatView'
 import { LogTab } from './LogTab'
 import { SettingsTab } from './SettingsTab'
 import { ThreadsTab } from './ThreadsTab'
@@ -16,16 +16,22 @@ interface PanelProps {
   runtime: RuntimeState
   events: HookEvent[]
   threads: ThreadInfo[]
-  media: MediaState
+  /** Thread currently drilled into; null shows the tabbed panel. */
+  chatThread: ThreadInfo | null
   t: Translate
+  /** Resolved UI language; the character names are bilingual in the catalog. */
+  lang: 'zh' | 'en'
   onChange: (patch: ConfigPatch) => void
   onSay: (text: string) => void
   onPickImage: () => void
   onOpenPath: (path: string) => void
   onHooksInstall: () => void
   onHooksUninstall: () => void
+  onNeuralRetry: () => void
   onQuit: () => void
   onCollapse: () => void
+  onOpenThread: (thread: ThreadInfo) => void
+  onCloseChat: () => void
   onSteer: (agent: ThreadInfo['agent'], threadId: string, message: string) => Promise<SteerResult>
   onNotice: (text: string) => void
 }
@@ -39,6 +45,24 @@ const TABS: Array<{ id: PanelTab; icon: typeof ListTree; label: Parameters<Trans
 export function Panel(props: PanelProps): ReactElement {
   const { tab, onTab, t, onCollapse } = props
   const [hovered, setHovered] = useState<PanelTab | null>(null)
+
+  // Drilling into a thread replaces the whole panel: a chat needs the header
+  // row and every pixel of height, and a tab bar above it would be dead chrome.
+  if (props.chatThread) {
+    return (
+      <div className="panel" data-solid="1">
+        <ChatView
+          thread={props.chatThread}
+          t={t}
+          onBack={props.onCloseChat}
+          onSteer={props.onSteer}
+          onNotice={props.onNotice}
+          onSay={props.onSay}
+          onOpenPath={props.onOpenPath}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="panel" data-solid="1">
@@ -78,7 +102,7 @@ export function Panel(props: PanelProps): ReactElement {
       </div>
 
       {tab === 'threads' ? (
-        <ThreadsTab threads={props.threads} t={t} onSteer={props.onSteer} onNotice={props.onNotice} />
+        <ThreadsTab threads={props.threads} t={t} onOpen={props.onOpenThread} />
       ) : null}
       {tab === 'log' ? <LogTab events={props.events} t={t} /> : null}
       {tab === 'settings' ? (
@@ -86,12 +110,14 @@ export function Panel(props: PanelProps): ReactElement {
           config={props.config}
           runtime={props.runtime}
           t={t}
+          lang={props.lang}
           onChange={props.onChange}
           onSay={props.onSay}
           onPickImage={props.onPickImage}
           onOpenPath={props.onOpenPath}
           onHooksInstall={props.onHooksInstall}
           onHooksUninstall={props.onHooksUninstall}
+          onNeuralRetry={props.onNeuralRetry}
           onQuit={props.onQuit}
         />
       ) : null}

@@ -10,14 +10,17 @@ import type {
   EventPlan,
   HookEvent,
   HooksReport,
+  Lang,
+  NeuralStatus,
   RelayStatus,
   RuntimeState,
   SteerResult,
   ThreadInfo,
   VoiceInfo
 } from '../shared/protocol'
+import type { ChatTranscript } from '../shared/chat'
 import type { MediaCommand, MediaState } from '../shared/media'
-import { detectLang, toSpeakable } from '../shared/lang'
+import { detectLang, resolveUiLang, systemLangFromLocales, toSpeakable } from '../shared/lang'
 import { claudeHome, codexHome, endpointFile, envPinnedPort } from './env'
 import {
   installAgentHooks,
@@ -28,17 +31,20 @@ import {
 } from './hooksInstaller'
 import { log } from './log'
 import { getMediaState, sendMediaCommand } from './media'
+import * as neuralTts from './neuralTts'
 import { isCodeWaifuPort } from './probe'
 import { HookServer, type BindFailure, type StartResult } from './server'
 import { readConfig, writeConfig } from './store'
 import { steer as steerThread } from './steer'
 import { ThreadTracker } from './threads'
+import { readTranscript, type ReadOptions } from './transcript'
 import { Speaker } from './tts'
 
 const LOG_LIMIT = 200
 
 export type EventListener = (plan: EventPlan) => void
 export type StateListener = (speaking: boolean, queueLength: number) => void
+export type NeuralListener = (status: NeuralStatus) => void
 
 /**
  * Everything that is not windowing lives here so the GUI path and the headless
@@ -57,14 +63,26 @@ export class Core {
   conflict: RelayConflict | null = null
   /** Pid of another live CodeWaifu owning our endpoint file, 0 when alone. */
   duplicateOf = 0
+  /**
+   * OS language, set by the Electron entry point from
+   * `app.getPreferredSystemLanguages()`. Core deliberately stays free of an
+   * `electron` import so the CLI and the tests can construct it, hence the
+   * env-derived default.
+   */
+  systemLang: Lang = systemLangFromLocales([])
 
   private readonly events: EventPlan[] = []
   private readonly eventListeners = new Set<EventListener>()
   private readonly stateListeners = new Set<StateListener>()
+  private readonly neuralListeners = new Set<NeuralListener>()
   private speaking = false
   private queueLength = 0
   private started = false
   private binding: Promise<void> | null = null
+  /** Last download progress seen, so `runtimeState()` can report it. */
+  private neuralReceived = 0
+  private neuralFile = ''
+  private neuralJob: Promise<void> | null = null
 
   constructor(version?: string) {
     this.config = readConfig()
@@ -107,6 +125,14 @@ export class Core {
     return () => this.stateListeners.delete(listener)
   }
 
+  addNeuralListener(listener: NeuralListener): () => void {
+    this.neuralListeners.add(listener)
+    // Hand the subscriber the current phase immediately: Settings can open
+    // long after the download started and must not show a stale "not started".
+    listener(this.neuralStatus())
+    return () => this.neuralListeners.delete(listener)
+  }
+
   recentEvents(limit = 60): HookEvent[] {
     return this.events.slice(-limit).reverse().map((plan) => plan.event)
   }
@@ -131,8 +157,75 @@ export class Core {
     await this.bind()
     this.installHooks()
     void this.speaker.refreshVoices()
+    this.prepareNeural()
     log('info', 'core started', { port: this.server.listeningPort, boot: this.boot, version: this.version })
     return this.relayStatus()
+  }
+
+  private neuralStatus(): NeuralStatus {
+    return neuralTts.status(this.neuralReceived, this.neuralFile)
+  }
+
+  private emitNeural(): void {
+    const status = this.neuralStatus()
+    for (const listener of this.neuralListeners) listener(status)
+  }
+
+  /** Settings -> "try the download again". Idempotent while a job is running. */
+  retryNeural(): NeuralStatus {
+    if (!this.neuralJob) neuralTts.resetForRetry()
+    // A retry is an explicit user action, so it downloads even when the
+    // background auto-download toggle is off.
+    const previous = this.config.voice.autoDownload
+    if (!previous) this.config = writeConfig({ ...this.config, voice: { ...this.config.voice, autoDownload: true } })
+    this.prepareNeural()
+    if (!previous) this.emitNeural()
+    return this.neuralStatus()
+  }
+
+  /**
+   * Bring the neural voice up, if that is what the user asked for. Fire and
+   * forget on purpose: the 134MB weight download must never delay the relay,
+   * the hooks or the first greeting. While it runs the OS voice speaks, and
+   * once it lands Matcha takes over from the next sentence.
+   */
+  prepareNeural(): void {
+    const voice = this.config.voice
+    if (voice.engine !== 'matcha') return
+    if (this.neuralJob) return
+    this.neuralJob = (async () => {
+      if (voice.autoDownload && !neuralTts.available()) {
+        const ok = await neuralTts.ensureModels((progress) => {
+          this.neuralReceived = progress.received
+          this.neuralFile = progress.file
+          this.emitNeural()
+        })
+        this.neuralReceived = ok ? neuralTts.MODEL_TOTAL_BYTES : this.neuralReceived
+        this.neuralFile = ''
+        this.emitNeural()
+        if (!ok) {
+          log('warn', 'neural voice weights unavailable; staying on the system voice')
+          return
+        }
+      } else if (!(await neuralTts.modelsInstalled())) {
+        // Auto-download is off and the weights are not on disk: do not touch the
+        // network behind the user's back. The system voice keeps speaking.
+        this.emitNeural()
+        return
+      }
+      // Warm the engine now so the first notice is not the one paying the
+      // ~600ms cold load.
+      const handle = await neuralTts.engine()
+      this.emitNeural()
+      if (handle) log('info', 'neural voice ready', { loadMs: neuralTts.engineLoadMs() })
+    })()
+      .catch((error) => {
+        log('warn', 'neural voice preparation failed', String(error))
+        this.emitNeural()
+      })
+      .finally(() => {
+        this.neuralJob = null
+      })
   }
 
   /** Port the user asked for, if any. Env beats config so a shell can override. */
@@ -257,7 +350,9 @@ export class Core {
    */
   greet(): { text: string; lang: 'zh' | 'en' } | null {
     if (!this.config.enabled || !this.config.speak) return null
-    const lang = this.config.lang === 'auto' ? 'zh' : this.config.lang
+    // An explicit speech language wins; otherwise greet in the language the
+    // window itself is written in, so her first line matches what she reads.
+    const lang = this.config.lang === 'auto' ? this.uiLang() : this.config.lang
     const text = pickPhrase(greetingKeyForHour(new Date().getHours()), lang, { agent: 'codex' })
     this.speaker.force(text, lang)
     return { text, lang }
@@ -294,11 +389,21 @@ export class Core {
   async updateConfig(patch: unknown): Promise<AppConfig> {
     const next = applyPatch(this.config, patch)
     const portChanged = next.port !== this.config.port || next.pinPort !== this.config.pinPort
+    const engineChanged =
+      next.voice.engine !== this.config.voice.engine ||
+      next.voice.autoDownload !== this.config.voice.autoDownload
     this.config = writeConfig(next)
     if (portChanged) await this.rebind()
     // Event toggles change which hooks must exist in the agent configs.
     if (this.config.autoInstallHooks) this.installHooks()
     if (!this.config.speak || !this.config.enabled) this.speaker.stop()
+    // Switching to Matcha from Settings starts the same background bring-up
+    // that launch does; switching away leaves the loaded engine alone (it is
+    // idle memory, and switching back should be instant).
+    if (engineChanged) {
+      this.prepareNeural()
+      this.emitNeural()
+    }
     return this.config
   }
 
@@ -329,6 +434,18 @@ export class Core {
     return this.tracker.list()
   }
 
+  /**
+   * Transcript for the chat view. Read-only and synchronous on purpose: it is
+   * a bounded byte-range read, and keeping it off the event queue means the
+   * renderer can poll it while a TTS child process is running.
+   */
+  transcript(agent: Agent, threadId: string, options: ReadOptions = {}): ChatTranscript | null {
+    const found = readTranscript(agent, threadId, options)
+    if (!found) return null
+    const known = this.tracker.peek(agent, threadId)
+    return { ...found, title: known?.title || '', cwd: found.cwd || known?.cwd || '', steerable: Boolean(known?.steerable ?? found.steerable) }
+  }
+
   async steer(agent: Agent, threadId: string, message: string): Promise<SteerResult> {
     const result = await steerThread(agent, threadId, message)
     const lang = this.config.lang === 'auto' ? detectLang(message) : this.config.lang
@@ -357,15 +474,24 @@ export class Core {
       queueLength: this.queueLength,
       hooks: this.hooksStatus(),
       agents: { codex: exists(codexHome), claude: exists(claudeHome) },
-      voices: this.speaker.listVoices()
+      voices: this.speaker.listVoices(),
+      neural: this.neuralStatus(),
+      systemLang: this.systemLang
     }
+  }
+
+  /** Language the interface is written in, and therefore the greeting's. */
+  uiLang(): Lang {
+    return resolveUiLang(this.config.uiLang, this.systemLang)
   }
 
   shutdown(): void {
     this.speaker.shutdown()
+    neuralTts.shutdown()
     this.server.stop()
     this.eventListeners.clear()
     this.stateListeners.clear()
+    this.neuralListeners.clear()
     // endpoint.env is deliberately left behind: it records the last working port
     // for the next launch, and its /health preflight makes a stale file harmless.
   }

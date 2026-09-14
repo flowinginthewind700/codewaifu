@@ -1,6 +1,6 @@
 {
   "name": "codewaifu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A Live2D-style desktop companion that watches Codex and Claude Code, speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
   "keywords": [
     "codex",
@@ -42,9 +42,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dist": "electron-vite build && electron-builder",
-    "dist:mac": "electron-vite build && electron-builder --mac",
-    "dist:win": "electron-vite build && electron-builder --win",
+    "voice:runtime": "node scripts/ensure-voice-runtime.mjs",
+    "dist": "node scripts/ensure-voice-runtime.mjs && electron-vite build && electron-builder",
+    "dist:mac": "node scripts/ensure-voice-runtime.mjs darwin arm64 x64 && electron-vite build && electron-builder --mac",
+    "dist:win": "node scripts/ensure-voice-runtime.mjs win x64 && electron-vite build && electron-builder --win",
     "cli": "node bin/codewaifu.mjs"
   },
   "devDependencies": {
@@ -64,5 +65,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "koffi": "^3.2.1",
+    "sherpa-onnx-node": "^1.13.8"
   }
 }

@@ -1,8 +1,10 @@
 import type { ConfigPatch } from '@shared/config'
+import type { ChatTranscript } from '@shared/chat'
 import type { MediaCommand, MediaState } from '@shared/media'
 import type {
   Agent,
   HooksReport,
+  NeuralStatus,
   RedactedConfig,
   RelayStatus,
   SteerResult,
@@ -40,6 +42,20 @@ export const api = {
     return result.threads ?? []
   },
 
+  /** Conversation of one thread, read from the agent's own transcript file. */
+  transcript: async (agent: Agent, threadId: string, opts?: { limit?: number; fresh?: boolean }) => {
+    const result = await call<{ ok?: boolean; transcript?: ChatTranscript | null; error?: string }>(CH.transcript, {
+      agent,
+      threadId,
+      limit: opts?.limit,
+      fresh: opts?.fresh
+    })
+    return result.transcript ?? null
+  },
+
+  /** Widen the widget while the chat is open. */
+  setChatMode: (on: boolean) => call<{ ok: boolean }>(CH.chatMode, on),
+
   steer: (agent: Agent, threadId: string, message: string) =>
     call<SteerResult>(CH.steer, { agent, threadId, message }),
 
@@ -58,6 +74,12 @@ export const api = {
   hooksInstall: () => call<{ ok: boolean; report: HooksReportWithWarnings }>(CH.hooksInstall),
   hooksUninstall: () => call<{ ok: boolean; report: HooksReportWithWarnings }>(CH.hooksUninstall),
 
+  /** Ask main to try the neural voice weights again; returns the new status. */
+  neuralRetry: async () => {
+    const result = await call<{ neural?: NeuralStatus }>(CH.neuralRetry)
+    return result.neural ?? null
+  },
+
   voices: async () => {
     const result = await call<{ voices?: VoiceInfo[] }>(CH.voices)
     return result.voices ?? []
@@ -65,6 +87,8 @@ export const api = {
 
   setExpanded: (expanded: boolean) => call<{ ok: boolean }>(CH.expanded, expanded),
   setClickThrough: (through: boolean) => call<{ ok: boolean }>(CH.clickThrough, through),
+  /** Drag the frame; deltas are screen pixels since the last pointer sample. */
+  moveWindow: (dx: number, dy: number) => call<{ ok: boolean }>(CH.moveWindow, { dx, dy }),
   hide: () => call<{ ok: boolean }>(CH.hide),
   quit: () => call<{ ok: boolean }>(CH.quit),
 
@@ -72,6 +96,13 @@ export const api = {
     call<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>(CH.pickImage),
 
   openPath: (path: string) => call<{ ok: boolean }>(CH.openPath, path),
+
+  /**
+   * Raw invoke for channels that carry no payload worth typing twice (the
+   * voice acks). Still allow-listed by the preload, so this is not an escape
+   * hatch into main.
+   */
+  invoke: <T = unknown>(channel: string, payload?: unknown) => call<T>(channel, payload),
 
   on: (channel: string, listener: (payload: unknown) => void) => bridge.on(channel, listener)
 }
