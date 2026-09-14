@@ -1,0 +1,68 @@
+{
+  "name": "codewaifu",
+  "version": "0.1.0",
+  "description": "A Live2D-style desktop companion that watches Codex and Claude Code, speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "coding-agent",
+    "live2d",
+    "waifu",
+    "tts",
+    "desktop-pet",
+    "hooks",
+    "electron"
+  ],
+  "homepage": "https://github.com/flowinginthewind700/codewaifu#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flowinginthewind700/codewaifu.git"
+  },
+  "bugs": {
+    "url": "https://github.com/flowinginthewind700/codewaifu/issues"
+  },
+  "license": "MIT",
+  "author": "flowinginthewind700",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "bin": {
+    "codewaifu": "./bin/codewaifu.mjs"
+  },
+  "files": [
+    "bin",
+    "plugin",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist": "electron-vite build && electron-builder",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "cli": "node bin/codewaifu.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^7.1.5",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

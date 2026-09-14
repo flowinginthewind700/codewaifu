@@ -1,0 +1,19 @@
+{
+  "name": "codewaifu",
+  "version": "0.1.0",
+  "description": "CodeWaifu desktop companion: speaks Claude Code and Codex events out loud, lists every agent thread, steers them from one window, and drives your music transport. Installing this plugin adds /codewaifu:* commands; the companion app itself is installed by the same one-line installer.",
+  "author": {
+    "name": "flowinginthewind700",
+    "url": "https://github.com/flowinginthewind700"
+  },
+  "homepage": "https://github.com/flowinginthewind700/codewaifu#readme",
+  "repository": "https://github.com/flowinginthewind700/codewaifu",
+  "license": "MIT",
+  "keywords": [
+    "desktop-companion",
+    "tts",
+    "hooks",
+    "threads",
+    "media-control"
+  ]
+}

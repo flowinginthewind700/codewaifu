@@ -1,0 +1,25 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "codewaifu",
+  "description": "Marketplace hosting the CodeWaifu companion plugin.",
+  "owner": {
+    "name": "flowinginthewind700",
+    "url": "https://github.com/flowinginthewind700"
+  },
+  "plugins": [
+    {
+      "name": "codewaifu",
+      "description": "Desktop companion that speaks agent events, lists threads and steers them; adds /codewaifu:install, /codewaifu:status and /codewaifu:uninstall.",
+      "version": "0.1.0",
+      "author": {
+        "name": "flowinginthewind700"
+      },
+      "source": {
+        "source": "github",
+        "repo": "flowinginthewind700/codewaifu",
+        "path": "plugin"
+      },
+      "category": "productivity"
+    }
+  ]
+}

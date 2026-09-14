@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: mac
+          - os: windows-latest
+            platform: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: test
+        run: npm test
+
+      - name: bundle
+        run: npm run build
+
+      - name: package (mac)
+        if: matrix.platform == 'mac'
+        run: npx electron-builder --mac --publish never
+
+      - name: package (win)
+        if: matrix.platform == 'win'
+        run: npx electron-builder --win --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            release/*.zip
+            release/*.dmg
+            release/*.exe
+            release/*.AppImage
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: list artifacts
+        run: ls -la release
+
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Idempotent on purpose: a maintainer may already have opened the
+          # release from a local build so early adopters get artifacts before
+          # CI finishes. Create only when missing, then always upload --clobber
+          # so the tag ends up with exactly the CI-built files.
+          if ! gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "CodeWaifu ${GITHUB_REF_NAME}" \
+              --notes "Automated build for ${GITHUB_REF_NAME}." \
+              $([ "${GITHUB_REF_NAME}" = "${GITHUB_REF_NAME#*-}" ] || echo --prerelease)
+          fi
+          gh release upload "${GITHUB_REF_NAME}" release/* \
+            --repo "${GITHUB_REPOSITORY}" --clobber
