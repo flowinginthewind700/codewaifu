@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { IME_KEYCODE, isImeKey, isSubmitEnter, type ImeKeyLike } from '../src/shared/ime'
+import { COMPOSITION_END_GRACE_MS, IME_KEYCODE, isImeKey, isSubmitEnter, type ImeKeyLike } from '../src/shared/ime'
 
 // ============================================================
 // Enter-to-send vs. the Enter that commits an IME candidate. The bug this pins:
@@ -40,6 +40,17 @@ describe('isSubmitEnter', () => {
     expect(isSubmitEnter({ key: 'Escape', keyCode: 27 })).toBe(false)
     expect(isSubmitEnter({ key: 'Process', keyCode: IME_KEYCODE })).toBe(false)
     expect(isSubmitEnter({})).toBe(false)
+  })
+
+  it('stands down inside the compositionend grace window', () => {
+    // macOS dispatches the commit Enter after compositionend with every direct
+    // signal clean; only the elapsed time since the composition ended tells it
+    // apart from a deliberate send.
+    expect(isSubmitEnter(enter(), false, 0)).toBe(false)
+    expect(isSubmitEnter(enter(), false, COMPOSITION_END_GRACE_MS - 1)).toBe(false)
+    expect(isSubmitEnter(enter(), false, COMPOSITION_END_GRACE_MS)).toBe(true)
+    expect(isSubmitEnter(enter(), false, 400)).toBe(true)
+    expect(isSubmitEnter(enter(), false, null)).toBe(true)
   })
 })
 

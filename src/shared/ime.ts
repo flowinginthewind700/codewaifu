@@ -28,6 +28,20 @@ export interface ImeKeyLike {
 export const IME_KEYCODE = 229
 
 /**
+ * Grace window after `compositionend` in which a bare Enter is still treated
+ * as the IME's commit key, in ms.
+ *
+ * macOS dispatches the commit Enter *after* `compositionend` for some input
+ * methods, so by the time the keydown lands all three direct signals
+ * (`isComposing`, `keyCode === 229`, the caller's composition flag) are already
+ * clean and the Enter looks like a real submit. The commit keydown follows the
+ * compositionend within a few milliseconds (same task), while a human pressing
+ * Enter again to actually send needs an order of magnitude longer, so a short
+ * window separates the two without eating deliberate sends.
+ */
+export const COMPOSITION_END_GRACE_MS = 50
+
+/**
  * True when this keydown belongs to an ongoing composition rather than to the
  * user. Global shortcuts (Esc to close, `/` to filter, arrows to walk a list)
  * must all stand down here, or typing Chinese would fire them mid-word.
@@ -39,7 +53,18 @@ export function isImeKey(event: ImeKeyLike, composing = false): boolean {
 /**
  * True when this keydown is a real submit: bare Enter, outside a composition.
  * Shift+Enter stays a newline in the composer.
+ *
+ * `msSinceCompositionEnd` is the elapsed time since the caller's last
+ * `compositionend`, or `null` when no composition has ended yet; inside
+ * {@link COMPOSITION_END_GRACE_MS} the Enter belongs to the IME.
  */
-export function isSubmitEnter(event: ImeKeyLike, composing = false): boolean {
-  return event.key === 'Enter' && !event.shiftKey && !isImeKey(event, composing)
+export function isSubmitEnter(
+  event: ImeKeyLike,
+  composing = false,
+  msSinceCompositionEnd: number | null = null
+): boolean {
+  if (event.key !== 'Enter' || event.shiftKey) return false
+  if (isImeKey(event, composing)) return false
+  if (msSinceCompositionEnd !== null && msSinceCompositionEnd < COMPOSITION_END_GRACE_MS) return false
+  return true
 }

@@ -25,6 +25,11 @@ export function useImeEnter(): {
   // set when a platform drops both `isComposing` and `keyCode`. A ref, not
   // state — a composition must never trigger a re-render of the transcript.
   const composing = useRef(false)
+  // When the last compositionend happened: some macOS input methods dispatch
+  // the commit Enter *after* compositionend with every direct signal clean,
+  // so the grace window in shared/ime.ts is the only thing that stands it
+  // down. Null until the first composition ends.
+  const lastEndAt = useRef<number | null>(null)
 
   // One stable object so callers can list it in a dependency array without
   // rebuilding their handlers on every render.
@@ -33,12 +38,19 @@ export function useImeEnter(): {
       composition: {
         onCompositionStart: (): void => {
           composing.current = true
+          lastEndAt.current = null
         },
         onCompositionEnd: (): void => {
           composing.current = false
+          lastEndAt.current = performance.now()
         }
       },
-      submits: (event: KeyboardEvent<Element>): boolean => isSubmitEnter(fieldsOf(event), composing.current),
+      submits: (event: KeyboardEvent<Element>): boolean =>
+        isSubmitEnter(
+          fieldsOf(event),
+          composing.current,
+          lastEndAt.current === null ? null : performance.now() - lastEndAt.current
+        ),
       swallows: (event: KeyboardEvent<Element>): boolean => isImeKey(fieldsOf(event), composing.current)
     }),
     []
