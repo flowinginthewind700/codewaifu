@@ -47,6 +47,20 @@ const GREET_NEURAL_MS = 30000
 // ~/.codewaifu/assets through `cw-asset://` instead of the network.
 registerAssetScheme()
 
+// A dev run has to be able to sit next to an installed companion. Both would
+// share the default userData directory, and the single-instance lock below is
+// keyed on it - so `npm run dev` logs "second instance exiting", quits, and
+// pulls focus to the app that is already running. The Bench never appears and
+// nothing reports an error, which reads as a broken dev script. Suffixing the
+// directory gives dev its own lock and its own Chromium cache. The app's real
+// state lives in ~/.codewaifu and stays shared, so a dev run still sees the
+// same config, tasks and ledgers; only the relay port moves, because two
+// listeners cannot hold 36801 and `pinPort` is off by default. Packaged builds
+// keep the stock path, so no installed user's data moves.
+if (!app.isPackaged) {
+  app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
 /*
  * Linux desktop plumbing, all of it pre-ready because Chromium reads these
  * switches once at startup:
