@@ -97,6 +97,29 @@ sudo apt install libgtk-3-0t64 libnotify4 libnss3 libxss1 libxtst6 \
 用的 input shape 与合成器探测都是 X11 调用,这两块是在 X11(或 XWayland)上
 验证的。
 
+### Windows
+
+用户态安装,不弹 UAC:落在上面提到的 `%LOCALAPPDATA%` 目录里,NSIS 顺手写好
+开始菜单快捷方式与卸载项;hook 与其它平台一样进 Codex / Claude Code 的配置
+目录。一个发行版同时带 setup 与 portable 两个产物,安装器优先取 setup——
+快捷方式与卸载项是它写的。构建是 x64 且未签名,SmartScreen 会问一次(先点
+「更多信息」,再点「仍要运行」);Windows on ARM 上以模拟方式运行,安装器会
+明说,而不是让你对着慢启动猜原因。
+
+裸的 `| iex` 吃不掉开关,要用脚本块把参数递进去:
+
+```powershell
+iex "& { $(irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/main/scripts/install.ps1) } -From C:/builds/CodeWaifu-0.3.0-win-x64-setup.exe"
+```
+
+- `-From 路径` 用与下载完全相同的代码路径安装本地产物:`*-setup.exe`、
+  `*-portable.exe`,或 `win-unpacked` 构建目录——最后这个正是 CI 产出的目录,
+  也是不发版就试本地构建最快的方式。
+- `-Version 'v0.3.0'` 锁定发行版,而不是取最新。
+- `-HooksOnly` 为已装好的应用重新注册 hook。
+- `-Uninstall [-Purge]` 移除 hook(会先备份 agent 配置),加 `-Purge` 连应用
+  一起删。
+
 ### 或者在 agent 里一句话安装
 
 Claude Code,作为插件:

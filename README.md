@@ -108,6 +108,33 @@ Verified on Ubuntu 24.04 (GNOME, X11). On a Wayland session she still runs, but
 the click-through input shape and the compositor probe are X11 calls, so an X11
 session (or XWayland) is what those two features were tested against.
 
+### Windows
+
+Per-user, no admin prompt: it installs into the `%LOCALAPPDATA%` location named
+above, with the Start-menu shortcut and the uninstaller entry NSIS writes, and
+the hooks land in your Codex and Claude Code config folders exactly as they do
+on the other platforms. A release carries both a setup and a portable artifact;
+the installer prefers the setup one, because that is what writes the shortcut
+and the uninstaller. The build is x64 and unsigned, so SmartScreen asks once
+(More info > Run anyway), and on Windows on ARM it runs emulated - the installer
+says so out loud instead of leaving you to wonder about a slow first launch.
+
+Switches cannot survive a bare `| iex`, so hand them to the script through a
+script block:
+
+```powershell
+iex "& { $(irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/main/scripts/install.ps1) } -From C:/builds/CodeWaifu-0.3.0-win-x64-setup.exe"
+```
+
+- `-From PATH` installs a local artifact through the same code path as a
+  download: a `*-setup.exe`, a `*-portable.exe`, or a `win-unpacked` build
+  directory - the last is the tree CI produces, so it is the quickest way to try
+  a local build without publishing anything.
+- `-Version 'v0.3.0'` pins a release instead of taking the newest.
+- `-HooksOnly` re-registers the hooks for an app that is already installed.
+- `-Uninstall [-Purge]` removes the hooks (agent configs are backed up first)
+  and, with `-Purge`, the app.
+
 ### Or install it from inside your agent
 
 Claude Code, as a plugin:
