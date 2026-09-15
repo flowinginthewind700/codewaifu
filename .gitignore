@@ -12,3 +12,6 @@ coverage/
 .trash/
 thirdparty/
 /tmp/
+# The smoke test writes a screenshot of the Bench here on every run. It is
+# evidence for whoever is debugging, not a source file.
+tests/e2e/artifacts/
