@@ -42,6 +42,34 @@ what every agent is doing right now.
   needs a per-install token, and the Host header is validated. No telemetry,
   no network egress, no sudo.
 
+## Pro: a cockpit over your agents' terminals
+
+The companion answers *which agent needs me right now*. The Bench answers the
+next question: what is every one of them doing, in their own terminals, without
+opening nine windows. Pro is a second window over
+[herdr](https://github.com/herdrdev/herdr), the durable terminal runtime that
+owns the PTYs - tasks, workspaces and panes outlive the Bench closing, the
+machine sleeping, and the app crashing.
+
+![CodeWaifu Pro bench](docs/assets/bench.png)
+
+- **One tree, every repo.** herdr workspaces and tasks, ordered the way you
+  scan them: what needs you first, what is running, what finished.
+- **Terminals rented, not owned.** Each pane is a live
+  `herdr terminal session control` connection: Unicode 11 widths, WebGL with a
+  DOM fallback, OSC 8 links through a scheme allow-list, OSC 52 clipboard, and
+  find with regex and case modes. Closing the Bench kills nothing.
+- **An attention queue.** Permission requests and blockers collect in one list
+  with approve / deny / snooze, and the companion bubble can answer in words.
+- **A ledger and a recovery plan.** Every decision is append-only on disk, and a
+  task whose agent session died gets a resume prompt you can run or re-ask.
+- **Keyboard first.** `j/k` move, `Enter` opens, `i` hands the keyboard to a
+  terminal, `Shift+Tab` takes it back, `a/d/s` decide, `1/2/3` switch panels.
+
+Pro is Linux-first and needs herdr 0.9+ running; with no herdr the Bench shows
+an install card instead of crashing. Open it from the tray menu (`Open Bench`),
+or set `pro.openBenchOnLaunch` in `~/.codewaifu/config.json`.
+
 ## Install
 
 One line, macOS or Linux:
@@ -236,7 +264,8 @@ own entries.
 ```bash
 npm install
 npm run dev          # electron-vite dev with hot reload
-npm test             # vitest, 188 tests incl. a live relay harness
+npm test             # vitest, 854 tests: relay harness, Pro bridge, live TTS
+npm run test:e2e     # needs a display; builds first, about 20s
 npm run typecheck
 npm run dist:mac     # or dist:win; artifacts land in release/
 node --experimental-strip-types scripts/build-icon.mjs   # regenerate build/icon.png

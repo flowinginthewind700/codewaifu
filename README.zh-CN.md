@@ -34,6 +34,32 @@
 - **只走回环。** relay 只绑 `127.0.0.1`,除 `/health` 外所有路由都要带本机安装时
   生成的 token,并校验 Host 头。无遥测、无外联、不需要 sudo。
 
+## Pro:你的 agent 终端的驾驶舱
+
+浮窗回答的是「现在哪个 agent 需要我」。工作台回答下一个问题:它们每一个此刻在
+干什么——不用开九个窗口。Pro 是盖在 [herdr](https://github.com/herdrdev/herdr)
+上的第二扇窗:那个持有 PTY 的持久终端运行时。任务、工作区、面板都活得比 Bench
+关窗、机器睡眠、应用崩溃更久。
+
+![CodeWaifu Pro 工作台](docs/assets/bench.png)
+
+- **一棵树,所有仓库。** herdr 的工作区与任务,按你扫视的顺序排:先是需要你的,
+  然后是正在跑的、跑完的。
+- **终端是租的,不是自己的。** 每个面板是一条活的
+  `herdr terminal session control` 连接:Unicode 11 宽字符、WebGL 渲染与降级、
+  OSC 8 链接走 scheme 白名单、OSC 52 剪贴板、带正则与大小写模式的输出内搜索。
+  关掉 Bench 不会杀死任何东西。
+- **注意力队列。** 权限请求与阻塞项汇到一个列表,可批准 / 拒绝 / 稍后提醒;
+  浮窗气泡也能直接用文字回答。
+- **账本与恢复计划。** 每个决策 append-only 落盘;agent 会话死掉的任务会拿到
+  一条可以执行或重新提问的恢复提示。
+- **键盘优先。** `j/k` 移动、`Enter` 打开、`i` 把键盘交给终端、`Shift+Tab` 交回、
+  `a/d/s` 决策、`1/2/3` 切面板。
+
+Pro 先做 Linux,需要 herdr 0.9+ 在跑;没有 herdr 时 Bench 显示安装引导卡片,
+不会崩。托盘菜单 `Open Bench` 打开,或把 `~/.codewaifu/config.json` 里的
+`pro.openBenchOnLaunch` 设为 `true` 让它随启动打开。
+
 ## 安装
 
 一行命令,macOS / Linux:
@@ -213,7 +239,8 @@ CodeWaifu 写的所有东西都在 `~/.codewaifu`(Windows:`%USERPROFILE%\.codewa
 ```bash
 npm install
 npm run dev          # electron-vite 热重载
-npm test             # vitest,188 个测试,含真实 relay 测试台
+npm test             # vitest,854 个测试:relay 测试台、Pro 桥接、真实 TTS
+npm run test:e2e     # 需要显示器;先构建,约二十秒
 npm run typecheck
 npm run dist:mac     # 或 dist:win;产物在 release/
 node --experimental-strip-types scripts/build-icon.mjs   # 重新生成 build/icon.png
