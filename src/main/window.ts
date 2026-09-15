@@ -38,6 +38,20 @@ export interface WindowHandlers {
    * visibility, so the Bench has to hear when it changes rather than poll it.
    */
   onVisibility?: (visible: boolean) => void
+  /**
+   * Bring the Bench forward. Without this the cockpit has no door: the only
+   * other ways in are `pro.openBenchOnLaunch` in the config file and an
+   * attention bubble carrying no task, so a quiet fleet is a fleet you cannot
+   * open. The tray is the one control surface that exists whether or not she
+   * is on screen.
+   */
+  onOpenBench?: () => void
+  /**
+   * Live, and read every time the menu is built: Pro can be switched off at
+   * runtime, and a door to a room that is not there reads as an ignored click
+   * rather than as a feature that is off.
+   */
+  benchAvailable?: () => boolean
 }
 
 export interface WindowHandle {
@@ -477,6 +491,17 @@ function createTray(
             win.webContents.send(IPC.openPanel)
           }
         },
+        // The count in the label is the same number the badge draws, so the menu
+        // says whether opening it is worth it before the click rather than
+        // after. Gated on a live predicate: Pro can be switched off at runtime.
+        ...(handlers.onOpenBench && handlers.benchAvailable?.()
+          ? [
+              {
+                label: badgeCount > 0 ? `Open Bench (${badgeCount})` : 'Open Bench',
+                click: (): void => handlers.onOpenBench?.()
+              }
+            ]
+          : []),
         { type: 'separator' },
         { label: muted ? 'Unmute voice' : 'Mute voice', click: () => handlers.onToggleMute() },
         { label: 'Repair agent hooks', click: () => handlers.onReinstallHooks() },

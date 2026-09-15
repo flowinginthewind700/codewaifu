@@ -371,7 +371,16 @@ async function boot(): Promise<void> {
     },
     // The Bench reads widget visibility to decide whether an attention item may
     // pull her onto the screen, so a change has to reach it as it happens.
-    onVisibility: () => pro?.refreshCompanion()
+    onVisibility: () => pro?.refreshCompanion(),
+    // The tray is the Bench's door. Without it the cockpit is reachable only
+    // through `pro.openBenchOnLaunch` or by clicking a bubble that carries no
+    // task, which means a fleet with nothing blocked cannot be opened at all.
+    onOpenBench: () => {
+      ensureBench()?.show(true)
+    },
+    // `view()` is null while Pro is off: the same contract `/pro/*` answers 503
+    // on, so the item disappears with the feature instead of dying on click.
+    benchAvailable: () => pro?.view() !== null
   })
 
   registerIpc(instance, () => handle?.win ?? null, {
