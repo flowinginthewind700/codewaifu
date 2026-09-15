@@ -1,4 +1,7 @@
 import { spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -20,6 +23,34 @@ function pickAsset(os: string, arch: string, exts: string[], names: string[]): s
 
 function source(path: string): string {
   return String(spawnSync('cat', [path], { encoding: 'utf8' }).stdout ?? '')
+}
+
+/**
+ * Run install.sh against a curl that fails the way GitHub fails a repo with no
+ * public release (exit 22), inside a throwaway HOME so nothing real is touched.
+ */
+function runInstallerOffline(
+  args: string[] = []
+): { status: number | null; stderr: string; root: string } {
+  const sandbox = mkdtempSync(join(tmpdir(), 'cw-install-'))
+  const stubDir = join(sandbox, 'stub')
+  mkdirSync(stubDir)
+  const stub = join(stubDir, 'curl')
+  writeFileSync(stub, '#!/bin/sh\nexit 22\n')
+  chmodSync(stub, 0o755)
+  const root = join(sandbox, 'share/CodeWaifu')
+  const result = spawnSync('bash', [INSTALLER, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${stubDir}:${process.env.PATH ?? ''}`,
+      HOME: sandbox,
+      XDG_DATA_HOME: join(sandbox, 'share'),
+      CODEWAIFU_LINUX_ROOT: root,
+      CODEWAIFU_LINUX_BIN: join(sandbox, 'bin')
+    }
+  })
+  return { status: result.status, stderr: String(result.stderr ?? ''), root }
 }
 
 /** Every name our own electron-builder.yml can emit, plus the noise around it. */
@@ -211,5 +242,30 @@ describe.skipIf(!hasBash)('install.sh', () => {
     for (const line of src.split('\n').filter((l) => l.includes('sudo '))) {
       expect(line.trim().startsWith('#') || /warn |say |  sudo /.test(line), line).toBe(true)
     }
+  })
+
+  it('explains a repo with no public release instead of dying on a raw curl 404', () => {
+    // `set -euo pipefail` used to win the race: a failing curl inside the tag
+    // lookup aborted the installer with `curl: (22) ... 404` and nothing else,
+    // which reads like a broken network rather than "there is no release yet".
+    const { status, stderr, root } = runInstallerOffline()
+    expect(status).toBe(1)
+    expect(stderr).toContain('could not resolve a release tag')
+    expect(stderr).toContain('--from')
+    expect(stderr).not.toMatch(/curl: \(22\)/)
+    // And it gave up before writing anything into the install root.
+    expect(existsSync(root)).toBe(false)
+  })
+
+  it('reports a pinned tag it cannot read, rather than an empty asset list', () => {
+    const { status, stderr } = runInstallerOffline(['--version', 'v9.9.9'])
+    expect(status).toBe(1)
+    // Linux resolves a pinned tag through the release asset list, macOS spells
+    // the asset name and goes straight at the download. Both must end in a
+    // sentence of their own, never in a bare curl diagnostic.
+    const explained =
+      stderr.includes('could not list the assets of v9.9.9') || stderr.includes('download failed:')
+    expect(explained, stderr).toBe(true)
+    expect(stderr.includes('curl: (22)')).toBe(false)
   })
 })

@@ -56,6 +56,21 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]%/*}/lib/assets.sh" ]; 
   . "${BASH_SOURCE[0]%/*}/lib/assets.sh"
 fi
 
+# Newest published release tag, or nothing at all when the API refuses: the repo
+# is private, no release has been published yet, or the anonymous rate limit is
+# spent. The empty result matters -- under `set -euo pipefail` a failing curl in
+# a command substitution aborts the whole installer with a bare
+# `curl: (22) The requested URL returned error: 404`, and the actionable die()
+# below never gets to run. Both platform paths share this.
+latest_release_tag() {
+  curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+    | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//' || true
+}
+
+die_no_tag() {
+  die "could not resolve a release tag for $REPO (no public release yet, or the GitHub API refused). Pin one with --version vX.Y.Z, or install a local artifact with --from PATH."
+}
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -340,10 +355,9 @@ install_linux() {
   else
     if [ -z "$TAG" ]; then
       say "looking up the latest release of $REPO"
-      TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-        | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//')"
+      TAG="$(latest_release_tag)"
     fi
-    [ -n "$TAG" ] || die "could not resolve a release tag (is the repo public and does a release exist?)"
+    [ -n "$TAG" ] || die_no_tag
 
     # AppImage first: it needs no root and its AppRun launcher handles the
     # sandbox. The deb is the fallback for a distro without FUSE-less tooling.
@@ -443,12 +457,11 @@ if [ "$HOOKS_ONLY" != "1" ] && [ "$OS" = "Darwin" ]; then
     [ -n "$SRC_APP" ] && [ -d "$SRC_APP" ] || die "could not find CodeWaifu.app in $LOCAL"
   elif [ -z "$TAG" ]; then
     say "looking up the latest release of $REPO"
-    TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-      | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//')"
+    TAG="$(latest_release_tag)"
   fi
 
   if [ -z "$LOCAL" ]; then
-    [ -n "$TAG" ] || die "could not resolve a release tag (is the repo public and does a release exist?)"
+    [ -n "$TAG" ] || die_no_tag
 
     ASSET="CodeWaifu-${TAG#v}-mac-$ARCH.zip"
     URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
