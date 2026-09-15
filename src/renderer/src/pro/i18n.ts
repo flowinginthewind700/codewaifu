@@ -225,6 +225,15 @@ const STRINGS = {
     en: 'The bridge to this pane is released. The agent is still running in herdr.'
   },
   paneAttachedElsewhere: { zh: '另一个窗口正接管这个面板', en: 'Another window holds this pane' },
+  paneSearchOpen: { zh: '搜索输出', en: 'Search output' },
+  paneSearchPlaceholder: { zh: '在输出里查找…', en: 'Find in output…' },
+  paneSearchPrev: { zh: '上一处', en: 'Previous match' },
+  paneSearchNext: { zh: '下一处', en: 'Next match' },
+  paneSearchClose: { zh: '关闭搜索', en: 'Close search' },
+  paneSearchNone: { zh: '无匹配', en: 'No results' },
+  /** Past the addon's highlight limit only the total is known, so there is no "i". */
+  paneSearchCount: { zh: '{n} 处', en: '{n} found' },
+  paneSearchPosition: { zh: '{i} / {n}', en: '{i} of {n}' },
 
   /* ---------------------------------------------------------- install */
   installTitle: { zh: 'herdr 没有运行', en: 'herdr is not running' },

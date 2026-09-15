@@ -17,14 +17,26 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { FitAddon } from '@xterm/addon-fit'
+import { SearchAddon, type ISearchResultChangeEvent } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
-import { Bell, Crosshair, Maximize2, Minimize2, Plug, PlugZap } from 'lucide-react'
+import {
+  Bell,
+  ChevronDown,
+  ChevronUp,
+  Crosshair,
+  Maximize2,
+  Minimize2,
+  Plug,
+  PlugZap,
+  Search,
+  X
+} from 'lucide-react'
 import type { PaneView } from '@shared/pro'
 import type { ProBridgePush, ProFramePush } from '@shared/proIpc'
-import { clipboardAction } from '@shared/termKeys'
+import { clipboardAction, searchAction } from '@shared/termKeys'
 import { platform, proApi } from './api'
 import { fill, type Translate } from './i18n'
 import { bridgeOf, registerPane } from './paneBus'
@@ -66,6 +78,31 @@ function b64ToBytes(b64: string): Uint8Array {
 
 /** How long the bell lights the pane header before it stops claiming attention. */
 const BELL_MS = 2500
+
+/**
+ * Match colours for the search addon.
+ *
+ * Not a cosmetic choice: the addon only reports a result count while
+ * decorations are enabled, so without these the bar's counter never moves and
+ * "no matches" is indistinguishable from "search is broken".
+ */
+const SEARCH_DECORATIONS = {
+  matchBackground: '#4a3b18',
+  matchBorder: '#f5b45c',
+  matchOverviewRuler: '#f5b45c',
+  activeMatchBackground: '#6d2436',
+  activeMatchBorder: '#ff7d96',
+  activeMatchColorOverviewRuler: '#ff7d96'
+}
+
+/**
+ * Keystroke-to-scan delay for the search box.
+ *
+ * A find walks the whole scrollback, and a six-letter word typed at normal
+ * speed is six of them. The delay is short enough to feel live and long enough
+ * that typing the word costs one scan.
+ */
+const SEARCH_DEBOUNCE_MS = 140
 
 /**
  * Copy the selection to the system clipboard.
@@ -134,6 +171,17 @@ function agentClass(agent: string): string {
   return ''
 }
 
+/** The counter's three states: nothing searched yet, no hits, and a position. */
+function matchCountLabel(t: Translate, matches: ISearchResultChangeEvent | null): string {
+  if (!matches) return ''
+  if (matches.resultCount === 0) return t('paneSearchNone')
+  // resultIndex is -1 once the match count passes the addon's highlight limit.
+  // Printing a zero position against a four-figure total reads as an
+  // off-by-one rather than as a threshold, so the total is shown on its own.
+  if (matches.resultIndex < 0) return fill(t, 'paneSearchCount', { n: matches.resultCount })
+  return fill(t, 'paneSearchPosition', { i: matches.resultIndex + 1, n: matches.resultCount })
+}
+
 export function Pane({
   pane,
   active,
@@ -146,6 +194,11 @@ export function Pane({
   const hostRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const sizeRef = useRef({ cols: 0, rows: 0 })
+  const searchRef = useRef<SearchAddon | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  /** Mirrors `query` for the debounced scan, which outlives one render. */
+  const queryRef = useRef('')
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [phase, setPhase] = useState<ProBridgePush['phase']>(bridgeOf(pane.paneId)?.phase ?? 'idle')
   const [dropped, setDropped] = useState(0)
   const [error, setError] = useState('')
@@ -153,8 +206,75 @@ export function Pane({
   const [bell, setBell] = useState(false)
   /** True when the human released this pane on purpose; no auto re-attach. */
   const [released, setReleased] = useState(false)
+  /** Scrollback find. Overlaid, so opening it never resizes the PTY. */
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  /**
+   * Last find result: the only terminal-derived React state in this pane, and it
+   * moves on an explicit find rather than on output. A chatty build still cannot
+   * re-render the tree, which is what the frame path at the top of this file
+   * promises.
+   */
+  const [matches, setMatches] = useState<ISearchResultChangeEvent | null>(null)
 
   const paneId = pane.paneId
+
+  const runSearch = useCallback((backwards: boolean) => {
+    const addon = searchRef.current
+    if (!addon) return
+    const needle = queryRef.current
+    if (!needle) {
+      addon.clearDecorations()
+      setMatches(null)
+      return
+    }
+    const options = { decorations: SEARCH_DECORATIONS, incremental: false }
+    const found = backwards ? addon.findPrevious(needle, options) : addon.findNext(needle, options)
+    // A miss is recorded here as well as left to the results event. The counter
+    // is the only feedback the bar gives, so a stale count sitting over an empty
+    // pane is how a working search comes to look broken.
+    if (!found) setMatches({ resultIndex: -1, resultCount: 0 })
+  }, [])
+
+  const onQueryChange = useCallback(
+    (value: string) => {
+      setQuery(value)
+      queryRef.current = value
+      if (searchTimer.current) clearTimeout(searchTimer.current)
+      searchTimer.current = setTimeout(() => runSearch(false), SEARCH_DEBOUNCE_MS)
+    },
+    [runSearch]
+  )
+
+  const clearSearch = useCallback(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    setSearchOpen(false)
+    setQuery('')
+    queryRef.current = ''
+    setMatches(null)
+    searchRef.current?.clearDecorations()
+  }, [])
+
+  const closeSearch = useCallback(() => {
+    clearSearch()
+    // Focus has to be handed back explicitly. The input owns it while the bar is
+    // open, and dropping it on the surrounding div leaves a pane that looks live
+    // and accepts nothing - silent, and the next keystroke was meant for the
+    // agent.
+    termRef.current?.focus()
+  }, [clearSearch])
+
+  const openSearch = useCallback(() => setSearchOpen(true), [])
+
+  // Focus follows the bar, not the click. Opened from the header button, focus
+  // would stay on that button and the first thing anybody does next is type.
+  useEffect(() => {
+    if (!searchOpen) return
+    const input = searchInputRef.current
+    if (!input) return
+    input.focus()
+    input.select()
+  }, [searchOpen])
 
   useEffect(() => {
     const host = hostRef.current
@@ -183,6 +303,15 @@ export function Pane({
 
     // OSC 52, so an agent can put text on the system clipboard itself.
     term.loadAddon(new ClipboardAddon())
+
+    // Scrollback search, loaded whether or not the bar is open. The addon keeps
+    // its match decorations against a buffer that is still growing, so
+    // attaching it only on first use would search a view of the pane that
+    // stopped at the moment the bar appeared.
+    const search = new SearchAddon()
+    term.loadAddon(search)
+    searchRef.current = search
+    const resultsSub = search.onDidChangeResults((event) => setMatches(event))
 
     // Links open in the OS browser and never in this window. The URL came from
     // output we do not control, so it leaves through the host op whose scheme
@@ -269,6 +398,13 @@ export function Pane({
     // Returning false is what tells xterm we consumed the key; true leaves it
     // on its way to the PTY.
     term.attachCustomKeyEventHandler((event) => {
+      // Checked before the clipboard table. On macOS this is Cmd+F, which no
+      // terminal program is waiting for; elsewhere it is Ctrl+Shift+F, because
+      // plain Ctrl+F is readline forward-char and has to keep reaching the PTY.
+      if (searchAction(platform, event) === 'open') {
+        openSearch()
+        return false
+      }
       const action = clipboardAction(platform, event, term.hasSelection())
       if (action === 'ignore') return true
       if (action === 'copy') {
@@ -299,6 +435,11 @@ export function Pane({
     return () => {
       if (timer) clearTimeout(timer)
       if (bellTimer) clearTimeout(bellTimer)
+      // A scan armed a moment before unmount would fire against a terminal that
+      // is already disposed, and its match decorations go with it.
+      if (searchTimer.current) clearTimeout(searchTimer.current)
+      resultsSub.dispose()
+      searchRef.current = null
       observer.disconnect()
       unsub()
       dataSub.dispose()
@@ -315,7 +456,10 @@ export function Pane({
   const release = useCallback(() => {
     setReleased(true)
     setPhase('idle')
-  }, [])
+    // The bar searches a terminal that is about to stop existing. Left open it
+    // would show a live input over a pane nobody is attached to.
+    clearSearch()
+  }, [clearSearch])
 
   const label = pane.title || pane.cwd || pane.paneId
   const live = phase === 'live'
@@ -345,6 +489,18 @@ export function Pane({
         <button
           type="button"
           className="btn icon ghost"
+          title={t('paneSearchOpen')}
+          aria-label={t('paneSearchOpen')}
+          aria-pressed={searchOpen}
+          data-open={searchOpen || undefined}
+          disabled={released}
+          onClick={() => (searchOpen ? closeSearch() : openSearch())}
+        >
+          <Search size={12} />
+        </button>
+        <button
+          type="button"
+          className="btn icon ghost"
           title={t('paneFocusHerdr')}
           aria-label={t('paneFocusHerdr')}
           onClick={() => void proApi.pane.focus(paneId)}
@@ -371,6 +527,69 @@ export function Pane({
         </button>
       </header>
       <div className="pane-body" ref={hostRef} />
+      {searchOpen && !released && (
+        <div className="pane-search" role="search">
+          <Search size={12} aria-hidden="true" />
+          <input
+            ref={searchInputRef}
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                runSearch(event.shiftKey)
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                closeSearch()
+              } else if (searchAction(platform, event) === 'open') {
+                // The bar owns focus, so the pane's own key handler never sees
+                // this chord. Hitting it again re-selects the term instead of
+                // doing nothing at all, which is what a find bar does everywhere
+                // else.
+                event.preventDefault()
+                event.currentTarget.select()
+              }
+            }}
+            placeholder={t('paneSearchPlaceholder')}
+            aria-label={t('paneSearchPlaceholder')}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <span
+            className="pane-search-count"
+            data-none={matches !== null && matches.resultCount === 0}
+          >
+            {matchCountLabel(t, matches)}
+          </span>
+          <button
+            type="button"
+            className="btn icon ghost"
+            title={t('paneSearchPrev')}
+            aria-label={t('paneSearchPrev')}
+            onClick={() => runSearch(true)}
+          >
+            <ChevronUp size={12} />
+          </button>
+          <button
+            type="button"
+            className="btn icon ghost"
+            title={t('paneSearchNext')}
+            aria-label={t('paneSearchNext')}
+            onClick={() => runSearch(false)}
+          >
+            <ChevronDown size={12} />
+          </button>
+          <button
+            type="button"
+            className="btn icon ghost"
+            title={t('paneSearchClose')}
+            aria-label={t('paneSearchClose')}
+            onClick={closeSearch}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
       {released && (
         <div className="pane-overlay">
           <span>{t('paneDetachedNote')}</span>

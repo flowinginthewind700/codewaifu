@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clipboardAction, type TermKeyEvent } from '../src/shared/termKeys'
+import { clipboardAction, searchAction, type TermKeyEvent } from '../src/shared/termKeys'
 
 const key = (over: Partial<TermKeyEvent> = {}): TermKeyEvent => ({
   type: 'keydown',
@@ -121,5 +121,51 @@ describe('clipboardAction', () => {
     expect(clipboardAction('darwin', key({ key: 'v', metaKey: true, type: 'keyup' }), false)).toBe(
       'ignore'
     )
+  })
+})
+
+describe('searchAction', () => {
+  it('leaves plain Ctrl+F with the shell', () => {
+    // readline forward-char, vim page-down, less next-page. Swallowing it would
+    // not throw anything - the cursor would simply stop moving right, which
+    // nobody diagnoses as a search shortcut.
+    for (const platform of ['linux', 'win32', 'darwin']) {
+      expect(searchAction(platform, key({ key: 'f', ctrlKey: true }))).toBe('ignore')
+    }
+    expect(searchAction('linux', key({ key: 'f' }))).toBe('ignore')
+    expect(searchAction('linux', key({ key: 'f', shiftKey: true }))).toBe('ignore')
+    // Cmd+F means nothing on Linux and Windows, and claiming it would eat an
+    // AltGr-ish combination on some layouts.
+    expect(searchAction('linux', key({ key: 'f', metaKey: true }))).toBe('ignore')
+    expect(searchAction('win32', key({ key: 'f', metaKey: true }))).toBe('ignore')
+  })
+
+  it('opens on Ctrl+Shift+F outside macOS', () => {
+    for (const platform of ['linux', 'win32']) {
+      expect(searchAction(platform, shifted('f', { ctrlKey: true }))).toBe('open')
+      // Some IME and layout paths report the unshifted letter with Shift down.
+      expect(searchAction(platform, key({ key: 'f', ctrlKey: true, shiftKey: true }))).toBe('open')
+    }
+  })
+
+  it('gives macOS Cmd+F and nothing else', () => {
+    expect(searchAction('darwin', key({ key: 'f', metaKey: true }))).toBe('open')
+    expect(searchAction('darwin', shifted('f', { metaKey: true }))).toBe('open')
+    // Ctrl+Cmd+F is the system fullscreen chord; it must not become a search.
+    expect(searchAction('darwin', key({ key: 'f', metaKey: true, ctrlKey: true }))).toBe('ignore')
+    // Ctrl+Shift+F is what a mac terminal program sees, so it stays with it.
+    expect(searchAction('darwin', shifted('f', { ctrlKey: true }))).toBe('ignore')
+  })
+
+  it('does not turn the search chord into a wildcard', () => {
+    for (const letter of 'acdeghijklmnopqrstuvwxyz'.split('')) {
+      expect(searchAction('linux', shifted(letter, { ctrlKey: true }))).toBe('ignore')
+      expect(searchAction('darwin', key({ key: letter, metaKey: true }))).toBe('ignore')
+    }
+  })
+
+  it('ignores everything that is not a keydown', () => {
+    expect(searchAction('linux', shifted('f', { ctrlKey: true, type: 'keyup' }))).toBe('ignore')
+    expect(searchAction('darwin', key({ key: 'f', metaKey: true, type: 'keypress' }))).toBe('ignore')
   })
 })

@@ -1,5 +1,5 @@
 /**
- * Terminal clipboard chords: pure decisions, no DOM.
+ * Terminal chords: pure decisions, no DOM.
  *
  * xterm offers every keystroke to `attachCustomKeyEventHandler` first, and the
  * return value is a claim: `false` means "I took this one, do not send it to
@@ -66,4 +66,27 @@ export function clipboardAction(
   if (key === 'c') return hasSelection ? 'copy' : 'ignore'
   if (key === 'v') return 'paste'
   return 'ignore'
+}
+
+/** What this keydown should do about the pane's scrollback search. */
+export type TermSearchAction = 'open' | 'ignore'
+
+/**
+ * Whether this keydown opens search.
+ *
+ * macOS gets Cmd+F, which reaches no terminal program. Everywhere else the
+ * chord has to be Ctrl+Shift+F, because plain Ctrl+F is a working key at a
+ * prompt: readline's forward-char, vim's page-down, less's next page. Claiming
+ * it is the same class of bug as claiming Ctrl+C, only quieter - nothing errors,
+ * the cursor just stops advancing one character and nobody can say why.
+ *
+ * Shift is not checked on the mac side for the reason given in
+ * `clipboardAction`: a Cmd chord never reaches the PTY, so there is no control
+ * character to protect by refusing the combination.
+ */
+export function searchAction(platform: string, event: TermKeyEvent): TermSearchAction {
+  if (event.type !== 'keydown') return 'ignore'
+  if (event.key.toLowerCase() !== 'f') return 'ignore'
+  if (platform === 'darwin') return event.metaKey && !event.ctrlKey ? 'open' : 'ignore'
+  return event.ctrlKey && event.shiftKey ? 'open' : 'ignore'
 }

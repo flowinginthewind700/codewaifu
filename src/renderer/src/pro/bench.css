@@ -1181,6 +1181,57 @@ textarea {
   overflow-y: auto !important;
 }
 
+/* Overlaid on the pane, never laid out inside it. A bar that took a row of
+   height would fire the ResizeObserver, which fits the terminal and sends the
+   new size to the PTY - so opening find would reflow the agent's whole screen
+   and repaint every pane it shares a window with. */
+.pane-search {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  background: var(--bench-panel);
+  border: 1px solid var(--bench-line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  color: var(--muted);
+}
+
+.pane-search input {
+  width: 168px;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+}
+
+.pane-search input::placeholder {
+  color: var(--faint);
+}
+
+/* Fixed floor so the bar's width does not jump between "no results", a
+   three-digit position and an empty counter mid-keystroke. */
+.pane-search-count {
+  min-width: 46px;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pane-search-count[data-none='true'] {
+  color: var(--danger);
+}
+
 .pane-overlay {
   position: absolute;
   inset: 0;
