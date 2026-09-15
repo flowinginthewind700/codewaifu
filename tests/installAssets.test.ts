@@ -11,6 +11,16 @@ const INSTALLER = fileURLToPath(new URL('../scripts/install.sh', import.meta.url
 /** Skip rather than fail where the runner has no POSIX shell (a bare Windows box). */
 const hasBash = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status === 0
 
+/**
+ * A Windows runner does have bash (Git Bash), but `uname -s` there answers
+ * MINGW64_NT-10.0-26100 and install.sh now refuses that on purpose: it places a
+ * .app or an AppImage, and Windows gets install.ps1. So the tests that drive the
+ * macOS/Linux install path skip there, while the guard itself is asserted on
+ * every platform by stubbing uname.
+ */
+const isWindows = process.platform === 'win32'
+const itPosix = isWindows ? it.skip : it
+
 function run(script: string, args: string[] = [], input = ''): { status: number | null; stdout: string } {
   const result = spawnSync('bash', ['-c', `. "$0"; ${script}`, LIB, ...args], { input, encoding: 'utf8' })
   return { status: result.status, stdout: String(result.stdout ?? '').trim() }
@@ -30,7 +40,8 @@ function source(path: string): string {
  * public release (exit 22), inside a throwaway HOME so nothing real is touched.
  */
 function runInstallerOffline(
-  args: string[] = []
+  args: string[] = [],
+  fakeUname?: string
 ): { status: number | null; stderr: string; root: string } {
   const sandbox = mkdtempSync(join(tmpdir(), 'cw-install-'))
   const stubDir = join(sandbox, 'stub')
@@ -38,6 +49,16 @@ function runInstallerOffline(
   const stub = join(stubDir, 'curl')
   writeFileSync(stub, '#!/bin/sh\nexit 22\n')
   chmodSync(stub, 0o755)
+  if (fakeUname) {
+    // install.sh asks uname for exactly two things, so answering both lets a test
+    // be any platform without needing a runner that is that platform.
+    const uname = join(stubDir, 'uname')
+    writeFileSync(
+      uname,
+      `#!/bin/sh\ncase "$1" in\n  -m) echo x86_64 ;;\n  *) echo ${fakeUname} ;;\nesac\n`
+    )
+    chmodSync(uname, 0o755)
+  }
   const root = join(sandbox, 'share/CodeWaifu')
   const result = spawnSync('bash', [INSTALLER, ...args], {
     encoding: 'utf8',
@@ -244,7 +265,20 @@ describe.skipIf(!hasBash)('install.sh', () => {
     }
   })
 
-  it('explains a repo with no public release instead of dying on a raw curl 404', () => {
+  it('sends a Git Bash user to install.ps1 instead of reporting an unknown uname', () => {
+    // What a Windows user sees after pasting the macOS/Linux one-liner into Git
+    // Bash. The guard must fire before anything is downloaded or written, and it
+    // must name the installer that does work -- "unsupported platform:
+    // MINGW64_NT-10.0-26100" is what this replaced.
+    const { status, stderr, root } = runInstallerOffline([], 'MINGW64_NT-10.0-26100')
+    expect(status).toBe(1)
+    expect(stderr).toContain('install.ps1')
+    expect(stderr).toContain('PowerShell')
+    expect(stderr).not.toContain('unsupported platform')
+    expect(existsSync(root)).toBe(false)
+  })
+
+  itPosix('explains a repo with no public release instead of dying on a raw curl 404', () => {
     // `set -euo pipefail` used to win the race: a failing curl inside the tag
     // lookup aborted the installer with `curl: (22) ... 404` and nothing else,
     // which reads like a broken network rather than "there is no release yet".
@@ -257,7 +291,7 @@ describe.skipIf(!hasBash)('install.sh', () => {
     expect(existsSync(root)).toBe(false)
   })
 
-  it('reports a pinned tag it cannot read, rather than an empty asset list', () => {
+  itPosix('reports a pinned tag it cannot read, rather than an empty asset list', () => {
     const { status, stderr } = runInstallerOffline(['--version', 'v9.9.9'])
     expect(status).toBe(1)
     // Linux resolves a pinned tag through the release asset list, macOS spells

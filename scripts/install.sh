@@ -72,6 +72,17 @@ die_no_tag() {
 }
 
 OS="$(uname -s)"
+# Git Bash, MSYS2 and Cygwin all answer `uname -s` with MINGW64_NT-10.0-26100 /
+# MSYS_NT-* / CYGWIN_NT-*. This script places a .app or an AppImage, neither of
+# which is a Windows app, so say so here -- at the top, with the command that
+# does work -- instead of letting the platform switch below report
+# "unsupported platform: MINGW64_NT-10.0-26100" after a download has started.
+case "$OS" in
+  MINGW*|MSYS*|CYGWIN*)
+    die "install.sh is for macOS and Linux. On Windows, open PowerShell and run:
+  irm https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 | iex"
+    ;;
+esac
 ARCH="$(uname -m)"
 case "$ARCH" in
   arm64|aarch64) ARCH=arm64 ;;

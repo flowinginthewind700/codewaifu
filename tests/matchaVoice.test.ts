@@ -23,6 +23,11 @@ import {
 // catch an ABI drift.
 // ============================================================
 
+const isWindows = process.platform === 'win32'
+
+/** Candidate paths are joined with the platform separator; compare one spelling. */
+const toPosix = (p: string): string => p.split(/[\\/]/).join('/')
+
 describe('library resolution', () => {
   it('names the C API library per platform', () => {
     expect(libraryName('darwin')).toBe('libsherpa-onnx-c-api.dylib')
@@ -50,15 +55,19 @@ describe('library resolution', () => {
   })
 
   it('probes the bundled node_modules and the cwd, deduplicated', () => {
-    const here = path.join('/fake/out/main')
+    // On Windows a leading-slash path is drive-relative, so path.resolve() would
+    // splice in the cwd's drive letter (D:\fake\...) and the two sides would
+    // disagree about a path the production code never actually sees.
+    const fakeRoot = isWindows ? 'C:\\fake' : '/fake'
+    const here = path.join(fakeRoot, 'out', 'main')
     const roots = moduleRoots(here)
-    expect(roots[0]).toBe(path.join('/fake/node_modules'))
+    expect(roots[0]).toBe(path.join(fakeRoot, 'node_modules'))
     expect(new Set(roots).size).toBe(roots.length)
   })
 
   it('builds one candidate per module root', () => {
     const roots = ['/a/node_modules', '/b/node_modules']
-    expect(libraryCandidates('darwin', 'arm64', roots)).toEqual([
+    expect(libraryCandidates('darwin', 'arm64', roots).map(toPosix)).toEqual([
       '/a/node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib',
       '/b/node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib'
     ])
