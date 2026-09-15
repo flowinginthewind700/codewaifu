@@ -1999,6 +1999,101 @@ button.plan-title:focus-visible {
 }
 
 /* ==========================================================================
+   Fault card
+
+   `FaultBoundary` renders this in place of the whole bench, so it is not a grid
+   child of `.bench` and gets none of its areas. Two rules: it fills the window
+   (an error floating in the corner of an otherwise empty frame reads as a
+   tooltip, not as the app being down), and every row wraps - the message and the
+   frames are the only strings in this app whose length we do not control at all.
+   ========================================================================== */
+
+.fault {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 28px 32px;
+  overflow: auto;
+  background: var(--bench-bg);
+  color: var(--text);
+}
+
+.fault-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fault-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fault-kind {
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 107, 129, 0.4);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 107, 129, 0.12);
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+}
+
+.fault-body {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+}
+
+.fault-message {
+  margin: 0;
+  max-width: 76ch;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.fault-stack {
+  margin: 0;
+  max-width: 100%;
+  max-height: 140px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--bench-line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bench-term);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.fault-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.fault-failed {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-small);
+}
+
+/* ==========================================================================
    Narrow windows
 
    The bench has a 760px minimum, but a 900px window is a real case (half a

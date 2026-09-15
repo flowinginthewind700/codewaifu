@@ -1,7 +1,7 @@
 /**
  * The Bench's entry point (F1).
  *
- * Two deliberate differences from the widget's `main.tsx`:
+ * Three deliberate differences from the widget's `main.tsx`:
  *
  * 1. No `StrictMode`. Strict mode mounts, unmounts and remounts every component
  *    in development, which is a feature for pure React and a bug for anything
@@ -12,13 +12,24 @@
  * 2. xterm's stylesheet is imported before `bench.css`. Both define `.xterm`
  *    rules, and ours are the corrections (opaque background, our font stack),
  *    so ours must come last to win without `!important`.
+ * 3. The tree is wrapped in `FaultBoundary`. The widget can survive a blank
+ *    frame - it is a floating avatar, and a crash there is visible as an absence
+ *    on the desktop. The bench is the only view of what twenty agents are doing,
+ *    where "the window went empty" is indistinguishable from "herdr died" and
+ *    both look like the work is lost. Two renderer crashes shipped that way
+ *    before the card existed; see `FaultBoundary.tsx`.
  */
 import { createRoot } from 'react-dom/client'
 import '@xterm/xterm/css/xterm.css'
 import './bench.css'
 import { Bench } from './Bench'
+import { FaultBoundary } from './FaultBoundary'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from pro.html')
 
-createRoot(container).render(<Bench />)
+createRoot(container).render(
+  <FaultBoundary>
+    <Bench />
+  </FaultBoundary>
+)

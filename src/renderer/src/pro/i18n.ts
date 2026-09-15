@@ -37,6 +37,34 @@ const STRINGS = {
    */
   taskGone: { zh: '这个任务已经结束了。', en: 'That task is gone.' },
 
+  /* ------------------------------------------------------- fault card */
+  /**
+   * Rendered by `FaultBoundary` when the bench itself threw. The copy leads with
+   * the fact that decides whether this is a catastrophe: herdr owns the PTYs, so
+   * a dead renderer has killed nobody and reloading is safe.
+   */
+  faultTitle: { zh: '工作台界面出错了', en: 'The bench UI hit an error' },
+  faultBody: {
+    zh: '崩的只是界面这一层 —— 你的代理还在 herdr 里跑着。重载之后任务树和账本会从磁盘和 herdr 重新推导回来。',
+    en: 'Only the UI layer crashed - your agents are still running in herdr. After a reload the tree and the ledger are re-derived from disk and from herdr.'
+  },
+  /**
+   * An error with no readable message. The kind chip is still on the card, so
+   * this is not a dead end - and the same string is what "Copy details" puts
+   * after the colon, which is why it reads as a sentence rather than a fragment.
+   */
+  faultUnknown: {
+    zh: '这个错误没有留下可读的信息。',
+    en: 'The error left no readable message.'
+  },
+  faultReload: { zh: '重载工作台', en: 'Reload the bench' },
+  faultCopy: { zh: '复制详情', en: 'Copy details' },
+  faultCopied: { zh: '已复制', en: 'Copied' },
+  faultCopyFailed: {
+    zh: '复制失败（窗口没焦点时会这样）—— 请截图这张卡片。',
+    en: 'Copy failed (this happens when the window is unfocused) - screenshot this card instead.'
+  },
+
   /* ---------------------------------------------------------- herdr */
   herdrOnline: { zh: 'herdr {version}', en: 'herdr {version}' },
   herdrOffline: { zh: 'herdr 未连接', en: 'herdr offline' },
