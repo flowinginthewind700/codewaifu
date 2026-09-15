@@ -326,6 +326,9 @@ async function boot(): Promise<void> {
   const service = new ProService({ host: proHost(instance) })
   pro = service
   registerProIpc(service)
+  // One authority, three surfaces: the bench window, the widget and `/pro/*`
+  // all read and act through this same object.
+  instance.setProApi(service)
   instance.setEventClaim((event) => {
     // Claimed only when the Bench will actually say something about it: an
     // event Pro merely logged must still reach her voice and her bubble.
@@ -492,6 +495,7 @@ async function main(): Promise<void> {
     // "approve" for a pane that is already gone is a lie with a click target.
     pro?.shutdown()
     pro = null
+    core?.setProApi(null)
     bench?.destroy()
     bench = null
     core?.shutdown()

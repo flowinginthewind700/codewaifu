@@ -33,7 +33,7 @@ import { log } from './log'
 import { getMediaState, sendMediaCommand } from './media'
 import * as neuralTts from './neuralTts'
 import { isCodeWaifuPort } from './probe'
-import { HookServer, type BindFailure, type StartResult } from './server'
+import { HookServer, type BindFailure, type ProApi, type StartResult } from './server'
 import { readConfig, writeConfig } from './store'
 import { steer as steerThread } from './steer'
 import { ThreadTracker } from './threads'
@@ -84,6 +84,7 @@ export class Core {
   private readonly neuralListeners = new Set<NeuralListener>()
   private readonly configListeners = new Set<ConfigListener>()
   private eventClaim: EventClaim | null = null
+  private proApi: ProApi | null = null
   private speaking = false
   private queueLength = 0
   private started = false
@@ -114,7 +115,8 @@ export class Core {
       listThreads: () => this.tracker.list(),
       steer: (agent, threadId, message) => steerThread(agent, threadId, message),
       mediaState: () => getMediaState(),
-      mediaCommand: (command) => sendMediaCommand(command)
+      mediaCommand: (command) => sendMediaCommand(command),
+      pro: () => this.proApi
     })
   }
 
@@ -151,6 +153,15 @@ export class Core {
   /** Hand the hook event path to another owner (Pro). `null` takes it back. */
   setEventClaim(claim: EventClaim | null): void {
     this.eventClaim = claim
+  }
+
+  /**
+   * Hand the relay the bench's control surface, so `/pro/*` and the window are
+   * served by one `ProService` (F6). `null` takes it back and those routes
+   * answer 503, which is the truth while Pro is off.
+   */
+  setProApi(api: ProApi | null): void {
+    this.proApi = api
   }
 
   recentEvents(limit = 60): HookEvent[] {

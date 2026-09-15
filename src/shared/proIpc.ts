@@ -20,6 +20,7 @@ import {
   DEFAULT_SNOOZE_MINUTES,
   taskStatusOf,
   type AttentionAction,
+  type AttentionItem,
   type AttentionKind,
   type LedgerKind,
   type StateCounts,
@@ -130,6 +131,7 @@ export type ProRejectCode =
   | 'bad-kind'
   | 'needs-text'
   | 'needs-workdir'
+  | 'no-item'
 
 export interface ProReject {
   ok: false
@@ -139,6 +141,16 @@ export interface ProReject {
 
 function reject(code: ProRejectCode, error: string): ProReject {
   return { ok: false, code, error }
+}
+
+/**
+ * The one guard that tells a parsed request from a rejection. It lives here
+ * rather than in each transport because IPC, HTTP and the companion bridge all
+ * branch on it, and three copies of a two-line predicate is three chances to
+ * let a rejected payload through to the service.
+ */
+export function isProReject(value: unknown): value is ProReject {
+  return Boolean(value) && typeof value === 'object' && (value as { ok?: unknown }).ok === false
 }
 
 /* ------------------------------------------------------------------ *
@@ -172,6 +184,68 @@ export function parseProAction(payload: unknown): ProActionParse {
     origin: originOf(raw.origin),
     minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240)
   }
+}
+
+/**
+ * `POST /pro/answer`, the one route whose caller is not looking at the queue.
+ *
+ * A script or another agent knows a *task* and some text; the bench acts on an
+ * *item id*. Resolving between them is a pure function of the ranked queue, so
+ * an HTTP caller, a bubble click and a test cannot disagree about which prompt
+ * an answer lands on:
+ *
+ * - an explicit `itemId` always wins, and is the only way to hit a snoozed item;
+ * - otherwise the first unresolved item of `taskId`, in queue order, which is
+ *   already ordered by how long the agent has been blocked;
+ * - `paneId` and `kind` narrow that match, and narrowing is strict: if the pane
+ *   the caller named has no open item we answer nothing rather than sending text
+ *   to a different prompt. Guessing here types into an agent's terminal.
+ *
+ * `origin` is pinned to `api` and is not read from the payload. The ledger
+ * records who made a decision, and an HTTP caller is not the bench window no
+ * matter what it claims.
+ */
+export function parseProAnswer(
+  payload: unknown,
+  attention: readonly AttentionItem[]
+): ProActionParse {
+  const raw = record(payload)
+  const action = actionOf(raw.action) || 'answer'
+  const text = str(raw.text ?? raw.answer, 4000).trim()
+  if (action === 'answer' && !text) return reject('needs-text', 'an answer needs text')
+  const itemId = str(raw.itemId, 200).trim() || matchAttentionItem(raw, attention)
+  if (!itemId) {
+    const taskId = taskIdOf(raw.taskId ?? raw.task)
+    return reject(
+      'no-item',
+      taskId ? `no open attention item for task ${taskId}` : 'itemId or taskId is required'
+    )
+  }
+  return {
+    itemId,
+    action,
+    text,
+    origin: 'api',
+    minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240)
+  }
+}
+
+function matchAttentionItem(
+  raw: Record<string, unknown>,
+  attention: readonly AttentionItem[]
+): string {
+  const taskId = taskIdOf(raw.taskId ?? raw.task)
+  if (!taskId) return ''
+  const paneId = paneIdOf(raw.paneId)
+  const kind = attentionKindOf(raw.kind)
+  const open = attention.filter(
+    (item) =>
+      item.taskId === taskId &&
+      !item.resolved &&
+      (!paneId || item.paneId === paneId) &&
+      (!kind || item.kind === kind)
+  )
+  return open[0]?.id ?? ''
 }
 
 /* ------------------------------------------------------------------ *

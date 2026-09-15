@@ -21,13 +21,14 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipcChannels'
 import {
   failResult,
+  isProReject,
   okResult,
   parseProAction,
   type ProReject,
   type ProResult
 } from '../../shared/proIpc'
 import { log } from '../log'
-import { proParsers, rejected, type ProService } from './service'
+import { proParsers, type ProService } from './service'
 
 /** Code for "our fault, not yours": an unexpected throw inside a handler. */
 const INTERNAL = 'internal'
@@ -59,7 +60,7 @@ export function registerProIpc(pro: ProService): void {
     ) =>
     (payload: unknown): Promise<ProResult> => {
       const request = parse(payload)
-      if (rejected(request)) return Promise.resolve(failResult(request.code, request.error))
+      if (isProReject(request)) return Promise.resolve(failResult(request.code, request.error))
       return Promise.resolve(op(request))
     }
 

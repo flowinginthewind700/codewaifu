@@ -6,6 +6,17 @@ import { detectLang, toSpeakable } from '../shared/lang'
 import type { AppConfig } from '../shared/config'
 import type { Agent, HookEvent, RuntimeState, SteerResult, ThreadInfo } from '../shared/protocol'
 import type { MediaCommand, MediaState } from '../shared/media'
+import { emptyCounts, type BenchView } from '../shared/pro'
+import {
+  isProReject,
+  parseProAnswer,
+  parseProLedger,
+  parseProTask,
+  type ProActionRequest,
+  type ProLedgerRequest,
+  type ProResult,
+  type ProTaskRequest
+} from '../shared/proIpc'
 import {
   bindFailureHint,
   classifyBindError,
@@ -22,6 +33,23 @@ import { platform } from './env'
 const MAX_BODY = 256 * 1024
 const MEDIA_COMMANDS = new Set<MediaCommand>(['toggle', 'play', 'pause', 'next', 'previous'])
 
+/**
+ * The slice of the bench the relay needs (F6), declared here instead of imported
+ * from `main/pro/service`: `ProService` satisfies it structurally, so the server
+ * can be tested against a fake and never learns how the bench works.
+ *
+ * Deliberately narrow: there is no `paneOp`, so a script can drive tasks, intent
+ * and attention decisions but can never become a second keyboard for a terminal
+ * (MVP section 9).
+ */
+export interface ProApi {
+  online(): boolean
+  view(): BenchView | null
+  act(request: ProActionRequest): Promise<ProResult>
+  taskOp(request: ProTaskRequest): Promise<ProResult>
+  ledgerOp(request: ProLedgerRequest): ProResult
+}
+
 export interface ServerDeps {
   getConfig: () => AppConfig
   setConfig: (patch: unknown) => Promise<AppConfig> | AppConfig
@@ -33,6 +61,8 @@ export interface ServerDeps {
   steer: (agent: Agent, threadId: string, message: string) => Promise<SteerResult>
   mediaState: () => Promise<MediaState>
   mediaCommand: (command: MediaCommand) => Promise<MediaState>
+  /** Absent or `null` while Pro is off; `/pro/*` then answers 503. */
+  pro?: () => ProApi | null
 }
 
 export interface StartResult {
@@ -348,8 +378,135 @@ export class HookServer {
       return
     }
 
+    if (route === 'pro') {
+      await this.handlePro(req, res, parts, method, url.pathname)
+      return
+    }
+
     sendJson(res, 404, { ok: false, error: `no route for ${method} ${url.pathname}` })
   }
+
+  /**
+   * F6, the bench as an API. Five routes and no policy: each one validates with
+   * the same parser the IPC channels use and hands the typed request to the same
+   * `ProService` the window talks to, so a script and a click cannot disagree
+   * about what is legal, or about what needs the human.
+   *
+   * All of it sits behind the token check in `handle()`, like every other
+   * mutating route.
+   */
+  private async handlePro(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    parts: string[],
+    method: string,
+    pathname: string
+  ): Promise<void> {
+    const sub = parts[1] || ''
+    const pro = this.deps.pro?.() ?? null
+    if (!pro) {
+      // Not "broken" and not "forbidden": the bench exists and is off. A script
+      // can poll this and learn to wait rather than to give up.
+      sendJson(res, 503, { ok: false, code: 'not-running', error: 'the bench is not running' })
+      return
+    }
+
+    if (method === 'GET' && sub === 'state') {
+      const view = pro.view()
+      sendJson(res, 200, { ok: true, online: pro.online(), running: view !== null, view })
+      return
+    }
+
+    if (method === 'GET' && sub === 'attention') {
+      // The queue on its own, for a caller that only asks "what needs me": no
+      // groups, no panes, no recovery plans.
+      const view = pro.view()
+      sendJson(res, 200, {
+        ok: true,
+        online: pro.online(),
+        counts: view?.counts ?? emptyCounts(),
+        attention: view?.attention ?? []
+      })
+      return
+    }
+
+    if (method !== 'POST') {
+      sendJson(res, 404, { ok: false, error: `no route for ${method} ${pathname}` })
+      return
+    }
+
+    const body = await readBody(req)
+
+    if (sub === 'answer') {
+      const request = parseProAnswer(body, pro.view()?.attention ?? [])
+      if (isProReject(request)) {
+        sendJson(res, 400, { ok: false, code: request.code, error: request.error })
+        return
+      }
+      const result = await pro.act(request)
+      sendJson(res, proStatus(result), result)
+      return
+    }
+
+    if (sub === 'tasks') {
+      const request = parseProTask(body)
+      if (isProReject(request)) {
+        sendJson(res, 400, { ok: false, code: request.code, error: request.error })
+        return
+      }
+      const result = await pro.taskOp(request)
+      sendJson(res, proStatus(result), result)
+      return
+    }
+
+    if (sub === 'ledger') {
+      // The task id belongs in the path (`/pro/ledger/<taskId>`) because that is
+      // how the contract is worded, and in the body because a script that
+      // already built a JSON blob should not have to split it. The path wins.
+      const taskId = parts[2] || ''
+      const request = parseProLedger({
+        ...body,
+        ...(taskId ? { taskId } : {}),
+        // Provenance is not the caller's to claim. Whatever wrote this arrived
+        // over HTTP, and the ledger is the audit trail.
+        origin: 'api'
+      })
+      if (isProReject(request)) {
+        sendJson(res, 400, { ok: false, code: request.code, error: request.error })
+        return
+      }
+      const result = pro.ledgerOp(request)
+      sendJson(res, proStatus(result), result)
+      return
+    }
+
+    sendJson(res, 404, { ok: false, error: `no route for ${method} ${pathname}` })
+  }
+}
+
+/**
+ * HTTP shape of a `ProResult`. Four classes, because a script has to tell "you
+ * asked about something that is not there" from "we are in no state to do this"
+ * without parsing prose: 400 your payload, 404 your target, 503 the bench or
+ * herdr is absent, 500 our own disk failed. Everything else is 409 - understood
+ * and refused - which is also what `/steer` already answers.
+ */
+const PRO_STATUS: Record<string, number> = {
+  'not-running': 503,
+  offline: 503,
+  'no-herdr-binary': 503,
+  'no-item': 404,
+  'no-task': 404,
+  'bad-payload': 400,
+  'bad-task': 400,
+  'unknown-action': 400,
+  'no-dir': 400,
+  'write-failed': 500,
+  internal: 500
+}
+
+function proStatus(result: ProResult): number {
+  return result.ok ? 200 : (PRO_STATUS[result.code] ?? 409)
 }
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {

@@ -3,7 +3,7 @@ import http from 'node:http'
 import { parseConfig, type AppConfig } from '../../src/shared/config'
 import { EMPTY_MEDIA, type MediaState } from '../../src/shared/media'
 import type { HookEvent, RuntimeState, SteerResult, ThreadInfo } from '../../src/shared/protocol'
-import { HookServer, type ServerDeps } from '../../src/main/server'
+import { HookServer, type ProApi, type ServerDeps } from '../../src/main/server'
 
 export interface Recorded {
   events: HookEvent[]
@@ -26,8 +26,16 @@ export interface TestRelay {
   shutdown(): Promise<void>
 }
 
-/** A relay wired to in-memory stubs, so tests exercise the real HTTP routes. */
-export function createTestRelay(patch?: Partial<AppConfig>): TestRelay {
+/**
+ * A relay wired to in-memory stubs, so tests exercise the real HTTP routes.
+ *
+ * `pro` defaults to "the bench is off" (`null`), which is what `/pro/*` answers
+ * 503 for; pass a fake from `tests/helpers/pro.ts` to exercise those routes.
+ */
+export function createTestRelay(
+  patch?: Partial<AppConfig>,
+  pro: () => ProApi | null = () => null
+): TestRelay {
   const config = parseConfig({ token: 'test-token-0123456789abcdef', ...patch })
   const recorded: Recorded = { events: [], said: [], shown: 0, patches: [], steers: [], mediaCommands: [] }
 
@@ -79,7 +87,8 @@ export function createTestRelay(patch?: Partial<AppConfig>): TestRelay {
     mediaCommand: async (command) => {
       recorded.mediaCommands.push(command)
       return EMPTY_MEDIA
-    }
+    },
+    pro
   }
 
   const server = new HookServer(deps)

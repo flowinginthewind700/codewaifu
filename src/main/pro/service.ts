@@ -79,7 +79,6 @@ import {
   type ProNoticePush,
   type ProPaneRequest,
   type ProRecoveryRequest,
-  type ProReject,
   type ProResult,
   type ProTaskRequest
 } from '../../shared/proIpc'
@@ -2277,11 +2276,6 @@ function signatureOf(view: BenchView): string {
     view.companion.visible ? 1 : 0,
     view.companion.notices
   ].join('#')
-}
-
-/** Narrow a parse result without repeating the `ok` check at every call site. */
-export function rejected(value: unknown): value is ProReject {
-  return Boolean(value) && typeof value === 'object' && (value as { ok?: unknown }).ok === false
 }
 
 /**

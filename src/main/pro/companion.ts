@@ -43,12 +43,12 @@ import {
 } from '../../shared/pro'
 import {
   failResult,
+  isProReject,
   okResult,
   parseBenchCommand,
   parseProCompanion,
   type ProActionRequest,
   type ProCompanionPush,
-  type ProReject,
   type ProResult
 } from '../../shared/proIpc'
 
@@ -340,7 +340,7 @@ export class CompanionBridge {
    */
   async command(payload: unknown): Promise<ProResult> {
     const parsed = parseBenchCommand(payload)
-    if (rejected(parsed)) return failResult(parsed.code, parsed.error)
+    if (isProReject(parsed)) return failResult(parsed.code, parsed.error)
     return this.dispatch(resolveCommand(parsed, this.api.view()))
   }
 
@@ -380,7 +380,7 @@ export class CompanionBridge {
   /** Bench -> widget: summon, dismiss, toggle, or say a line through her. */
   companionCommand(payload: unknown): ProResult {
     const parsed = parseProCompanion(payload)
-    if (rejected(parsed)) return failResult(parsed.code, parsed.error)
+    if (isProReject(parsed)) return failResult(parsed.code, parsed.error)
     switch (parsed.op) {
       case 'summon':
         this.deps.setWidget(true)
@@ -404,9 +404,4 @@ export class CompanionBridge {
       }
     }
   }
-}
-
-/** Narrow a parse result without repeating the `ok` check at every call site. */
-function rejected(value: unknown): value is ProReject {
-  return Boolean(value) && typeof value === 'object' && (value as { ok?: unknown }).ok === false
 }

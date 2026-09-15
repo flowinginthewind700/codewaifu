@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { portAttempts } from '../src/shared/portPolicy'
+import { failResult } from '../src/shared/proIpc'
 import { createTestRelay, occupyPort, type TestRelay } from './helpers/relay'
+import { attentionItem, benchView, fakePro, type FakePro } from './helpers/pro'
 
 const TOKEN = 'test-token-0123456789abcdef'
 let relays: TestRelay[] = []
 
-async function startRelay(patch?: Parameters<typeof createTestRelay>[0]): Promise<TestRelay> {
-  const relay = createTestRelay(patch)
+async function startRelay(
+  patch?: Parameters<typeof createTestRelay>[0],
+  pro?: Parameters<typeof createTestRelay>[1]
+): Promise<TestRelay> {
+  const relay = createTestRelay(patch, pro)
   await relay.server.start(portAttempts({ pinned: 0, sticky: relay.config.port }))
   relays.push(relay)
   return relay
@@ -179,5 +184,248 @@ describe('port conflicts', () => {
     const second = await relay.server.start(portAttempts({ pinned: first, sticky: 0 }))
     expect(second.port).toBe(first)
     expect(second.failures).toHaveLength(0)
+  })
+})
+
+describe('pro api (F6)', () => {
+  /** A relay with a bench behind it, plus the fake so a test can poke it. */
+  async function startPro(
+    view: ReturnType<typeof benchView> | null = benchView()
+  ): Promise<{ relay: TestRelay; pro: FakePro }> {
+    const pro = fakePro({ view })
+    return { relay: await startRelay(undefined, () => pro.api), pro }
+  }
+
+  it('answers 503 on every route while the bench is off', async () => {
+    const relay = await startRelay()
+    for (const path of ['/pro/state', '/pro/attention']) {
+      const res = await relay.get(path, TOKEN)
+      expect(res.status, path).toBe(503)
+      expect(res.json, path).toMatchObject({ ok: false, code: 'not-running' })
+    }
+    expect((await relay.post('/pro/answer', { taskId: 't1', text: 'yes' }, TOKEN)).status).toBe(503)
+    expect((await relay.post('/pro/tasks', { op: 'adopt' }, TOKEN)).status).toBe(503)
+    expect((await relay.post('/pro/ledger/t1', { kind: 'note', text: 'x' }, TOKEN)).status).toBe(503)
+  })
+
+  it('keeps the bench behind the token like every other mutating route', async () => {
+    const { relay } = await startPro()
+    expect((await relay.get('/pro/state')).status).toBe(401)
+    expect((await relay.get('/pro/state', 'wrong')).status).toBe(401)
+    expect((await relay.post('/pro/answer', { taskId: 't1', text: 'yes' })).status).toBe(401)
+  })
+
+  it('serves the whole projection on /pro/state', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem()] }))
+    const res = await relay.get('/pro/state', TOKEN)
+    expect(res.status).toBe(200)
+    const body = res.json as {
+      ok: boolean
+      online: boolean
+      running: boolean
+      view: { attention: unknown[] }
+    }
+    expect(body).toMatchObject({ ok: true, online: true, running: true })
+    expect(body.view.attention).toHaveLength(1)
+    // Herdr going away is a state, not an error: the window keeps rendering.
+    pro.setOnline(false)
+    expect((await relay.get('/pro/state', TOKEN)).json).toMatchObject({ online: false, running: true })
+  })
+
+  it('reports a stopped bench as running:false instead of failing the request', async () => {
+    const { relay } = await startPro(null)
+    const res = await relay.get('/pro/state', TOKEN)
+    expect(res.status).toBe(200)
+    expect(res.json).toMatchObject({ ok: true, running: false, view: null })
+  })
+
+  it('serves just the queue on /pro/attention, in the order the bench ranks it', async () => {
+    const view = benchView({
+      attention: [attentionItem({ taskId: 't1' }), attentionItem({ taskId: 't2', kind: 'question' })]
+    })
+    const { relay } = await startPro(view)
+    const res = await relay.get('/pro/attention', TOKEN)
+    expect(res.status).toBe(200)
+    const body = res.json as { attention: Array<{ id: string }>; counts: Record<string, number> }
+    expect(body.attention.map((item) => item.id)).toEqual(['t1:permission:hook', 't2:question:hook'])
+    expect(body.counts).toBeDefined()
+  })
+
+  it('resolves an answer to the first open item of that task', async () => {
+    const view = benchView({
+      attention: [
+        attentionItem({ taskId: 't1', kind: 'review' }),
+        attentionItem({ taskId: 't1', kind: 'permission' }),
+        attentionItem({ taskId: 't2' })
+      ]
+    })
+    const { relay, pro } = await startPro(view)
+    const res = await relay.post('/pro/answer', { taskId: 't1', text: 'yes, and keep going' }, TOKEN)
+    expect(res.status).toBe(200)
+    expect(pro.recorded.actions).toEqual([
+      {
+        itemId: 't1:review:hook',
+        action: 'answer',
+        text: 'yes, and keep going',
+        origin: 'api',
+        minutes: 10
+      }
+    ])
+  })
+
+  it('skips an item the human already acted on', async () => {
+    const view = benchView({
+      attention: [
+        attentionItem({ taskId: 't1', resolved: true }),
+        attentionItem({ taskId: 't1', kind: 'question' })
+      ]
+    })
+    const { relay, pro } = await startPro(view)
+    await relay.post('/pro/answer', { taskId: 't1', text: 'go on' }, TOKEN)
+    expect(pro.recorded.actions[0].itemId).toBe('t1:question:hook')
+  })
+
+  it('narrows by pane, and refuses rather than answering a different prompt', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem({ taskId: 't1' })] }))
+    const hit = await relay.post('/pro/answer', { taskId: 't1', paneId: 'pane-1', text: 'go' }, TOKEN)
+    expect(hit.status).toBe(200)
+    const miss = await relay.post('/pro/answer', { taskId: 't1', paneId: 'pane-9', text: 'go' }, TOKEN)
+    expect(miss.status).toBe(400)
+    expect(miss.json).toMatchObject({ ok: false, code: 'no-item' })
+    // The refused call must not have typed anything anywhere.
+    expect(pro.recorded.actions).toHaveLength(1)
+  })
+
+  it('carries the other verbs, so one agent can unblock another', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem({ taskId: 't7' })] }))
+    const res = await relay.post('/pro/answer', { taskId: 't7', action: 'approve' }, TOKEN)
+    expect(res.status).toBe(200)
+    expect(pro.recorded.actions[0]).toMatchObject({ action: 'approve', text: '', origin: 'api' })
+  })
+
+  it('takes an explicit itemId and pins origin to api, whatever the caller claims', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem({ taskId: 't1' })] }))
+    await relay.post(
+      '/pro/answer',
+      { itemId: 't1:permission:hook', action: 'deny', origin: 'bench' },
+      TOKEN
+    )
+    expect(pro.recorded.actions[0]).toMatchObject({ itemId: 't1:permission:hook', origin: 'api' })
+  })
+
+  it('rejects an answer with no text, an unknown task, and no target at all', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem({ taskId: 't1' })] }))
+    const noText = await relay.post('/pro/answer', { taskId: 't1' }, TOKEN)
+    expect(noText.status).toBe(400)
+    expect(noText.json).toMatchObject({ code: 'needs-text' })
+    const noTask = await relay.post('/pro/answer', { taskId: 'nope', text: 'hi' }, TOKEN)
+    expect(noTask.status).toBe(400)
+    expect(noTask.json).toMatchObject({ code: 'no-item' })
+    expect((await relay.post('/pro/answer', { text: 'hi' }, TOKEN)).status).toBe(400)
+    expect(pro.recorded.actions).toHaveLength(0)
+  })
+
+  it('maps a service failure onto a status a script can branch on', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem({ taskId: 't1' })] }))
+    const cases: Array<[string, number]> = [
+      ['offline', 503],
+      ['not-running', 503],
+      ['no-item', 404],
+      ['no-recipe', 409],
+      ['write-failed', 500]
+    ]
+    for (const [code, status] of cases) {
+      pro.setResult(failResult(code, 'nope'))
+      const res = await relay.post('/pro/answer', { taskId: 't1', action: 'approve' }, TOKEN)
+      expect(res.status, code).toBe(status)
+      expect(res.json, code).toMatchObject({ ok: false, code })
+    }
+  })
+
+  it('creates a task through the same parser the bench window uses', async () => {
+    const { relay, pro } = await startPro()
+    const res = await relay.post(
+      '/pro/tasks',
+      { op: 'create', title: 'wire the api', workdir: '/tmp/repo', start: false },
+      TOKEN
+    )
+    expect(res.status).toBe(200)
+    expect(pro.recorded.tasks).toEqual([
+      {
+        op: 'create',
+        title: 'wire the api',
+        goal: '',
+        workdir: '/tmp/repo',
+        branch: '',
+        base: '',
+        worktree: false,
+        agent: '',
+        start: false,
+        prompt: ''
+      }
+    ])
+  })
+
+  it('400s a task op nobody implements, and a create with no workdir', async () => {
+    const { relay, pro } = await startPro()
+    expect((await relay.post('/pro/tasks', { op: 'launch' }, TOKEN)).status).toBe(400)
+    const noDir = await relay.post('/pro/tasks', { op: 'create', title: 'x' }, TOKEN)
+    expect(noDir.status).toBe(400)
+    expect(noDir.json).toMatchObject({ code: 'needs-workdir' })
+    expect(pro.recorded.tasks).toHaveLength(0)
+  })
+
+  it('appends to the ledger named in the path, stamped as an api writer', async () => {
+    const { relay, pro } = await startPro()
+    const res = await relay.post(
+      '/pro/ledger/t9',
+      { kind: 'decision', text: 'use the socket path discovery found', origin: 'bench' },
+      TOKEN
+    )
+    expect(res.status).toBe(200)
+    expect(pro.recorded.ledger).toEqual([
+      {
+        op: 'append',
+        taskId: 't9',
+        kind: 'decision',
+        text: 'use the socket path discovery found',
+        agent: '',
+        sessionKind: '',
+        sessionValue: '',
+        gitHead: '',
+        branch: '',
+        dirty: 0,
+        origin: 'api'
+      }
+    ])
+  })
+
+  it('takes the task id from the body when the path has none, and the path wins over both', async () => {
+    const { relay, pro } = await startPro()
+    await relay.post('/pro/ledger', { taskId: 'body1', kind: 'note', text: 'from the body' }, TOKEN)
+    await relay.post('/pro/ledger/path1', { taskId: 'body2', kind: 'note', text: 'path wins' }, TOKEN)
+    expect(pro.recorded.ledger.map((entry) => entry.taskId)).toEqual(['body1', 'path1'])
+  })
+
+  it('400s an empty ledger entry, and a taskId that would escape the tasks dir', async () => {
+    const { relay, pro } = await startPro()
+    const empty = await relay.post('/pro/ledger/t1', { kind: 'note' }, TOKEN)
+    expect(empty.status).toBe(400)
+    expect(empty.json).toMatchObject({ code: 'needs-text' })
+    // Path traversal is the reason taskIdOf exists; a route must not bypass it.
+    const escape = await relay.post('/pro/ledger', { taskId: '../../etc', kind: 'note', text: 'x' }, TOKEN)
+    expect(escape.status).toBe(400)
+    expect(escape.json).toMatchObject({ code: 'bad-task' })
+    expect(pro.recorded.ledger).toHaveLength(0)
+  })
+
+  it('404s a /pro path or method that does not exist', async () => {
+    const { relay } = await startPro()
+    expect((await relay.get('/pro/nope', TOKEN)).status).toBe(404)
+    expect((await relay.get('/pro/tasks', TOKEN)).status).toBe(404)
+    expect((await relay.post('/pro/state', {}, TOKEN)).status).toBe(404)
+    // No pane route over HTTP: a script is not a second keyboard (MVP section 9).
+    const pane = await relay.post('/pro/pane', { op: 'send', paneId: 'pane-1', text: 'ls' }, TOKEN)
+    expect(pane.status).toBe(404)
   })
 })
