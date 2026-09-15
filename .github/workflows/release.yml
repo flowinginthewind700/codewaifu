@@ -20,6 +20,11 @@ jobs:
             platform: mac
           - os: windows-latest
             platform: win
+          # 22.04 rather than ubuntu-latest: 24.04's unprivileged-userns
+          # restriction is what the installer has to cope with on a real
+          # desktop, and a build runner should not be guessing about it.
+          - os: ubuntu-22.04
+            platform: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +54,37 @@ jobs:
         if: matrix.platform == 'win'
         run: npx electron-builder --win --publish never
 
+      - name: package (linux)
+        if: matrix.platform == 'linux'
+        run: npx electron-builder --linux --publish never
+
+      # A packaged binary that cannot print its own help text is not a build, it
+      # is a pile of bytes. This is the only gate that catches a missing native
+      # dependency, a broken asar layout or a sandbox abort -- and for Windows
+      # it is the only automated runtime check this project has.
+      - name: smoke (win)
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          exe=$(ls release/win-unpacked/*.exe | head -1)
+          "$exe" --cli help
+          "$exe" --cli status --json
+
+      - name: smoke (linux)
+        if: matrix.platform == 'linux'
+        run: |
+          # Electron brings up the display platform before any of our JS runs,
+          # so a headless runner gets "The platform failed to initialize"
+          # instead of the help text. xvfb-run is preinstalled on the image.
+          # APPIMAGE_EXTRACT_AND_RUN=1: runners have no FUSE.
+          APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a ./release/*linux*.AppImage \
+            --appimage-extract-and-run --cli help
+          # And the deb's payload, which is what `sudo apt install ./deb` ships.
+          dpkg-deb -x ./release/*linux*.deb /tmp/debroot
+          bin=$(find /tmp/debroot -type f -name codewaifu | head -1)
+          test -n "$bin"
+          xvfb-run -a "$bin" --cli help
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}
@@ -57,6 +93,7 @@ jobs:
             release/*.dmg
             release/*.exe
             release/*.AppImage
+            release/*.deb
           if-no-files-found: error
 
   publish:
