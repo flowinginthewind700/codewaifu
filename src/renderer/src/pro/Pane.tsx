@@ -41,7 +41,7 @@ import type { PaneView } from '@shared/pro'
 import type { ProBridgePush, ProFramePush } from '@shared/proIpc'
 import { clipboardAction, searchAction } from '@shared/termKeys'
 import { platform, proApi } from './api'
-import { fill, type Translate } from './i18n'
+import { bridgeErrorText, fill, type Translate } from './i18n'
 import { bridgeOf, registerPane } from './paneBus'
 import type { Tone } from './toast'
 
@@ -548,6 +548,13 @@ export function Pane({
     : fault.kind === 'empty-match'
       ? t('paneSearchEmptyMatch')
       : fill(t, 'paneSearchBadPattern', { error: fault.message })
+  /**
+   * The bridge's complaint, translated for a human. main forwards the child's
+   * own words, and for a control process that never started those words are an
+   * errno - a diagnosis, not an instruction, and the overlay is the only place
+   * anybody will read it.
+   */
+  const errorText = error ? bridgeErrorText(t, error) : ''
 
   return (
     <section
@@ -566,7 +573,7 @@ export function Pane({
             <Bell size={12} />
           </span>
         )}
-        <span className="pane-flag" data-live={live} data-phase={phase} title={error || undefined}>
+        <span className="pane-flag" data-live={live} data-phase={phase} title={errorText || undefined}>
           {dropped > 0 && <span>{fill(t, 'droppedFrames', { n: dropped })}</span>}
           <span>{t(PHASE_KEYS[phase] ?? 'phaseIdle')}</span>
         </span>
@@ -709,7 +716,7 @@ export function Pane({
       )}
       {phase === 'error' && error && (
         <div className="pane-overlay">
-          <span>{error}</span>
+          <span>{errorText}</span>
           <button type="button" className="btn" onClick={() => setReleased(false)}>
             {t('installRetry')}
           </button>

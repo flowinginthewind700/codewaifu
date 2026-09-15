@@ -1308,3 +1308,31 @@ export function deriveGroups(views: readonly TaskView[]): GroupView[] {
 export function needsMeCount(attention: readonly AttentionItem[], now: number): number {
   return attention.filter((item) => !item.resolved && item.snoozedUntil <= now).length
 }
+
+/** Why a pane's control process could not be started, as a reason and not as text. */
+export interface SpawnFailure {
+  /** Same vocabulary as `HerdrTarget.reason`, so one fix reads the same everywhere. */
+  reason: 'no-binary' | 'not-executable' | ''
+  /** The path Node tried, '' when the message did not carry one. */
+  binary: string
+}
+
+/**
+ * Turn a failed `spawn` into a reason the pane can put into words.
+ *
+ * Node reports a control process it could not start as `spawn /path/herdr ENOENT`,
+ * and that string is what a pane's error line carries. It is accurate and it is
+ * useless: ENOENT means "install herdr, or point pro.herdrPath at it" and EACCES
+ * means "chmod +x", and a user who has to know which errno maps to which fix is
+ * doing our job for us.
+ *
+ * Anything unrecognised comes back with an empty reason and is shown verbatim:
+ * guessing at a failure nobody has seen is how a real message gets replaced by a
+ * confident wrong one.
+ */
+export function spawnFailure(error: string): SpawnFailure {
+  const text = String(error || '')
+  const match = /spawn\w*\s+(.+?)\s+(ENOENT|EACCES|EPERM)\b/.exec(text)
+  if (!match) return { reason: '', binary: '' }
+  return { reason: match[2] === 'ENOENT' ? 'no-binary' : 'not-executable', binary: match[1] }
+}

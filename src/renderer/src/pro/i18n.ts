@@ -13,6 +13,7 @@
  * code instead of in the table is a plural rule nobody reviews.
  */
 import type { Lang } from '@shared/protocol'
+import { spawnFailure } from '@shared/pro'
 
 const STRINGS = {
   /* ---------------------------------------------------------- shell */
@@ -241,6 +242,19 @@ const STRINGS = {
   phaseRespawning: { zh: '重连中…', en: 'Reconnecting…' },
   phaseClosed: { zh: '已关闭', en: 'Closed' },
   phaseError: { zh: '桥接错误', en: 'Bridge error' },
+  /**
+   * The pane could not start its control process. Node's `spawn ... ENOENT` is
+   * accurate and tells nobody what to do; these two are the fix each errno
+   * implies, and `{path}` is the file that was tried.
+   */
+  paneErrNoBinary: {
+    zh: '找不到 herdr：{path}。装上它，或在 ~/.codewaifu/config.json 里把 pro.herdrPath 指向可执行文件。',
+    en: 'herdr was not found at {path}. Install it, or set pro.herdrPath in ~/.codewaifu/config.json to the binary.'
+  },
+  paneErrNotExecutable: {
+    zh: 'herdr 无法执行：{path}。给它加执行权限（chmod +x），或把 pro.herdrPath 指向正确的文件。',
+    en: 'herdr at {path} cannot be executed. Run chmod +x on it, or set pro.herdrPath to the right file.'
+  },
   droppedFrames: { zh: '丢了 {n} 帧', en: '{n} frames dropped' },
   paneBell: { zh: '终端响铃', en: 'Terminal bell' },
   paneCopyFailed: { zh: '复制失败', en: 'Copy failed' },
@@ -346,4 +360,21 @@ export function fill(t: Translate, key: StringKey, vars: Record<string, string |
     out = out.split(`{${name}}`).join(String(value))
   }
   return out
+}
+
+/**
+ * A bridge's error line, in words worth putting on screen.
+ *
+ * main forwards whatever the child process said, and for a failed spawn that is
+ * Node's own `spawn /path/herdr ENOENT`. The pane overlay is the only place a
+ * user reads it, so a known failure becomes the fix it implies and anything
+ * unrecognised is passed through byte for byte: a message we cannot classify is
+ * still evidence, and a confident guess sends the user after the wrong problem.
+ */
+export function bridgeErrorText(t: Translate, error: string): string {
+  const text = String(error || '')
+  const failure = spawnFailure(text)
+  if (!failure.reason || !failure.binary) return text
+  if (failure.reason === 'no-binary') return fill(t, 'paneErrNoBinary', { path: failure.binary })
+  return fill(t, 'paneErrNotExecutable', { path: failure.binary })
 }

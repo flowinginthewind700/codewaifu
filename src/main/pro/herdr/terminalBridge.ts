@@ -163,6 +163,10 @@ export class TerminalBridge {
   /** Consecutive resyncs that each found new drops: the backoff input. */
   private respawnStreak = 0
   private droppedAtRespawn = 0
+  /** Consecutive control processes that could not be started at all. */
+  private spawnFailStreak = 0
+  /** True while the current connection died before it ever started. */
+  private spawnFailed = false
   private errorText = ''
   private stderrTail = ''
 
@@ -335,6 +339,7 @@ export class TerminalBridge {
     this.child = child
     this.decoder = new LineDecoder()
     this.stderrTail = ''
+    this.spawnFailed = false
     // herdr numbers frames per connection, so this counter belongs to the
     // connection and has to die with it. Left at the previous high value, every
     // frame of the new connection reads as a backwards seq: the opening full
@@ -352,11 +357,28 @@ export class TerminalBridge {
     })
     // Ignore the exit of a child we replaced on purpose: an intentional respawn
     // must not look like a crash and schedule a second one.
+    let exited = false
     child.on('exit', (code: unknown, signal: unknown) => {
+      exited = true
       if (this.child === child) this.onExit(code, signal)
+    })
+    // A spawn that could not happen never sends `exit`: Node emits `error`
+    // (ENOENT, EACCES) and then `close`, and that is all. Listening for `exit`
+    // alone left the pane parked on "Attaching..." forever - no message, no
+    // retry, and no way out except reloading the window.
+    child.on('close', (code: unknown, signal: unknown) => {
+      if (!exited && this.child === child) this.onExit(code, signal)
     })
     child.on('error', (error: unknown) => {
       this.errorText = error instanceof Error ? error.message : String(error)
+      // Only a child that never painted is a failed spawn. An error on a
+      // connection that was already live belongs to the exit handler: its
+      // stderr tail says more about why herdr let go than this errno does, and
+      // declaring the bridge dead here would beat the exit that follows it.
+      if (this.phase === 'starting' || this.phase === 'idle') {
+        this.spawnFailed = true
+        this.setPhase('error')
+      }
     })
   }
 
@@ -397,7 +419,16 @@ export class TerminalBridge {
       this.droppedCount += 1
       this.resync = true
     }
-    if (this.phase !== 'live') this.setPhase('live')
+    if (this.phase !== 'live') {
+      // Painting again is the end of whatever went wrong before. Left standing,
+      // a recovered pane keeps the old errno in its header tooltip and reads as
+      // broken to the one person who just fixed it.
+      this.errorText = ''
+      this.setPhase('live')
+    }
+    // Frames are proof the control process exists, which is what makes a later
+    // spawn failure a new streak instead of a continuation of an old one.
+    this.spawnFailStreak = 0
     if (this.resync && !this.respawnTimer && !this.closing) {
       this.scheduleRespawn(respawnBackoff(this.respawnStreak, this.respawnDelayMs))
     }
@@ -462,8 +493,18 @@ export class TerminalBridge {
       this.scheduleRespawn(0)
       return
     }
-    this.errorText = this.stderrTail.trim() || exitText
+    // A process that never started has no stderr and no exit code to report:
+    // the `error` handler already wrote the only real diagnosis, and the
+    // generic "code null" line would overwrite it with something meaningless.
+    if (!this.spawnFailed) this.errorText = this.stderrTail.trim() || exitText
     this.setPhase('error')
+    if (this.spawnFailed) {
+      // Retrying a missing binary every 500ms forever is a busy loop that
+      // looks like a crash: back off, and let a frame ever arriving reset it.
+      this.spawnFailStreak += 1
+      this.scheduleRespawn(respawnBackoff(this.spawnFailStreak, this.respawnDelayMs * 2))
+      return
+    }
     this.scheduleRespawn(this.respawnDelayMs * 2)
   }
 

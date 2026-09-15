@@ -82,6 +82,15 @@ export class FakeChild extends EventEmitter implements BridgeChild {
     this.emit('exit', code, signal)
   }
 
+  /**
+   * Node's other end-of-process signal. It follows `exit`, and it is the only
+   * signal a spawn that could not be performed ever sends - so a test for the
+   * missing-binary case fires `failWith` and this, and no exit.
+   */
+  closeWith(code: number | null = 0, signal: string | null = null): void {
+    this.emit('close', code, signal)
+  }
+
   failWith(message: string): void {
     this.emit('error', new Error(message))
   }

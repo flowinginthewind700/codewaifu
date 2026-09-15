@@ -20,6 +20,8 @@ import { FakeChild, fakeClock, fakeSpawner } from './helpers/bridge'
 
 const BINARY = '/usr/local/bin/herdr'
 const PANE = 'wA:p1'
+/** What Node says about a spawn it could not perform: an errno, and no fix. */
+const MISSING_BINARY = `spawn ${BINARY} ENOENT`
 
 export interface Harness {
   bridge: TerminalBridge
@@ -474,6 +476,52 @@ describe('the control child dying', () => {
     expect(bridge.status()).toMatchObject({ phase: 'error' })
     expect(bridge.status().error).toContain('ENOENT')
     expect(clock.pending(), 'a missing binary must not become a respawn storm').toBe(0)
+  })
+
+  it('reports a control process that never started instead of hanging on attaching', () => {
+    const { bridge, child, states } = harness()
+    // Node's shape for a spawn it could not perform: 'error', then 'close', and
+    // no 'exit' at all. Listening only for 'exit' left the pane in 'starting'
+    // forever - the errno was recorded and nothing ever showed it.
+    child.failWith(MISSING_BINARY)
+    child.closeWith(null, null)
+    expect(bridge.status()).toMatchObject({ phase: 'error', live: false })
+    expect(bridge.status().error).toContain('ENOENT')
+    expect(
+      bridge.status().error,
+      'a process that never ran has no exit code to report'
+    ).not.toContain('bridge exited')
+    expect(
+      states.some((state) => state.phase === 'error' && state.error.includes('ENOENT')),
+      'the renderer is told, not just the log'
+    ).toBe(true)
+  })
+
+  it('backs off while the binary stays missing and recovers the moment it appears', () => {
+    const { bridge, spawner, clock } = harness()
+    const fail = (index: number): void => {
+      spawner.child(index).failWith(MISSING_BINARY)
+      spawner.child(index).closeWith(null, null)
+    }
+    fail(0)
+    // The retry delay is the respawn base doubled, then doubled again for each
+    // failure in a row: 1s, 2s, 4s, and 8s as the ceiling.
+    clock.advance(999)
+    expect(spawner.calls, 'the first retry waits a second').toHaveLength(1)
+    clock.advance(1)
+    fail(1)
+    clock.advance(2000)
+    fail(2)
+    clock.advance(4000)
+    fail(3)
+    clock.advance(7999)
+    expect(spawner.calls, 'the ceiling is eight seconds, not a minute').toHaveLength(4)
+    clock.advance(1)
+    expect(spawner.calls).toHaveLength(5)
+    // Somebody installed herdr. The same pane comes back without a reload, and
+    // comes back clean: the errno goes with the phase that carried it.
+    spawner.child(4).frame(1, { full: true })
+    expect(bridge.status()).toMatchObject({ phase: 'live', live: true, error: '' })
   })
 })
 
