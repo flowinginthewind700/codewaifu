@@ -575,3 +575,92 @@ describe('the real directory read', () => {
     expect(describeDiscovery(target, 'en')).toContain('cwfix')
   })
 })
+
+/*
+ * Which session was asked for. The app always passes `pro.herdrSession`, whose
+ * default is the empty string, so `deps.session ?? env[...]` read that empty
+ * string as a decision and `HERDR_SESSION` could only ever reach discovery from
+ * a test that omitted the key - which is every test in this file. Each case
+ * below passes the session explicitly, the way a real boot does.
+ */
+describe('config versus HERDR_SESSION', () => {
+  const NAMED = '/home/u/.config/herdr/sessions/cwfix/herdr.sock'
+  const BIN = '/home/u/.local/bin/herdr'
+
+  it('lets the environment name the session when config left it empty', () => {
+    const tried = socketCandidates({
+      ...LINUX,
+      home: '/home/u',
+      session: '',
+      env: { [SESSION_ENV_VAR]: 'cwfix' }
+    })
+    expect(tried[0]).toBe(NAMED)
+  })
+
+  it('treats whitespace and "default" in config as no decision and as a decision, respectively', () => {
+    // Whitespace is an unset field, so the environment still speaks.
+    expect(
+      socketCandidates({ ...LINUX, home: '/home/u', session: '   ', env: { [SESSION_ENV_VAR]: 'cwfix' } })[0]
+    ).toBe(NAMED)
+    // "default" is a session the user typed, so the environment does not overrule it.
+    const typed = socketCandidates({
+      ...LINUX,
+      home: '/home/u',
+      session: DEFAULT_SESSION_NAME,
+      env: { [SESSION_ENV_VAR]: 'cwfix' }
+    })
+    expect(typed.some((candidate) => candidate.includes('/sessions/'))).toBe(false)
+  })
+
+  it('reads HERDR_SESSION=default as the default session, not as a directory', () => {
+    const tried = socketCandidates({
+      ...LINUX,
+      home: '/home/u',
+      session: '',
+      env: { [SESSION_ENV_VAR]: 'default' }
+    })
+    expect(tried).toEqual(['/home/u/.config/herdr/herdr.sock', '/home/u/.config/herdr-dev/herdr.sock'])
+  })
+
+  it('keeps config in front when both name a session, so settings are not a suggestion', () => {
+    const tried = socketCandidates({
+      ...LINUX,
+      home: '/home/u',
+      session: 'cwfix',
+      env: { [SESSION_ENV_VAR]: 'other' }
+    })
+    expect(tried[0]).toBe(NAMED)
+    expect(tried.some((candidate) => candidate.includes('/other/'))).toBe(false)
+  })
+
+  it('resolves the environment session end to end, and hands it to children', () => {
+    const target = discoverHerdr({
+      ...LINUX,
+      home: '/home/u',
+      session: '',
+      env: { [SESSION_ENV_VAR]: 'cwfix' },
+      exists: probeFor(BIN, NAMED),
+      listDir: () => []
+    })
+    expect(target.reason).toBe('ok')
+    expect(target.socketPath).toBe(NAMED)
+    expect(target.session).toBe('cwfix')
+    expect(target.childEnv).toEqual({ [SOCKET_ENV_VAR]: NAMED, [SESSION_ENV_VAR]: 'cwfix' })
+    expect(target.sessionsFound).toEqual([])
+  })
+
+  it('does it on a real disk too, where the empty config value comes from the shipped default', async () => {
+    const home = root()
+    const sock = await listen(path.join(home, '.config', 'herdr', 'sessions', 'cwfix', 'herdr.sock'))
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      session: '',
+      env: { HOME: home, [SESSION_ENV_VAR]: 'cwfix' },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
+    expect(target.socketPath).toBe(sock)
+    expect(target.session).toBe('cwfix')
+  })
+})

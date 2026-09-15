@@ -112,6 +112,21 @@ export function normalizeSession(value: unknown): string {
   return raw
 }
 
+
+/**
+ * Which session was asked for. `??` is the wrong operator here: the app always
+ * passes `pro.herdrSession`, whose default is the empty string, and an empty
+ * string counts as a decision to `??` - so `HERDR_SESSION` would never reach
+ * discovery from a real boot, only from a test that omitted the key. Config wins
+ * when it names something; otherwise the environment does.
+ */
+function sessionOf(deps: DiscoveryDeps): string {
+  const env = deps.env ?? {}
+  const configured = typeof deps.session === 'string' ? deps.session.trim() : ''
+  return normalizeSession(configured || env[SESSION_ENV_VAR])
+}
+
+
 /** Where a session keeps its state, without assuming the socket exists. */
 export function sessionDataDir(configDir: string, session: string): string {
   return session ? join(configDir, 'sessions', session) : configDir
@@ -127,7 +142,7 @@ export function socketCandidates(deps: DiscoveryDeps = {}): string[] {
   const env = deps.env ?? {}
   const explicit = (deps.socketPath || env[SOCKET_ENV_VAR] || '').trim()
   if (explicit) return [explicit]
-  const session = normalizeSession(deps.session ?? env[SESSION_ENV_VAR])
+  const session = sessionOf(deps)
   const out: string[] = []
   for (const configDir of configDirCandidates(deps)) {
     if (session) out.push(join(sessionDataDir(configDir, session), 'herdr.sock'))
@@ -255,9 +270,8 @@ function liveSessions(deps: ResolveDeps): string[] {
  * and `reason` names whichever is missing.
  */
 export function discoverHerdr(deps: ResolveDeps): HerdrTarget {
-  const env = deps.env ?? {}
   const exists = deps.exists
-  const session = normalizeSession(deps.session ?? env[SESSION_ENV_VAR])
+  const session = sessionOf(deps)
   const triedSockets = socketCandidates(deps)
   const socketPath = triedSockets.find((candidate) => exists(candidate)) ?? null
   const triedBinaries = binaryCandidates(deps)
