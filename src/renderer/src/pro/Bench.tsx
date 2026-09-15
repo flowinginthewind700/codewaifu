@@ -44,7 +44,7 @@ import { TaskCard } from './TaskCard'
 import { TopBar } from './TopBar'
 import { TreeRail } from './TreeRail'
 import { makeTranslator, type Translate } from './i18n'
-import { routeBridge, routeFrames } from './paneBus'
+import { focusPane, routeBridge, routeFrames } from './paneBus'
 import { Toasts, noticeTone, useToasts } from './toast'
 
 type RightTab = 'queue' | 'ledger' | 'recovery'
@@ -109,7 +109,17 @@ export function Bench(): ReactElement {
     void load()
   }, [load])
 
-  /** Point the bench at a task. False when the projection has no such task. */
+  /**
+   * Point the bench at a task. False when the projection has no such task.
+   *
+   * "Focus" here is grid focus: the chosen pane is the one drawn active, which is
+   * all MVP F7's `focusTask` asks of the pane grid. It is deliberately not
+   * *keyboard* focus. Handing a terminal the keyboard the moment a bubble is
+   * clicked would send the next `d` into the agent's shell instead of denying the
+   * head of the queue, and deciding without focusing a pane is the loop F3 calls
+   * the whole product. The keyboard enters a terminal only on `i`, and leaves on
+   * Shift+Tab.
+   */
   const selectTask = useCallback((nextTaskId: string, nextPaneId = ''): boolean => {
     const task = viewRef.current?.tasks.find((entry) => entry.id === nextTaskId) ?? null
     if (!task) return false
@@ -449,6 +459,15 @@ export function Bench(): ReactElement {
         if (control(event.target)) return
         setNeedsMeOnly((value) => !value)
         event.preventDefault()
+        return
+      case 'i':
+        // Into the selected pane's terminal. Every failure is shown: a binding
+        // that silently does nothing is indistinguishable from a binding that
+        // was never wired up.
+        event.preventDefault()
+        if (!selectedTask) return
+        if (focusPane(paneId)) return
+        push(selectedTask.panes.length ? t('paneFocusLost') : t('noPanes'), 'warn')
         return
       case '1':
         setTab('queue')

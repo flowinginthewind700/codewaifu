@@ -24,6 +24,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import {
   Bell,
+  CaseSensitive,
   ChevronDown,
   ChevronUp,
   Crosshair,
@@ -31,9 +32,11 @@ import {
   Minimize2,
   Plug,
   PlugZap,
+  Regex,
   Search,
   X
 } from 'lucide-react'
+import { planFind, type FindFault } from '@shared/findQuery'
 import type { PaneView } from '@shared/pro'
 import type { ProBridgePush, ProFramePush } from '@shared/proIpc'
 import { clipboardAction, searchAction } from '@shared/termKeys'
@@ -216,25 +219,66 @@ export function Pane({
    * promises.
    */
   const [matches, setMatches] = useState<ISearchResultChangeEvent | null>(null)
+  /** Find-bar toggles. The refs feed the debounced scan, which outlives a render. */
+  const [regexOn, setRegexOn] = useState(false)
+  const [caseOn, setCaseOn] = useState(false)
+  const regexRef = useRef(false)
+  const caseRef = useRef(false)
+  /** Why this query is not being searched; it shows in the match counter. */
+  const [fault, setFault] = useState<FindFault | null>(null)
 
   const paneId = pane.paneId
 
   const runSearch = useCallback((backwards: boolean) => {
     const addon = searchRef.current
     if (!addon) return
-    const needle = queryRef.current
-    if (!needle) {
+    const plan = planFind(queryRef.current, {
+      regex: regexRef.current,
+      caseSensitive: caseRef.current
+    })
+    if (plan.kind !== 'search') {
+      // A refused query clears the previous highlight. Leaving yesterday's
+      // matches on screen under a pattern that does not compile reads as the
+      // bar ignoring what was just typed.
       addon.clearDecorations()
       setMatches(null)
+      setFault(plan.kind === 'empty' ? null : plan)
       return
     }
+    setFault(null)
     const options = { decorations: SEARCH_DECORATIONS, incremental: false }
-    const found = backwards ? addon.findPrevious(needle, options) : addon.findNext(needle, options)
+    const found = backwards
+      ? addon.findPrevious(plan.term, options)
+      : addon.findNext(plan.term, options)
     // A miss is recorded here as well as left to the results event. The counter
     // is the only feedback the bar gives, so a stale count sitting over an empty
     // pane is how a working search comes to look broken.
     if (!found) setMatches({ resultIndex: -1, resultCount: 0 })
   }, [])
+
+  /**
+   * Flip a toggle and rescan immediately.
+   *
+   * No debounce here: the click is already deliberate, and waiting would show
+   * the new mode against the old match count. Focus goes back to the input
+   * because the button just took it, and a find bar that swallows focus turns
+   * the next keystroke into nothing at all.
+   */
+  const flip = useCallback(
+    (which: 'regex' | 'case') => {
+      const next = which === 'regex' ? !regexRef.current : !caseRef.current
+      if (which === 'regex') {
+        regexRef.current = next
+        setRegexOn(next)
+      } else {
+        caseRef.current = next
+        setCaseOn(next)
+      }
+      runSearch(false)
+      searchInputRef.current?.focus()
+    },
+    [runSearch]
+  )
 
   const onQueryChange = useCallback(
     (value: string) => {
@@ -252,6 +296,7 @@ export function Pane({
     setQuery('')
     queryRef.current = ''
     setMatches(null)
+    setFault(null)
     searchRef.current?.clearDecorations()
   }, [])
 
@@ -285,12 +330,30 @@ export function Pane({
       fontSize: 12.5,
       lineHeight: 1.22,
       cursorBlink: true,
-      scrollback: 4000,
+      // A ceiling, not a growth rate: xterm keeps scrollback in a circular
+      // list of three 32-bit words per cell, and only the selected task's panes
+      // are mounted at all. 4k lines was too small for what an agent prints -
+      // one verbose build log scrolls the top of a test run off the screen, and
+      // the find bar can only search what is still in the buffer.
+      scrollback: 10_000,
       // The Unicode11 addon below reads `terminal.unicode`, which xterm gates
       // behind its proposed-API flag. With the flag off, activating the addon
       // throws inside the first Pane's mount effect and React unmounts the
       // tree, so the bench comes up as a blank frame on every platform.
       allowProposedApi: true,
+      // OSC 8 hyperlinks, which an agent's tooling emits on purpose (`ls
+      // --hyperlink`, cargo, pytest, git). With no handler xterm falls back to
+      // `confirm("Do you want to navigate to ... WARNING: This link could
+      // potentially be dangerous")` plus `window.open()` - a native modal raised
+      // by a string we did not author, and a new Electron window instead of the
+      // OS browser. Same exit as detected links: the host op whose scheme
+      // allow-list runs in main. `allowNonHttpProtocols` stays at its default
+      // false, so xterm drops anything that is not http(s) before it reaches us.
+      linkHandler: {
+        activate: (_event, uri) => {
+          void proApi.host.openExternal(uri)
+        }
+      },
       theme: THEME
     })
     const fit = new FitAddon()
@@ -376,6 +439,13 @@ export function Pane({
         setError(push.error)
         // herdr may have resized the PTY under us while we were away.
         if (push.phase === 'live' && push.cols && push.rows) measure()
+      },
+      focus(): void {
+        // `term.focus()` lands on xterm's hidden helper textarea, which is what
+        // makes keystrokes go to the PTY instead of to the bench's `j/k/a/d/s`
+        // (`Bench.tsx::typing` bails on anything inside `.xterm`). Focusing the
+        // host div would look focused and still route keys to the bench.
+        term.focus()
       }
     })
 
@@ -468,6 +538,16 @@ export function Pane({
   const label = pane.title || pane.cwd || pane.paneId
   const live = phase === 'live'
   const agent = pane.displayAgent || pane.agent || 'sh'
+  /**
+   * The counter doubles as the bar's error line. It is the only text the find
+   * bar owns, so a refused pattern has nowhere else to go - and a toast would
+   * fire once per keystroke while somebody types a regex.
+   */
+  const faultText = !fault
+    ? ''
+    : fault.kind === 'empty-match'
+      ? t('paneSearchEmptyMatch')
+      : fill(t, 'paneSearchBadPattern', { error: fault.message })
 
   return (
     <section
@@ -559,11 +639,35 @@ export function Pane({
             spellCheck={false}
             autoComplete="off"
           />
+          <button
+            type="button"
+            className="btn icon ghost"
+            title={t('paneSearchRegex')}
+            aria-label={t('paneSearchRegex')}
+            aria-pressed={regexOn}
+            data-on={regexOn || undefined}
+            onClick={() => flip('regex')}
+          >
+            <Regex size={12} />
+          </button>
+          <button
+            type="button"
+            className="btn icon ghost"
+            title={t('paneSearchCase')}
+            aria-label={t('paneSearchCase')}
+            aria-pressed={caseOn}
+            data-on={caseOn || undefined}
+            onClick={() => flip('case')}
+          >
+            <CaseSensitive size={12} />
+          </button>
           <span
             className="pane-search-count"
-            data-none={matches !== null && matches.resultCount === 0}
+            data-none={!faultText && matches !== null && matches.resultCount === 0}
+            data-bad={faultText ? 'true' : undefined}
+            title={faultText || undefined}
           >
-            {matchCountLabel(t, matches)}
+            {faultText || matchCountLabel(t, matches)}
           </span>
           <button
             type="button"

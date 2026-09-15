@@ -22,6 +22,15 @@ import type { ProBridgePush, ProFramePush, ProFramesPush } from '@shared/proIpc'
 export interface PaneSink {
   frame(frame: ProFramePush): void
   bridge(push: ProBridgePush): void
+  /**
+   * Hand the keyboard to this pane's terminal.
+   *
+   * It lives on the bus rather than in a ref the Bench reaches into because the
+   * `Terminal` instance is deliberately invisible to React: a component that can
+   * call `term.focus()` can also call `term.write()`, and frames in state are
+   * the failure mode this module exists to prevent.
+   */
+  focus(): void
 }
 
 const sinks = new Map<string, PaneSink>()
@@ -41,6 +50,19 @@ export function registerPane(paneId: string, sink: PaneSink): () => void {
 /** The most recent bridge push for a pane, for a header that mounted late. */
 export function bridgeOf(paneId: string): ProBridgePush | null {
   return lastBridge.get(paneId) ?? null
+}
+
+/**
+ * Focus a pane's terminal. False means "no such live pane right now", which the
+ * caller has to show rather than swallow: a keystroke that silently does nothing
+ * reads as a dead key binding, and the two reasons it fails (the task has no
+ * pane, or the pane was released) want different copy.
+ */
+export function focusPane(paneId: string): boolean {
+  const sink = paneId ? sinks.get(paneId) : undefined
+  if (!sink) return false
+  sink.focus()
+  return true
 }
 
 export function routeFrames(push: ProFramesPush): void {

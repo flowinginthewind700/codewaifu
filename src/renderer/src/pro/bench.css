@@ -410,9 +410,11 @@ textarea {
   height: 24px;
 }
 
-/* An action whose sub-panel is currently open stays lit, so "which of these did
-   I just expand" is answerable without reading the panel below. */
-.btn[data-open] {
+/* A control that is currently on stays lit, so "which of these did I just
+   expand / switch" is answerable without reading the panel below. `data-open`
+   is a sub-panel; `data-on` is the find bar's regex and case toggles. */
+.btn[data-open],
+.btn[data-on] {
   background: var(--pink-soft);
   border-color: rgba(255, 125, 150, 0.4);
   color: var(--pink);
@@ -1229,6 +1231,16 @@ textarea {
 }
 
 .pane-search-count[data-none='true'] {
+  color: var(--danger);
+}
+
+/* A refused pattern shares the counter with the match count. The cap is what
+   keeps a long engine message from pushing the bar past the pane's left edge -
+   the bar is anchored on the right and grows leftward, over the terminal. */
+.pane-search-count[data-bad='true'] {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--danger);
 }
 

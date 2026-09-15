@@ -20,8 +20,8 @@ const STRINGS = {
   brandSub: { zh: '工作台', en: 'Bench' },
   booting: { zh: '正在启动工作台…', en: 'Starting the bench…' },
   keyHints: {
-    zh: 'j/k 移动 · Enter 打开 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
-    en: 'j/k move · Enter open · Space filter · a/d/s decide · 1/2/3 tabs'
+    zh: 'j/k 移动 · Enter 打开 · i 进终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
+    en: 'j/k move · Enter open · i terminal · Space filter · a/d/s decide · 1/2/3 tabs'
   },
   /** `a/d/s` hit the head of the queue; this is what "that one has no such verb" says. */
   actionNotAvailable: {
@@ -225,15 +225,29 @@ const STRINGS = {
     en: 'The bridge to this pane is released. The agent is still running in herdr.'
   },
   paneAttachedElsewhere: { zh: '另一个窗口正接管这个面板', en: 'Another window holds this pane' },
+  /**
+   * `i` found a pane in the projection but no terminal behind it: released, or
+   * its bridge errored out. Distinct from `noPanes`, which is "herdr has no pane
+   * for this task at all" and points at the recovery plan instead.
+   */
+  paneFocusLost: {
+    zh: '这个面板没接住键盘 —— 可能已释放，点面板标题栏的插头重新接管。',
+    en: 'That pane did not take the keyboard. It may be released - re-attach it with the plug in its header.'
+  },
   paneSearchOpen: { zh: '搜索输出', en: 'Search output' },
   paneSearchPlaceholder: { zh: '在输出里查找…', en: 'Find in output…' },
   paneSearchPrev: { zh: '上一处', en: 'Previous match' },
   paneSearchNext: { zh: '下一处', en: 'Next match' },
   paneSearchClose: { zh: '关闭搜索', en: 'Close search' },
+  paneSearchRegex: { zh: '正则表达式', en: 'Regular expression' },
+  paneSearchCase: { zh: '区分大小写', en: 'Match case' },
   paneSearchNone: { zh: '无匹配', en: 'No results' },
   /** Past the addon's highlight limit only the total is known, so there is no "i". */
   paneSearchCount: { zh: '{n} 处', en: '{n} found' },
   paneSearchPosition: { zh: '{i} / {n}', en: '{i} of {n}' },
+  /** The engine's own message is appended; it names the offending construct. */
+  paneSearchBadPattern: { zh: '正则无效：{error}', en: 'Bad pattern: {error}' },
+  paneSearchEmptyMatch: { zh: '这个正则会匹配空文本', en: 'That pattern matches empty text' },
 
   /* ---------------------------------------------------------- install */
   installTitle: { zh: 'herdr 没有运行', en: 'herdr is not running' },
