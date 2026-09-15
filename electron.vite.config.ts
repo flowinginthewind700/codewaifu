@@ -29,6 +29,17 @@ export default defineConfig({
         '@shared': resolve(__dirname, 'src/shared'),
         '@renderer': resolve(__dirname, 'src/renderer/src')
       }
+    },
+    build: {
+      rollupOptions: {
+        // Two windows, two documents: the desktop widget and the Bench. They
+        // share tokens.css and the preload, and nothing else - the Bench must
+        // not pay for the Live2D runtime, and the widget must not ship xterm.
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          pro: resolve(__dirname, 'src/renderer/pro.html')
+        }
+      }
     }
   }
 })

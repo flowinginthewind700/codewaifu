@@ -65,13 +65,27 @@ function rendererEntry(): string {
   return path.join(here, '../renderer/index.html')
 }
 
-function preloadEntry(): string {
+/**
+ * Shared with the Bench window: there is exactly one preload in this app, and a
+ * second copy of this path is how the two windows drift apart.
+ */
+export function preloadEntry(): string {
   // Built as CommonJS on purpose: a sandboxed preload cannot be ESM.
   const cjs = path.join(here, '../preload/index.cjs')
   return cjs
 }
 
-function clampToDisplay(x: number, y: number, width: number, height: number): { x: number; y: number } {
+/**
+ * Keep a restored frame on a screen that exists. A saved position from a
+ * monitor that is no longer plugged in would otherwise open the window
+ * somewhere the user cannot reach it.
+ */
+export function clampToDisplay(
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): { x: number; y: number } {
   const display: Display = screen.getDisplayNearestPoint({ x: Math.max(0, x), y: Math.max(0, y) })
   const area = display.workArea
   const nextX = Math.min(Math.max(x, area.x), Math.max(area.x, area.x + area.width - width))

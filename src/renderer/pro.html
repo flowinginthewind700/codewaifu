@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CodeWaifu Pro</title>
+    <!--
+      The Bench's policy is tighter than the widget's: no `blob:` (there is no
+      Cubism runtime here) and no `cw-asset:` (it renders no downloaded model).
+      `unsafe-inline` stays on style-src because xterm.js writes its own style
+      rules for the viewport and the cursor. Everything the pane grid draws
+      arrives as base64 bytes over the allow-listed IPC bridge, never as a
+      network request, so `connect-src 'self'` is the whole truth.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/pro/main.tsx"></script>
+  </body>
+</html>

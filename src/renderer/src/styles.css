@@ -11,65 +11,8 @@
    --ease-swift for motion, letter-spacing 0 for body copy.
    ========================================================================== */
 
-:root {
-  /* Warm charcoal glass. Three accents with fixed roles so the widget never
-     reads as one hue floating on the desktop:
-       pink  = the companion / primary action
-       mint  = healthy, connected, playing
-       amber = needs attention
-       coral = Claude Code, destructive hover          */
-  /* Liquid glass. A companion that hides the desktop behind an opaque slab is
-     a window, not a pet: --bg keeps ~44% of what is underneath readable
-     through it, and --glass-* is the single place to tune how much. Text stays
-     legible because the blur is heavy and the sheen below lifts the top edge. */
-  --bg: rgba(24, 22, 31, 0.56);
-  --bg-strong: rgba(17, 15, 23, 0.86);
-  --surface: rgba(255, 255, 255, 0.045);
-  --surface-2: rgba(255, 255, 255, 0.085);
-  --surface-3: rgba(255, 255, 255, 0.13);
-  --line: rgba(255, 255, 255, 0.1);
-  --line-soft: rgba(255, 255, 255, 0.06);
-  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  --text: #f4eff8;
-  --muted: #ab9fba;
-  --faint: #7e7489;
-  --pink: #ff7d96;
-  --pink-soft: rgba(255, 125, 150, 0.14);
-  --mint: #59d7b3;
-  --amber: #f5b45c;
-  --coral: #f0916b;
-  --danger: #ff6b81;
-
-  --glass-blur: 26px;
-  --glass-sat: 180%;
-  /* A light raking from the top-left: this is what reads as "glass" rather
-     than "grey box at 56% opacity". Kept under the border highlight so the two
-     never fight over the same edge. */
-  --glass-sheen: linear-gradient(
-    158deg,
-    rgba(255, 255, 255, 0.11) 0%,
-    rgba(255, 255, 255, 0.035) 34%,
-    rgba(255, 255, 255, 0) 62%
-  );
-
-  --radius: 8px;
-  --radius-sm: 6px;
-  --radius-xs: 4px;
-
-  /* Motion. Spring for entrances and state changes, swift for exits. */
-  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-swift: cubic-bezier(0.7, 0, 0.3, 1);
-  --dur-1: 0.14s;
-  --dur-2: 0.24s;
-  --dur-3: 0.4s;
-
-  /* Uppercase micro-labels only; body copy stays at letter-spacing 0. */
-  --tracking-label: 0.08em;
-
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
-  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-}
+/* Tokens live in tokens.css, shared with the Bench window. */
+@import './tokens.css';
 
 * {
   box-sizing: border-box;
