@@ -56,6 +56,12 @@ export function nextRequestId(prefix = 'cw'): string {
   return `${prefix}:${process.pid.toString(36)}:${counter.toString(36)}`
 }
 
-export function encodeRequest(id: string, method: string, params: unknown): string {
+/**
+ * `params` is optional because herdr rejects a request whose params key is
+ * absent, not because a caller may pass null. The `?? {}` here is what keeps
+ * `encodeRequest(id, 'ping')` on the wire as `params: {}` - a method with no
+ * arguments must not be encodable as a request herdr will refuse.
+ */
+export function encodeRequest(id: string, method: string, params?: unknown): string {
   return `${JSON.stringify({ id, method, params: params ?? {} })}\n`
 }
