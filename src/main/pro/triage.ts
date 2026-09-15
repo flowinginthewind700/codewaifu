@@ -124,7 +124,7 @@ export function emptyHint(): TaskHint {
 export class Triage {
   private readonly now: () => number
   private readonly resolveTask: (hint: TaskHint) => TaskRef | null
-  private readonly stalledAfterMs: number
+  private stalledAfterMs: number
 
   private readonly rows = new Map<string, Row>()
   private readonly blockedSince = new Map<string, number>()
@@ -137,6 +137,15 @@ export class Triage {
     this.now = deps.now ?? (() => Date.now())
     this.resolveTask = deps.resolveTask ?? (() => null)
     this.stalledAfterMs = Math.max(5000, deps.stalledAfterMs ?? DEFAULT_STALLED_MS)
+  }
+
+  /**
+   * Config can change at runtime (the bench exposes a stalled threshold), and
+   * triage outlives a config write. Clamped the same way as the constructor so
+   * a stray 0 cannot turn every idle pane into a stall.
+   */
+  setStalledAfterMs(ms: number): void {
+    this.stalledAfterMs = Math.max(5000, ms)
   }
 
   onEvent(listener: (event: TriageEvent) => void): () => void {
