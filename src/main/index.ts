@@ -1,6 +1,6 @@
-import { app, Notification, globalShortcut } from 'electron'
+import { app, dialog, globalShortcut, Notification, shell } from 'electron'
 import crypto from 'node:crypto'
-import type { EventPlan } from '../shared/protocol'
+import type { EventPlan, Lang } from '../shared/protocol'
 import type { BubbleMessage } from '../shared/ui'
 import { systemLangFromLocales } from '../shared/lang'
 import { LIVE2D_KEEP_URLS } from '../shared/live2dCatalog'
@@ -12,6 +12,10 @@ import { IPC, registerIpc, send } from './ipc'
 import { closeLog, log } from './log'
 import { getMediaState, platformSupportsMedia } from './media'
 import * as neuralTts from './neuralTts'
+import { createBenchWindow, type BenchHandle } from './pro/benchWindow'
+import { narrowLogLevel, proAudience } from './pro/host'
+import { registerProIpc } from './pro/ipc'
+import { ProService, type ProHost } from './pro/service'
 import { effectivePath } from './shellPath'
 import { RendererVoice } from './voiceBridge'
 import { createWindow, type WindowHandle } from './window'
@@ -168,6 +172,129 @@ async function pollMedia(): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Pro: the Bench window, and the host the Bench talks to the app through
+ * ------------------------------------------------------------------ */
+
+let pro: ProService | null = null
+let bench: BenchHandle | null = null
+/** Mirrored from Core's speaker, so the bridge can tell "she is talking". */
+let voiceBusy = false
+
+/** The Bench window when it exists; a destroyed one is forgotten, not reused. */
+function benchAlive(): BenchHandle | null {
+  if (bench?.win.isDestroyed()) bench = null
+  return bench
+}
+
+/**
+ * Create the Bench on first open, then keep it. A cockpit that re-spawns on
+ * every bubble click loses the terminal scrollback the human was reading, so
+ * closing it hides it and only quitting destroys it.
+ */
+function ensureBench(): BenchHandle | null {
+  const existing = benchAlive()
+  if (existing) return existing
+  const instance = core
+  if (!instance) return null
+  try {
+    bench = createBenchWindow({
+      geometry: () => instance.config.pro.bench,
+      // Straight to the config file rather than through `updateConfig`: a
+      // resize must not re-merge the agents' hook files or wake Pro's diff.
+      saveGeometry: (geometry) => instance.setBenchGeometry(geometry),
+      onFocusChange: () => pro?.refreshCompanion(),
+      onLoaded: () => pro?.replayFocus(),
+      onClosed: () => {
+        bench = null
+        pro?.refreshCompanion()
+      }
+    })
+  } catch (error) {
+    log('error', 'bench window failed to open', String(error))
+    bench = null
+    return null
+  }
+  return bench
+}
+
+async function pickDirectory(): Promise<string> {
+  try {
+    const options = { properties: ['openDirectory' as const] }
+    const win = handle?.win ?? null
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return ''
+    return result.filePaths[0]
+  } catch (error) {
+    log('warn', 'directory picker failed', String(error))
+    return ''
+  }
+}
+
+/**
+ * Open what the Bench pointed at. `shell.openPath` resolves with an error string
+ * instead of rejecting, and "nothing is registered to open this" still has a
+ * useful fallback: show it in the file manager instead.
+ */
+async function revealPath(target: string): Promise<void> {
+  const clean = String(target || '').trim()
+  if (!clean) return
+  try {
+    const error = await shell.openPath(clean)
+    if (error) {
+      log('warn', `could not open ${clean}`, error)
+      shell.showItemInFolder(clean)
+    }
+  } catch (error) {
+    log('warn', `could not open ${clean}`, String(error))
+  }
+}
+
+/**
+ * Pro's whole authority over the app, in one object. Every callback closes over
+ * module state instead of storing a reference, so a window that is recreated -
+ * or never created - cannot leave the service holding a dead handle.
+ */
+function proHost(instance: Core): ProHost {
+  return {
+    config: () => instance.config,
+    updateConfig: (patch) => instance.updateConfig(patch),
+    // Speech follows the interface when `lang` is auto, as the greeting does.
+    lang: (): Lang => (instance.config.lang === 'auto' ? instance.uiLang() : instance.config.lang),
+    emit: (channel, payload) => {
+      if (proAudience(channel) === 'widget') {
+        send(handle?.win ?? null, channel, payload)
+        return
+      }
+      // `benchAlive`, never `ensureBench`: a projection push while the Bench is
+      // closed is redundant, because opening it re-reads the whole projection
+      // through the `proState` invoke. Creating a window per push would spawn a
+      // hidden renderer for everyone who never opens the Bench.
+      benchAlive()?.send(channel, payload)
+    },
+    bubble: (message) => send(handle?.win ?? null, IPC.pushBubble, message),
+    // `say`, never `force`: a muted companion stays muted, and one hook that
+    // fires twice says one line.
+    speak: (text, lang) => instance.speaker.say(text, lang),
+    speaking: () => voiceBusy,
+    // Appear without taking the keyboard: stealing focus from a terminal in
+    // order to say "a terminal needs you" is worse than not appearing.
+    setWidget: (visible) => (visible ? handle?.show(false) : handle?.hide()),
+    widgetVisible: () => handle?.isVisible() ?? false,
+    benchFocused: () => benchAlive()?.isFocused() ?? false,
+    setBadge: (count) => handle?.setBadge(count),
+    bubbleMs: () => instance.config.bubbleMs,
+    openBench: () => ensureBench()?.show(true),
+    pickDir: () => pickDirectory(),
+    openPath: (target) => {
+      void revealPath(target)
+    },
+    log: (level, message, extra) => log(narrowLogLevel(level), message, extra)
+  }
+}
+
 async function boot(): Promise<void> {
   if (isMac) {
     // Background accessory: no Dock icon, the tray is the chrome.
@@ -193,6 +320,22 @@ async function boot(): Promise<void> {
   const relay = await instance.start()
   log('info', 'relay ready', { port: relay.port, reason: relay.reason, boot: relay.boot })
 
+  // Pro is constructed before the widget exists so a hook that arrives during
+  // startup still has a claimant. `start()` waits for the end of boot, when
+  // there is a window for its first announcement to land in.
+  const service = new ProService({ host: proHost(instance) })
+  pro = service
+  registerProIpc(service)
+  instance.setEventClaim((event) => {
+    // Claimed only when the Bench will actually say something about it: an
+    // event Pro merely logged must still reach her voice and her bubble.
+    const item = service.onHook(event)
+    return item !== null && service.announcesAttention()
+  })
+  instance.addConfigListener(() => {
+    void service.syncConfig()
+  })
+
   registerAssetProtocol()
   // Warm the avatar cache in the background: the first paint then reads from
   // disk, and an offline launch still shows a companion once cached.
@@ -217,7 +360,10 @@ async function boot(): Promise<void> {
       const report = instance.reinstallHooks()
       const ok = report.codex.installed || report.claude.installed
       notify('CodeWaifu', ok ? 'Agent hooks repaired' : `Hook repair failed: ${report.warnings[0] || 'unknown'}`)
-    }
+    },
+    // The Bench reads widget visibility to decide whether an attention item may
+    // pull her onto the screen, so a change has to reach it as it happens.
+    onVisibility: () => pro?.refreshCompanion()
   })
 
   registerIpc(instance, () => handle?.win ?? null, {
@@ -253,6 +399,7 @@ async function boot(): Promise<void> {
   })
 
   instance.addStateListener((speaking, queueLength) => {
+    voiceBusy = speaking
     send(handle?.win ?? null, IPC.pushSpeaking, { speaking, queueLength })
   })
 
@@ -277,6 +424,21 @@ async function boot(): Promise<void> {
 
   // A hook that fires before the renderer is up still deserves a bubble.
   reportRelay()
+
+  // A missing herdr is not a failed boot. Pro degrades to an install card and
+  // she keeps doing the job she did before there was a Bench, so this is the one
+  // startup step whose failure is logged rather than shown to the user.
+  try {
+    await service.start()
+    const target = service.herdrTarget
+    log('info', 'pro ready', {
+      online: service.online(),
+      herdr: target.binaryPath ?? 'missing',
+      reason: target.reason
+    })
+  } catch (error) {
+    log('error', 'pro failed to start', String(error))
+  }
 }
 
 async function main(): Promise<void> {
@@ -326,6 +488,12 @@ async function main(): Promise<void> {
     globalShortcut.unregisterAll()
     if (mediaTimer) clearInterval(mediaTimer)
     rendererVoice?.shutdown()
+    // Pro goes first: it dismisses the bubbles it issued, and a bubble offering
+    // "approve" for a pane that is already gone is a lie with a click target.
+    pro?.shutdown()
+    pro = null
+    bench?.destroy()
+    bench = null
     core?.shutdown()
     closeLog()
   })

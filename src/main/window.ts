@@ -32,6 +32,12 @@ export interface WindowHandlers {
   isMuted: () => boolean
   onToggleMute: () => void
   onReinstallHooks: () => void
+  /**
+   * The widget appeared or went away, from any path: tray, hotkey, `hide` IPC,
+   * or a window manager doing it behind our back. Pro's summon policy reads
+   * visibility, so the Bench has to hear when it changes rather than poll it.
+   */
+  onVisibility?: (visible: boolean) => void
 }
 
 export interface WindowHandle {
@@ -324,6 +330,11 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
       log('warn', 'setShape failed', String(error))
     }
   }
+
+  // Bound to the window's own events, not to our show/hide helpers, so a
+  // visibility change we did not cause still reaches the listeners.
+  win.on('show', () => handlers.onVisibility?.(true))
+  win.on('hide', () => handlers.onVisibility?.(false))
 
   const show = (focus: boolean): void => {
     if (!win.isDestroyed()) {

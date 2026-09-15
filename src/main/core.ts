@@ -389,13 +389,39 @@ export class Core {
     this.config = writeConfig({ ...this.config, window: { x, y } })
   }
 
+  /**
+   * Same rule as `setWindowPosition`, for the Bench frame: a drag or a resize
+   * settles into a config write that must not re-merge the agents' hook files,
+   * touch the relay, or wake Pro's config diff. Geometry is not behaviour.
+   */
+  setBenchGeometry(geometry: { width: number; height: number; x: number; y: number }): void {
+    const bench = {
+      width: Math.round(geometry.width),
+      height: Math.round(geometry.height),
+      x: Math.round(geometry.x),
+      y: Math.round(geometry.y)
+    }
+    const current = this.config.pro.bench
+    if (
+      current.width === bench.width &&
+      current.height === bench.height &&
+      current.x === bench.x &&
+      current.y === bench.y
+    ) {
+      return
+    }
+    this.config = writeConfig({ ...this.config, pro: { ...this.config.pro, bench } })
+  }
+
   ingest(event: HookEvent): void {
     this.tracker.record(event)
     let plan = planEvent(this.config, event)
-    // The Bench may own this event's announcement. The plan keeps its text and
-    // its place in the log, so the history still reads as a sentence; only the
-    // two side effects that would double up are dropped.
-    if ((plan.speak || plan.popWindow) && this.claimEvent(event)) {
+    // The claimant sees *every* event, not only one we were about to speak for:
+    // activity events are what clear a stall timer, and the ledger is written
+    // from the same call. The claim only decides who announces it. The plan
+    // keeps its text and its place in the log either way, so the history still
+    // reads as a sentence; only the side effects that would double up go.
+    if (this.claimEvent(event) && (plan.speak || plan.popWindow)) {
       plan = { ...plan, speak: false, popWindow: false }
     }
     this.events.push(plan)
