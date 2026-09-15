@@ -135,6 +135,14 @@ iex "& { $(irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/m
 - `-Uninstall [-Purge]` removes the hooks (agent configs are backed up first)
   and, with `-Purge`, the app.
 
+Verified how far: CI on `windows-latest` runs the full test suite - including
+twelve end-to-end `install.ps1` scenarios against a stubbed release feed - and
+then smoke-tests the packaged binary headlessly (`--cli help`,
+`--cli status --json`). Pasting the bash one-liner into Git Bash gets you the
+PowerShell line back instead of `unsupported platform: MINGW64_NT-...`. What CI
+cannot see is a real desktop session: the tray icon, click-through, the
+SmartScreen prompt and voice output still want one manual pass.
+
 ### Or install it from inside your agent
 
 Claude Code, as a plugin:

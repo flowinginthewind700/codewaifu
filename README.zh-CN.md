@@ -120,6 +120,13 @@ iex "& { $(irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/m
 - `-Uninstall [-Purge]` 移除 hook(会先备份 agent 配置),加 `-Purge` 连应用
   一起删。
 
+验证到哪一步:windows-latest 上的 CI 每次都跑完整测试(含 12 个针对
+`install.ps1` 的端到端场景,发布源是打桩的),再对打包出来的 exe 做无头自测
+(`--cli help`、`--cli status --json`)。把 bash 那行安装命令粘进 Git Bash,
+得到的是 PowerShell 的正确写法,而不是 `unsupported platform: MINGW64_NT-...`。
+CI 看不到的是真实桌面会话:托盘图标、点击穿透、SmartScreen 提示与语音输出,
+还需要在一台 Windows 机器上手工过一遍。
+
 ### 或者在 agent 里一句话安装
 
 Claude Code,作为插件:
