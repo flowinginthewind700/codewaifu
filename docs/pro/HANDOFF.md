@@ -1,6 +1,6 @@
 # Pro handoff
 
-`main` @ `482782e` - typecheck, 705 tests and `electron-vite build` all green on
+`main` @ `18fe279` - typecheck, 753 tests and `electron-vite build` all green on
 Linux (Ubuntu, node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built
 for but not yet run.
 
@@ -40,6 +40,23 @@ herdr discovery order, in `src/main/pro/herdr/discovery.ts`: `pro.socketPath` /
 `HERDR_SOCKET_PATH`, then `pro.herdrSession` / `HERDR_SESSION`, then
 `~/.config/herdr[/sessions/<name>]/herdr.sock`, then a Windows named pipe. With no
 herdr on the machine the Bench degrades to an install card rather than failing.
+Discovery never wildcards `sessions/`: an empty or whitespace `pro.herdrSession`
+falls through to `HERDR_SESSION`, while a config value that names something
+(including the literal `default`) wins over the environment. On this box dev also
+needs `ELECTRON_DISABLE_SANDBOX=1`, and the relay plus `/pro/*` only start in the
+instance that owns `~/.codewaifu/endpoint.env` - with the installed companion
+running, a dev run logs `another CodeWaifu is already running; relay not started`,
+so quit the installed app first when F6 is what you are verifying. Dev builds take
+a `-dev` suffix on `userData` so they can sit next to the installed app; config and
+Pro state stay in `~/.codewaifu` unless `CODEWAIFU_HOME` points elsewhere.
+
+Pixels are not obtainable on this machine: GNOME's Screenshot D-Bus answers
+`AccessDenied` to us, and `import`/`xwd` return blank pixmaps for Electron windows
+under mutter. Verify the Bench over CDP instead: `npm run dev --
+--remote-debugging-port=9229`, then `curl -s 127.0.0.1:9229/json/list` for the
+`CodeWaifu Pro` target and `Runtime.evaluate` against its DOM. That is how the two
+blank-frame renderer crashes in section 4 were found, and it is the cheapest way to
+see the pane grid after touching renderer code.
 
 ## 3. Gates
 
@@ -77,6 +94,16 @@ WebGL rendering with a DOM fallback on context loss, links out to the OS browser
 through a scheme allow-list, OSC 52, copy/paste chords that never claim Ctrl+C, a
 bell light in the pane header, and scrollback search with a match counter
 (`Ctrl+Shift+F`, `Cmd+F` on macOS).
+
+The renderer has no error boundary and no tests of its own, so a throw inside a
+mount effect unmounts the tree and the window is a blank frame while the main log
+stays clean. Two crashes shipped that way and were found only over CDP:
+`shared/lang.ts` reading `process.env` in a module the bench imports, and `Pane.tsx`
+constructing the terminal with `allowProposedApi: false` before loading the
+Unicode11 addon, which is a proposed API. Both are fixed; the lang one is pinned by
+a test that deletes `globalThis.process`, and the pane grid was verified live over
+CDP against a running herdr session (one pane, task list, attention queue and
+recovery panel all rendering).
 
 ## 5. Settled decisions
 
@@ -122,23 +149,28 @@ without reading those first.
 
 ## 6. Known gaps, in the order they should be taken
 
-1. **Free-text answers from the widget.** F7's "answer" and "reprompt" paths take
+1. **A renderer crash is a blank frame.** No error boundary and no renderer
+   tests, so a mount-time throw leaves an empty window and a clean main log; see
+   section 4 for the two that shipped and section 2 for the CDP recipe that sees
+   the Bench without pixels. The smallest fix is an error boundary that prints the
+   message in-window; the real one is a Playwright smoke that mounts `pro.html`.
+2. **Free-text answers from the widget.** F7's "answer" and "reprompt" paths take
    a fixed verb; typing a real sentence into a bubble was deliberately deferred.
    The plumbing (`AttentionAction`, `agent.send_keys`) is there.
-2. **No e2e smoke for the Bench.** Phase 3 in MVP.md asks for "manual + e2e
+3. **No e2e smoke for the Bench.** Phase 3 in MVP.md asks for "manual + e2e
    smoke". There is no Playwright in this repo yet; the widget has none either.
-3. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
+4. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
    renderer has a fallback path for a lost context and for no WebGL at all, but
    neither the memory claim nor the fallback has been observed on real hardware.
-4. **Pane-level spawn failures show raw errno.** Discovery explains a missing
+5. **Pane-level spawn failures show raw errno.** Discovery explains a missing
    herdr in prose, but a bridge whose `spawn` throws ENOENT surfaces
    `spawn ... ENOENT` in the pane header tooltip.
-5. **Timing flake.** One full-suite run in about six showed a single failure in
+6. **Timing flake.** One full-suite run in about six showed a single failure in
    `steer` or `matchaVoice`; both do real waiting and neither reproduced on
    rerun. Worth converting to a fake clock if it recurs.
-6. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
+7. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
    never mention Pro. No screenshot of the Bench.
-7. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
+8. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
    tray (a long `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench
    window, and voice-runtime packaging via `npm run dist:mac`. The Cmd/Ctrl chord
    table itself is pure and tested on both.
@@ -159,5 +191,14 @@ without reading those first.
   WebGL 渲染与降级、链接走系统浏览器、OSC 52 剪贴板、复制粘贴不抢 Ctrl+C、
   响铃指示、输出内搜索 Ctrl+Shift+F / macOS 上 Cmd+F），并修掉一个真 bug：
   resync 之后桥接进程会以每秒 4 次的速度无限重启。
-- 还没做：浮窗里的自由文本回答、Bench 的 e2e、连续一小时高输出的内存实测、README
-  里的 Pro 章节、macOS 实机验证。
+- 命名会话：discovery 不猜会话名。`pro.herdrSession` 留空（或纯空白）时落到环境变量
+  `HERDR_SESSION`；配置里写了名字（包括字面 `default`）就以配置为准。
+- 这台机器上 dev 要加 `ELECTRON_DISABLE_SANDBOX=1`；正式版 companion 在跑时 dev 不起
+  relay（`endpoint.env` 被占），要验 F6 先退正式版。
+- 截图在这台机器拿不到：GNOME 的 Screenshot D-Bus 回 `AccessDenied`，`import`/`xwd`
+  对 Electron 窗口只给空白像素。验 Bench 走 CDP：`npm run dev --
+  --remote-debugging-port=9229`，对 `CodeWaifu Pro` 这个 target 做 `Runtime.evaluate`。
+  两个白屏 renderer 崩溃（shared/lang.ts 读 `process.env`、Pane 的 `allowProposedApi`）
+  就是这么抓到的，现已修复；pane 网格对着真实 herdr 会话验过渲染。
+- 还没做：renderer 的错误边界与 e2e、浮窗里的自由文本回答、连续一小时高输出的内存
+  实测、README 里的 Pro 章节、macOS 实机验证。
