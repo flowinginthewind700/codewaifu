@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { confirmDelivery, isActive, type Resolver } from '../src/main/delivery'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { confirmDelivery, isActive, POLL_MS, type Resolver } from '../src/main/delivery'
 import { NEEDLE_CHARS, deliveryFound, jsonNeedle } from '../src/shared/steer'
 
 // ============================================================
@@ -121,40 +121,67 @@ describe('isActive', () => {
 })
 
 describe('confirmDelivery', () => {
+  // These used to measure wall-clock (`expect(elapsed).toBeLessThan(40)`), which
+  // goes red on a loaded box for a reason that has nothing to do with the code:
+  // a full-suite run is 16 files in parallel plus a native synthesis in the next
+  // directory, and 40ms of scheduler latency is nothing there. What the two
+  // assertions actually mean is "no poll happened", and a fake clock says that
+  // exactly - no timer scheduled, no time advanced - and says it the same way
+  // every run.
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('confirms a message that is already in the transcript', async () => {
     write([metaRow(), userRow('PING-RUNNING-EXEC')])
     await expect(confirmDelivery('codex', THREAD, 'PING-RUNNING-EXEC', 500, resolve)).resolves.toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('waits for the row to be appended', async () => {
     write([metaRow()])
-    const landed = setTimeout(() => append([userRow('queued steer')]), 400)
-    const found = await confirmDelivery('codex', THREAD, 'queued steer', 3000, resolve)
-    clearTimeout(landed)
-    expect(found).toBe(true)
+    setTimeout(() => append([userRow('queued steer')]), 400)
+    const found = confirmDelivery('codex', THREAD, 'queued steer', 3000, resolve)
+    // Two poll intervals past the append, so the poll that follows it must see
+    // the row no matter what POLL_MS is set to.
+    await vi.advanceTimersByTimeAsync(400 + POLL_MS * 2)
+    await expect(found).resolves.toBe(true)
   })
 
   it('gives up on a session that never reads the queue', async () => {
     write([metaRow(), userRow('something else')])
     const started = Date.now()
     // The real bug: exit 0, row written to queued_items, nothing in the rollout.
-    await expect(confirmDelivery('codex', THREAD, 'PING-RUNNING-EXEC', 700, resolve)).resolves.toBe(false)
+    const verdict = confirmDelivery('codex', THREAD, 'PING-RUNNING-EXEC', 700, resolve)
+    await vi.advanceTimersByTimeAsync(700 + POLL_MS)
+    await expect(verdict).resolves.toBe(false)
     expect(Date.now() - started).toBeGreaterThanOrEqual(700)
   })
 
   it('is false immediately when the thread has no transcript', async () => {
-    const started = Date.now()
     const missing: Resolver = () => null
-    await expect(confirmDelivery('codex', THREAD, 'hello', 0, missing)).resolves.toBe(false)
-    expect(Date.now() - started).toBeLessThan(200)
+    const verdict = confirmDelivery('codex', THREAD, 'hello', 0, missing)
+    // Asserted before the await on purpose: a poll that should not exist leaves
+    // the promise unsettled under a fake clock, so awaiting first turns a precise
+    // "you armed a timer" into a five-second timeout that names nothing.
+    expect(vi.getTimerCount()).toBe(0)
+    await expect(verdict).resolves.toBe(false)
   })
 
   it('does not wait at all on a zero timeout', async () => {
     write([metaRow()])
     const landed = setTimeout(() => append([userRow('too late')]), 50)
     const started = Date.now()
-    await expect(confirmDelivery('codex', THREAD, 'too late', 0, resolve)).resolves.toBe(false)
-    expect(Date.now() - started).toBeLessThan(40)
+    const verdict = confirmDelivery('codex', THREAD, 'too late', 0, resolve)
+    // The row is still 50ms away and the clock never moved: the deadline is
+    // checked before the first sleep, so a zero timeout costs one file read.
+    expect(vi.getTimerCount()).toBe(1)
+    await expect(verdict).resolves.toBe(false)
+    expect(Date.now() - started).toBe(0)
     clearTimeout(landed)
   })
 })
