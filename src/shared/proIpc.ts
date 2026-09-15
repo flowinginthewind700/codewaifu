@@ -391,7 +391,10 @@ export type ProRecoveryParse = ProRecoveryRequest | ProReject
 export function parseProRecovery(payload: unknown): ProRecoveryParse {
   const raw = record(payload)
   const op = str(raw.op, 20).trim().toLowerCase() || 'plans'
-  if (op === 'plans' || op === 'applyAll') return { op }
+  // Compared folded, returned canonical: `op` is lower-cased above, so a
+  // camelCase comparison can never match. See parseProHost.
+  if (op === 'plans') return { op }
+  if (op === 'applyall') return { op: 'applyAll' }
   if (op !== 'apply' && op !== 'handoff' && op !== 'reprompt') {
     return reject('bad-op', `unknown recovery op ${str(raw.op, 20)}`)
   }
@@ -480,19 +483,53 @@ export type ProHostRequest =
   | { op: 'agents' }
   | { op: 'pickDir' }
   | { op: 'openPath'; path: string }
+  | { op: 'openExternal'; url: string }
 
 export type ProHostParse = ProHostRequest | ProReject
 
+/**
+ * What a terminal link is allowed to be. Pane output is the one thing in this
+ * app that is not ours: an agent prints any string it likes, and
+ * `shell.openExternal` hands it straight to the OS. A `file:` URL would read
+ * local state through whatever browser is registered, and a vendor scheme would
+ * launch whatever claimed it, so the list stays short and closed.
+ */
+const EXTERNAL_SCHEME = /^(?:https?:|mailto:)/i
+
+/**
+ * Fold the op to lower case for tolerance, then return the canonical literal.
+ *
+ * The fold and the comparison used to disagree: `op` was lower-cased and then
+ * tested against `pickDir` and `openPath`, so every camelCase host op fell
+ * through to `bad-op`. The renderer's "choose directory" and "open folder"
+ * buttons were dead on arrival and reported it as an unknown verb, which reads
+ * like a version mismatch rather than a typo. Comparing on the folded form and
+ * returning the literal the service switches on keeps one spelling per side.
+ */
 export function parseProHost(payload: unknown): ProHostParse {
   const raw = record(payload)
   const op = str(raw.op, 20).trim().toLowerCase() || 'discovery'
-  if (op === 'discovery' || op === 'agents' || op === 'pickDir') return { op }
-  if (op === 'openPath') {
-    const target = str(raw.path, 400).trim()
-    if (!target) return reject('bad-payload', 'path is required')
-    return { op, path: target }
+  switch (op) {
+    case 'discovery':
+    case 'agents':
+      return { op }
+    case 'pickdir':
+      return { op: 'pickDir' }
+    case 'openpath': {
+      const target = str(raw.path, 400).trim()
+      if (!target) return reject('bad-payload', 'path is required')
+      return { op: 'openPath', path: target }
+    }
+    case 'openexternal': {
+      const url = str(raw.url, 2000).trim()
+      if (!EXTERNAL_SCHEME.test(url)) {
+        return reject('bad-payload', 'only http, https and mailto links open')
+      }
+      return { op: 'openExternal', url }
+    }
+    default:
+      return reject('bad-op', `unknown host op ${str(raw.op, 20)}`)
   }
-  return reject('bad-op', `unknown host op ${str(raw.op, 20)}`)
 }
 
 /* ------------------------------------------------------------------ *
@@ -531,12 +568,15 @@ export function parseBenchCommand(payload: unknown): ProCommandParse {
   const raw = record(payload)
   const type = str(raw.type ?? raw.op, 20).trim().toLowerCase()
   switch (type) {
-    case 'openBench':
+    // Same rule as parseProHost: `type` is folded, so the labels are folded
+    // and the values returned stay canonical. The short aliases are kept
+    // because a widget author typing 'open' is not a protocol violation.
+    case 'openbench':
     case 'open':
       return { type: 'openBench' }
-    case 'snoozeAll':
+    case 'snoozeall':
       return { type: 'snoozeAll', minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240) }
-    case 'focusTask':
+    case 'focustask':
     case 'focus': {
       const taskId = taskIdOf(raw.taskId)
       if (!taskId) return reject('bad-task', 'taskId is required')

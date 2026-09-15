@@ -1,0 +1,251 @@
+/**
+ * The verbs that cross from the widget and the Bench toolbar into the service.
+ *
+ * These parsers fold the incoming verb to lower case and then compare it, so
+ * the literals in the tests below are spelled exactly the way the call sites
+ * spell them (`App.tsx` sends `focusTask`, `api.ts` sends `snoozeAll`,
+ * `Bench.tsx` sends `applyAll`). That is deliberate: a parser that compares a
+ * folded verb against a camelCase label rejects every one of them with
+ * `bad-op`, which reads like a version mismatch rather than a dead button.
+ */
+import { describe, expect, it } from 'vitest'
+import {
+  isProReject,
+  parseBenchCommand,
+  parseProRecovery,
+  paneIdOf,
+  taskIdOf
+} from '../src/shared/proIpc'
+import { DEFAULT_SNOOZE_MINUTES } from '../src/shared/pro'
+import type { BenchCommand } from '../src/shared/companionLink'
+
+function command(payload: unknown): BenchCommand {
+  const result = parseBenchCommand(payload)
+  if (isProReject(result)) {
+    throw new Error(`expected a command, got ${result.code}: ${result.error}`)
+  }
+  return result
+}
+
+function refusedCommand(payload: unknown): string {
+  const result = parseBenchCommand(payload)
+  if (!isProReject(result)) throw new Error(`expected a rejection, got ${JSON.stringify(result)}`)
+  return result.code
+}
+
+describe('parseBenchCommand', () => {
+  it('accepts the openBench the widget sends', () => {
+    expect(command({ type: 'openBench' })).toEqual({ type: 'openBench' })
+  })
+
+  it('accepts the focusTask the widget sends, with and without a pane', () => {
+    expect(command({ type: 'focusTask', taskId: 'task-1' })).toEqual({
+      type: 'focusTask',
+      taskId: 'task-1'
+    })
+    expect(command({ type: 'focusTask', taskId: 'task-1', paneId: 'pane-3' })).toEqual({
+      type: 'focusTask',
+      taskId: 'task-1',
+      paneId: 'pane-3'
+    })
+  })
+
+  it('accepts the snoozeAll the Bench toolbar sends', () => {
+    expect(command({ type: 'snoozeAll', minutes: 30 })).toEqual({
+      type: 'snoozeAll',
+      minutes: 30
+    })
+  })
+
+  it('defaults snooze minutes rather than snoozing for zero of them', () => {
+    expect(command({ type: 'snoozeAll' })).toEqual({
+      type: 'snoozeAll',
+      minutes: DEFAULT_SNOOZE_MINUTES
+    })
+  })
+
+  const minutes: [number, number][] = [
+    [0, 1],
+    [-15, 1],
+    [9999, 240]
+  ]
+
+  it.each(minutes)('clamps %s snooze minutes to %s', (input, expected) => {
+    expect(command({ type: 'snoozeAll', minutes: input })).toEqual({
+      type: 'snoozeAll',
+      minutes: expected
+    })
+  })
+
+  it('truncates a fractional minute count rather than rounding it', () => {
+    // The parser floors with int(); resolveCommand is the layer that rounds.
+    // Neither is wrong, but a bubble asking for 12.6 minutes gets 12 here,
+    // and pinning the wrong one makes the two layers look interchangeable.
+    expect(command({ type: 'snoozeAll', minutes: 12.6 })).toEqual({
+      type: 'snoozeAll',
+      minutes: 12
+    })
+  })
+
+  it('keeps the short aliases, since a widget author is not a protocol', () => {
+    expect(command({ type: 'open' })).toEqual({ type: 'openBench' })
+    expect(command({ type: 'focus', taskId: 'task-1' })).toEqual({
+      type: 'focusTask',
+      taskId: 'task-1'
+    })
+  })
+
+  it('reads op as a synonym for type', () => {
+    expect(command({ op: 'openBench' })).toEqual({ type: 'openBench' })
+  })
+
+  it('accepts an act carrying everything it needs', () => {
+    expect(
+      command({ type: 'act', itemId: 'i-1', taskId: 'task-1', action: 'approve', paneId: 'pane-3' })
+    ).toEqual({
+      type: 'act',
+      action: 'approve',
+      itemId: 'i-1',
+      taskId: 'task-1',
+      paneId: 'pane-3',
+      text: ''
+    })
+  })
+
+  it('refuses an act with a missing itemId, taskId or action', () => {
+    expect(refusedCommand({ type: 'act', taskId: 't', action: 'approve' })).toBe('bad-payload')
+    expect(refusedCommand({ type: 'act', itemId: 'i', action: 'approve' })).toBe('bad-task')
+    expect(refusedCommand({ type: 'act', itemId: 'i', taskId: 't' })).toBe('bad-action')
+    expect(refusedCommand({ type: 'act', itemId: 'i', taskId: 't', action: 'sidestep' })).toBe(
+      'bad-action'
+    )
+  })
+
+  it('refuses an answer with nothing in it', () => {
+    expect(
+      refusedCommand({ type: 'act', itemId: 'i', taskId: 't', action: 'answer', text: '   ' })
+    ).toBe('needs-text')
+    expect(
+      command({ type: 'act', itemId: 'i', taskId: 't', action: 'answer', text: ' yes ' })
+    ).toMatchObject({ action: 'answer', text: 'yes' })
+  })
+
+  it('has no input verb, so the widget is never a second keyboard', () => {
+    // MVP section 9. A companion that can type into a pane can run anything the
+    // human could run, and she is reachable from a bubble over untrusted text.
+    expect(refusedCommand({ type: 'input', taskId: 't', paneId: 'p', text: 'rm -rf /' })).toBe(
+      'bad-op'
+    )
+    expect(refusedCommand({ type: 'keys', taskId: 't', paneId: 'p' })).toBe('bad-op')
+  })
+
+  it('names the command it refused', () => {
+    const result = parseBenchCommand({ type: 'launchTheRockets' })
+    expect(isProReject(result)).toBe(true)
+    if (isProReject(result)) {
+      expect(result.code).toBe('bad-op')
+      expect(result.error).toContain('launchTheRockets')
+    }
+  })
+
+  it('refuses a focus with no usable task id', () => {
+    expect(refusedCommand({ type: 'focusTask' })).toBe('bad-task')
+    expect(refusedCommand({ type: 'focusTask', taskId: '../evil' })).toBe('bad-task')
+  })
+
+  it('drops a pane id it cannot use rather than failing the whole command', () => {
+    // A stale bubble pointing at a pane that no longer parses should still
+    // route to the task; losing the pane is a degradation, not an error.
+    expect(command({ type: 'focusTask', taskId: 'task-1', paneId: '../../etc' })).toEqual({
+      type: 'focusTask',
+      taskId: 'task-1'
+    })
+  })
+})
+
+describe('parseProRecovery', () => {
+  const empty: unknown[] = [{}, { op: '' }, null, undefined]
+
+  it.each(empty)('defaults %j to plans', (payload) => {
+    expect(parseProRecovery(payload)).toEqual({ op: 'plans' })
+  })
+
+  it('accepts the applyAll the recovery panel sends', () => {
+    expect(parseProRecovery({ op: 'applyAll' })).toEqual({ op: 'applyAll' })
+  })
+
+  it.each(['apply', 'handoff', 'reprompt'])('carries the taskId for %s', (op) => {
+    expect(parseProRecovery({ op, taskId: 'task-1' })).toEqual({ op, taskId: 'task-1' })
+  })
+
+  it('reads id as a synonym for taskId', () => {
+    expect(parseProRecovery({ op: 'apply', id: 'task-1' })).toEqual({
+      op: 'apply',
+      taskId: 'task-1'
+    })
+  })
+
+  const missingTask: unknown[] = [
+    { op: 'apply' },
+    { op: 'handoff', taskId: '   ' },
+    { op: 'reprompt', taskId: '../evil' },
+    { op: 'apply', taskId: 'has space' },
+    { op: 'apply', taskId: 42 }
+  ]
+
+  it.each(missingTask)('refuses %j for want of a usable task id', (payload) => {
+    const result = parseProRecovery(payload)
+    expect(isProReject(result)).toBe(true)
+    if (isProReject(result)) expect(result.code).toBe('bad-task')
+  })
+
+  it('names the op it refused', () => {
+    const result = parseProRecovery({ op: 'rebuildEverything' })
+    expect(isProReject(result)).toBe(true)
+    if (isProReject(result)) {
+      expect(result.code).toBe('bad-op')
+      expect(result.error).toContain('rebuildEverything')
+    }
+  })
+})
+
+describe('the id gates', () => {
+  const goodIds = ['a', 'task-1', 'T_2.3', 'x'.repeat(64)]
+  const badIds = ['', '   ', '../evil', 'a/b', 'has space', '/abs', 'x'.repeat(65), null, 42]
+
+  it.each(goodIds)('taskIdOf keeps %j', (id) => {
+    expect(taskIdOf(id)).toBe(id)
+  })
+
+  it.each(badIds)('taskIdOf refuses %j', (id) => {
+    // These end up in a filename and in a spawned argv, so the gate is the only
+    // thing standing between a payload and tasks/../config.json.
+    expect(taskIdOf(id)).toBe('')
+  })
+
+  it('taskIdOf refuses a colon, which paneIdOf allows', () => {
+    // The two charsets differ on purpose: a task id becomes a filename, a pane
+    // id is herdr's own and may carry a colon. Sharing one regex would either
+    // let ':' into a path or reject every herdr pane.
+    expect(taskIdOf('pane:3')).toBe('')
+    expect(paneIdOf('pane:3')).toBe('pane:3')
+  })
+
+  it.each(['pane-3', 'pane:3', 'a'.repeat(120)])('paneIdOf keeps %j', (id) => {
+    expect(paneIdOf(id)).toBe(id)
+  })
+
+  it.each(['../evil', 'a/b', '', null])('paneIdOf refuses %j', (id) => {
+    expect(paneIdOf(id)).toBe('')
+  })
+
+  it('paneIdOf truncates an over-long id to the charset maximum', () => {
+    // str() clips at 120 and the regex admits exactly 120, so a longer id is
+    // shortened rather than refused. That is not a traversal risk - the
+    // charset has no separators - and a shortened id simply matches no pane,
+    // which focusTask already degrades to by dropping the pane. Pinned here
+    // so the asymmetry with taskIdOf reads as a decision, not an oversight.
+    expect(paneIdOf('a'.repeat(121))).toBe('a'.repeat(120))
+    expect(taskIdOf('x'.repeat(65))).toBe('')
+  })
+})
