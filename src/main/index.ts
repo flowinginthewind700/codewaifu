@@ -5,7 +5,7 @@ import type { BubbleMessage } from '../shared/ui'
 import { systemLangFromLocales } from '../shared/lang'
 import { LIVE2D_KEEP_URLS } from '../shared/live2dCatalog'
 import { prewarmAssets, registerAssetProtocol, registerAssetScheme } from './assets'
-import { runCli } from './cli'
+import { cliArgsFrom, runCli } from './cli'
 import { Core } from './core'
 import { isLinux, isMac } from './env'
 import { IPC, registerIpc, send } from './ipc'
@@ -24,12 +24,12 @@ import { APP_USER_MODEL_ID, chromiumSwitches, logSandboxState } from '../shared/
 /**
  * One binary, two entry points. `CodeWaifu --cli install` is what `install.sh`
  * calls, so all hook-merging lives in tested TypeScript instead of being
- * reimplemented in shell; without the flag we boot the companion window.
+ * reimplemented in shell; `codewaifu pro <verb>` drives the bench and needs no
+ * flag at all. Anything else boots the companion window.
  */
-const CLI_FLAG = '--cli'
-const cliAt = process.argv.indexOf(CLI_FLAG)
-const cliMode = cliAt >= 0
-const cliArgs = cliAt >= 0 ? process.argv.slice(cliAt + 1) : []
+const cli = cliArgsFrom(process.argv)
+const cliMode = cli.cli
+const cliArgs = cli.args
 
 const MEDIA_POLL_MS = 4000
 

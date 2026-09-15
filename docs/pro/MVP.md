@@ -162,6 +162,12 @@
  intent and to unblock each other. The same `ProService` object backs the GUI, the HTTP API
  and the companion, so there is exactly one authority for "what needs me".
 
+ Those rails now carry a third surface: `codewaifu pro <verb>` (F8, `shared/proCli.ts` +
+ `main/pro/cli.ts`) is the same routes with argv in front and ASCII out, so a shell alias,
+ a cron job and an agent can read and unblock the bench with no window open. Exit codes
+ mirror the relay's status classes; there is no `send-keys`, and `pro recovery` is
+ read-only because applying a plan is recorded with `source: 'gui'` provenance.
+
 ### F7 — Companion link: the widget and the bench are one product
  Two-way, by design, and the only feature here that no multiplexer can grow into.
 
@@ -243,7 +249,7 @@ one.
  | Phase | Deliverable | Verifiable without a GUI |
  |-------|-------------|--------------------------|
  | 0 | herdr installed, fixtures recorded, docs, repo hygiene | yes |
- | 1 | `pro/herdr/*`: discovery, socket client, snapshot cache, event stream, terminal bridge | yes — CLI `pro state`, unit tests |
+| 1 | `pro/herdr/*`: discovery, socket client, snapshot cache, event stream, terminal bridge | yes — the `codewaifu pro` verb family, unit tests, and three e2e cases that spawn the built CLI |
  | 2 | ledger + recovery planner + triage engine | yes — pure functions + tests |
  | 3 | Bench window: tree, attention bar, task card, xterm pane grid, IPC, config | manual + e2e smoke (`npm run test:e2e`) |
  | 4 | companion link (F7) + `/pro/*` HTTP API + agent skill | yes — the bridge is pure translation over `ProService`, unit-testable with a fake window handle |

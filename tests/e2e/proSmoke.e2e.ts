@@ -13,6 +13,7 @@
  * roughly twenty seconds. Run it with `npm run test:e2e`.
  */
 import fs from 'node:fs'
+import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -242,6 +243,51 @@ describe('the built Bench', () => {
   })
 })
 
+describe('the built CLI', () => {
+  /*
+   * The same argument as the bundle, one layer out.
+   *
+   * `tests/proCli.test.ts` calls `runProCli` in-process against a fake relay,
+   * so it cannot see a built main that never routes argv to the CLI, an
+   * endpoint file another build wrote, or a `fs.writeSync` that lands nowhere.
+   * This spawns the packaged entry point the way `~/.local/bin/codewaifu` does
+   * after `install.sh`, and reads what a terminal would read.
+   */
+  it('prints the tree the window is showing', async () => {
+    const run = await builtCli(['pro', 'state'])
+    expect(run.code, run.diag).toBe(0)
+    expect(run.out).toContain(TASK_TITLE)
+    // Whole, because it is what every other verb takes as an argument.
+    expect(run.out).toContain(TASK_ID)
+  })
+
+  it('prints the recovery tab, so a reboot is visible with no window open', async () => {
+    const run = await builtCli(['pro', 'recovery'])
+    expect(run.code, run.diag).toBe(0)
+    // The seeded task has no pane, no workspace and no session id: intent only,
+    // which is the one case the queue cannot see and the terminal has to.
+    expect(run.out).toContain('1 task needs recovery')
+    expect(run.out).toContain('lost')
+    expect(run.out).toContain(TASK_ID)
+    // And `pro state` says the same number, or the two verbs disagree about
+    // the same projection.
+    const state = await builtCli(['pro', 'state'])
+    expect(state.out).toContain('1 task needs recovery   # codewaifu pro recovery')
+  })
+
+  it('exits 3 rather than hanging when there is no app to talk to', async () => {
+    // The code a cron job polls on: "nobody home" is a state, not a fault.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-e2e-nohome-'))
+    try {
+      const run = await builtCli(['pro', 'state'], empty)
+      expect(run.code, run.diag).toBe(3)
+      expect(run.err).toContain('not running')
+    } finally {
+      fs.rmSync(empty, { recursive: true, force: true })
+    }
+  })
+})
+
 function seedTask(dir: string, now: number): TaskRecord {
   return {
     id: TASK_ID,
@@ -262,6 +308,58 @@ function seedTask(dir: string, now: number): TaskRecord {
     updatedAt: now,
     parkedAt: 0
   }
+}
+
+interface CliRun {
+  code: number
+  out: string
+  err: string
+  /** The whole failure, for the assertion message: an exit code alone is not. */
+  diag: string
+}
+
+/**
+ * Run the built entry point as a terminal would: `electron <repo> pro state`.
+ *
+ * Its own `CODEWAIFU_HOME` unless the caller says otherwise, so the "nobody
+ * home" case can point at a directory with no endpoint file in it.
+ */
+function builtCli(args: string[], homeOverride?: string): Promise<CliRun> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value
+  }
+  env.CODEWAIFU_HOME = homeOverride ?? home
+  env.ELECTRON_DISABLE_SANDBOX = '1'
+  env.CODEWAIFU_E2E = '1'
+  delete env.ELECTRON_RENDERER_URL
+  return new Promise((resolve, reject) => {
+    const child = spawn(require('electron') as string, [root, ...args], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    const out: string[] = []
+    const err: string[] = []
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => out.push(chunk))
+    child.stderr.on('data', (chunk: string) => err.push(chunk))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      const stdout = out.join('')
+      const stderr = err.join('')
+      resolve({
+        code: code ?? -1,
+        out: stdout,
+        err: stderr,
+        diag: [
+          `exit=${code}`,
+          `stdout=${JSON.stringify(stdout.slice(0, 700))}`,
+          `stderr=${JSON.stringify(stderr.slice(-400))}`
+        ].join(' ')
+      })
+    })
+  })
 }
 
 /** The Bench window, by document. The widget is `index.html`; this is `pro.html`. */

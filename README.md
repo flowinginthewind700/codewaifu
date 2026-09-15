@@ -250,6 +250,40 @@ hook merging:
 
 Every command accepts `--json` for scripting.
 
+### The bench from a terminal
+
+The same binary drives Pro, so a shell alias, a cron job and an agent can read
+the bench without a window open. On Linux the installer puts `codewaifu` in
+`~/.local/bin`; on the other platforms, use the packaged binary with `--cli` in
+front of everything below.
+
+```bash
+codewaifu pro                        # the verb table
+codewaifu pro state                  # the tree: groups, tasks, live states, what needs you
+codewaifu pro attention              # the ranked queue, with the ids an answer needs
+codewaifu pro answer <id> "yes, go ahead"
+codewaifu pro approve <id>           # or deny <id>, or snooze <id> --minutes 30
+codewaifu pro new "fix the flaky test" --dir ~/dev/thing --agent codex
+codewaifu pro recovery               # what survived the last interruption, and what it takes
+codewaifu pro log <taskId> --digest  # goal / plan / decisions / next
+codewaifu pro park <taskId>          # stop counting it; its panes keep running
+```
+
+Every verb takes `--json`. The text is ASCII and clamped to the width of the
+terminal it is printed into (60-160 columns), and ids come out whole, because an
+id you cannot copy is a command you cannot type.
+
+Exit codes are a contract rather than a mood, so a poll can tell "nothing needs
+me" from "nobody home": 0 ok, 2 bad arguments, 3 the bench or herdr is not
+running, 4 no such task or item, 5 understood and refused, 6 the app did not
+accept our token.
+
+Two things it will never do. There is no `send-keys`: the CLI answers the
+attention queue, it does not drive a terminal. And `pro recovery` is read-only -
+applying a plan creates workspaces, launches an agent and types a re-prompt into
+a pane, and the ledger records who asked, so the Bench window applies plans and
+the terminal reports them.
+
 ## Your data
 
 Everything CodeWaifu writes lives in `~/.codewaifu` (Windows:
@@ -264,7 +298,7 @@ own entries.
 ```bash
 npm install
 npm run dev          # electron-vite dev with hot reload
-npm test             # vitest, 854 tests: relay harness, Pro bridge, live TTS
+npm test             # vitest, 984 tests: relay harness, Pro bridge, live TTS
 npm run test:e2e     # needs a display; builds first, about 20s
 npm run typecheck
 npm run dist:mac     # or dist:win; artifacts land in release/

@@ -1,14 +1,15 @@
 # Pro handoff
 
-`main` @ `97fd122` - typecheck, 834 tests (plus the 12 Windows-only skips),
-`electron-vite build` and the new `npm run test:e2e` (6 cases, needs a display)
-all green on Linux (Ubuntu, node 20+, herdr 0.9.0). Verified platform is Linux;
-macOS is built for but not yet run.
+`main` @ `c4155c9` plus the terminal control surface (F8) - typecheck, 984 tests
+(plus the 12 Windows-only skips), `electron-vite build` and `npm run test:e2e`
+(9 cases, needs a display) all green on Linux (Ubuntu, node 20+, herdr 0.9.0).
+Verified platform is Linux; macOS is built for but not yet run.
 
 The spec is [MVP.md](./MVP.md) and it is still the authority: F1-F7, the
 acceptance criteria in section 6, the phases in section 7. This file is the
 other half - how to run what exists, which decisions are settled, and what is
-known to be missing.
+known to be missing. F8 in the table below is not in the spec: it is what F6's
+"scripts and agents can drive the bench" became once somebody typed it.
 
 ## 1. What Pro is
 
@@ -81,9 +82,17 @@ It launches `out/main/index.js` under Electron against a faked herdr socket
 (`tests/e2e/fakeHerdr.ts`, NDJSON over a unix socket) and asserts that the Bench
 window paints a tree row, shows no crash card, is not sitting on the install card
 and throws nothing while its bundle is evaluated; the screenshot lands in
-`tests/e2e/artifacts/bench.png`. It is deliberately not inside `npm test`: a box
-with no X display would fail it for a reason that has nothing to do with the code,
-and jsdom cannot load a bundle, which is the only thing this gate is for.
+`tests/e2e/artifacts/bench.png`. Three of its nine cases drive the *built CLI*
+instead of the window: they spawn `electron <repo> pro state` the way
+`~/.local/bin/codewaifu` does after `install.sh`, against the same faked herdr
+and their own `CODEWAIFU_HOME`, and then read what a terminal would read - the
+tree, the recovery tab, and exit 3 with "not running" on stderr when that home
+is empty. It is the only place argv routing, the endpoint handshake and the
+renderers exist as one artefact rather than as three green unit suites.
+
+The gate is deliberately not inside `npm test`: a box with no X display would
+fail it for a reason that has nothing to do with the code, and jsdom cannot load
+a bundle, which is the only thing this gate is for.
 
 `npm run typecheck` runs **both** tsconfigs. `tsconfig.node.json` has
 `noUnusedLocals` and `noUnusedParameters`, so an unused import fails the build
@@ -114,6 +123,7 @@ now that both the widget and the bench import it.
 | F5 ledger + recovery | `main/pro/ledger.ts`, `recovery.ts`, `LedgerPanel.tsx`, `RecoveryPanel.tsx` | `proLedger` | done |
 | F6 HTTP API | `main/server.ts` (`/pro/*`) | `server` | done |
 | F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand`, `companionLink`, `bubbleAnswer` | done |
+| F8 terminal control surface | `shared/proCli.ts`, `main/pro/cli.ts`, `main/cliIo.ts` | `proCli`, `topBarCounts`, the built-CLI cases in gate four | done |
 
 Acceptance criteria 6.1-6.4 and 6.7 are exercised by unit tests against recorded
 fixtures (`tests/fixtures/herdr/`, captured with
@@ -158,6 +168,32 @@ without complaining: neither failure is loud, which is why both are handled in
 the plan. The Bench field hard-caps with `maxLength`; the bubble warns instead,
 because a widget that silently discards the end of a sentence is worse than one
 that says so. `reprompt` is not folded - it compiles a multi-line brief.
+
+The third surface is a terminal (F8). `codewaifu pro <verb>` reads the
+projection the window reads - `state`, `attention`, `recovery`, `log` - and acts
+on it with the same verbs: `answer`/`approve`/`deny`/`snooze`, `new`, `adopt`,
+`park`/`resume`/`done`/`rm`. It takes no `--cli` in front of it, because a
+control surface you have to remember a flag to reach is not a control surface;
+the installer verbs keep the flag, since `install.sh` already passes it and
+`codewaifu install` reading as "install the app" is a confusion worth keeping.
+All the thinking is in `shared/proCli.ts` (argv to typed call, payload to text)
+and the three impure things are in `main/pro/cli.ts` plus `main/cliIo.ts` (the
+endpoint file, HTTP to the relay, the two file descriptors), which is why the
+verb table is unit-tested with no app running while the round trip is tested
+against the real relay. Exit codes mirror the relay's status classes so `curl`
+and `codewaifu pro` agree about what went wrong: 0 ok, 2 bad arguments,
+3 nobody home, 4 no such task, 5 understood and refused, 6 the app did not
+accept our token. "Nobody home" is four different sentences with four different
+fixes (`offlineText`), and one of them is reached from a **404**: an app older
+than the bench answers `no route`, which is not a task that does not exist and
+must not send a script off to look for one. There are two timeouts rather than
+one - 5s for a cached GET, 25s for a write - because a single number either cuts
+off `pro new` provisioning a workspace on a cold herdr or makes `pro state`
+hang. Width is clamped to 60-160 columns and the id column is *measured* from
+the ids on screen (6-20, and an id past the ceiling is clipped with the gap
+kept, so the row still reads as two things), since a fixed width either
+truncates a herdr workspace id or pads every row by fourteen spaces. Ids come
+out whole because an id you cannot copy is a command you cannot type.
 
 The renderer is wrapped in `FaultBoundary` (`pro/main.tsx`), so a throw in a render
 or a mount effect is a card carrying the kind, the message, four frames and two
@@ -219,6 +255,20 @@ without reading those first.
 - **The companion never becomes a second keyboard.** There is deliberately no
   `input` or `keys` verb on the companion channel; `proCommand.test.ts` pins
   their absence.
+- **The CLI has no `send-keys` either.** Same rule, third surface: a terminal
+  answers the attention queue and files tasks, it does not drive a pane. A verb
+  that types into an agent's shell is an unattended keystroke with nobody
+  watching the screen it lands on, and the CLI is the surface most likely to be
+  called from a cron job.
+- **Recovery is read-only from the CLI.** `pro recovery` prints the verdict, the
+  reason and the numbered steps; applying a plan stays in the Bench window.
+  Applying creates workspaces, launches an agent and types a re-prompt into a
+  pane, and `recoveryOp` records `source: 'gui'` as its provenance - a fact a
+  terminal could only lie about.
+- **The CLI renders the projection, it does not keep a second one.** `recovery`
+  is the same `GET /pro/state` route as `state`, sliced differently, so the
+  count in the `state` footer and the count in `recovery` cannot drift apart;
+  the e2e case asserts both strings off one seeded task.
 - **An answer is a verb, not an exception to that rule.** The bubble sends
   `act`/`answer` with text and lets `planAttentionAction` decide what reaches the
   pane; it never sends keystrokes. `routeCanAnswer` reads the action list main
@@ -295,13 +345,33 @@ without reading those first.
 
 ## 6. Known gaps, in the order they should be taken
 
-1. **Timing flake.** One full-suite run in about six showed a single failure in
-   `steer` or `matchaVoice`; both do real waiting and neither reproduced on
-   rerun. Worth converting to a fake clock if it recurs.
-2. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
-   tray (a long `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench
-   window, and voice-runtime packaging via `npm run dist:mac`. The Cmd/Ctrl chord
-   table itself is pure and tested on both.
+1. **Timing flake, half fixed.** One full-suite run in about six used to show a
+   single failure in `steer` or `matchaVoice`. `steer.test.ts` now drives
+   `confirmDelivery` on a fake clock and asserts `vi.getTimerCount()` instead of
+   wall-clock elapsed, because "no poll happened" is what a timer count says
+   exactly and says the same way on a loaded box. `matchaVoice` still does real
+   synthesis (2.5s a render), so it remains the candidate for an occasional red
+   run that does not reproduce.
+2. **macOS.** Nothing has been run there. What has been checked from this side
+   of it: the darwin voice runtimes resolve at the pinned versions
+   (`sherpa-onnx-darwin-arm64@1.13.8`, and the `x64` build), and so does the FFI
+   layer - `koffi@3.2.1` with `@koromix/koffi-darwin-arm64@3.2.1`, while the
+   registry's latest is 3.3.0, so it is the pin that has to keep resolving.
+   `build/` holds `icon.png` but no `icon.icns`, so `npm run dist:mac` needs the
+   icons toolset or a fetch at build time. There is no macOS autostart at all:
+   `install.sh --autostart` writes only `~/.config/autostart`, and no LoginItems
+   path exists. The likely sharp edges at runtime are the menubar tray (a long
+   `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench window, and
+   the packaged binary's argv handling, which is now what `codewaifu pro` stands
+   on. The Cmd/Ctrl chord table itself is pure and tested on both.
+3. **The tree projection has no test of its own.** `buildBench`, `deriveGroups`,
+   `groupKeyFor`, `groupLabelFor` and `compareTasks` in `shared/pro.ts` are the
+   grouping and ordering every surface reads through, and they are covered only
+   indirectly: `proCli.test.ts` builds its fixtures *with* `buildBench` and
+   asserts the rendered rows, so a change that moves a task between groups or
+   reorders two states arrives as a diff in somebody else's expectation. A
+   `proTree.test.ts` pinning the group key (repo root, else workdir), the label,
+   the ordering and the counts is the cheapest gap on this list.
 
 ## 7. 中文速览
 
@@ -317,7 +387,7 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F7 都已实现并有单测（842 passed / 12 skipped，skipped 是 Windows 专用）。
+- 状态：F1-F8 都已实现并有单测（984 passed / 12 skipped，skipped 是 Windows 专用）。
 - 面板桥接起不来时不再吐裸 errno：ENOENT 变成「装上 herdr，或把 pro.herdrPath
   指到可执行文件」，EACCES/EPERM 变成「chmod +x」，认不出的消息原文照抄；重试
   退避 1s→8s，一帧到达就把错误文案和连续计数一起清零。
@@ -376,5 +446,32 @@ without reading those first.
   「不抛异常」靠一次 reload：`pageerror` 的监听器在 `electron.launch` 返回之后才绑得
   上，第一次求值抛的异常已经是历史；reload 用同一个 module graph 再求值一遍，这次
   有人听。把 `throw` 塞进打好的 bundle 里验过：6 例红 4 例，其中就有这一例。
-- 还没做：连续一小时高输出的内存实测、pane spawn 失败时裸露的 errno、README 里的
-  Pro 章节、macOS 实机验证。
+- 终端是第三个操作面（F8）：`codewaifu pro state / attention / recovery / log` 读的是
+  窗口读的同一个投影，`answer / approve / deny / snooze / new / adopt / park / resume /
+  done / rm` 走的是同一批动词，而且**不用加 `--cli`**——要记住一个 flag 才够得着的
+  控制面板不算控制面板；install/uninstall 保留 flag，因为 `install.sh` 已经在传，而
+  `codewaifu install` 读成「安装这个 app」是值得保留的歧义。纯逻辑全在
+  `shared/proCli.ts`（argv → typed call、payload → 文本），三件脏事（读 endpoint 文件、
+  对 relay 发 HTTP、两个 fd）在 `main/pro/cli.ts` + `main/cliIo.ts`，所以动词表能在没有
+  app 的情况下单测，回路又能对着真 relay 测。
+  退出码对齐 relay 的状态类，`curl` 与 CLI 对「哪儿出错了」口径一致：0 正常 / 2 参数错 /
+  3 没人接 / 4 找不到 / 5 听懂了但拒绝 / 6 token 不被接受。「没人接」是四种不同说法配四种
+  不同修法（`offlineText`），其中一种从 **404** 进来：比 bench 老的 app 回 `no route`，
+  那不是「任务不存在」，不能把脚本支去找一个不存在的任务。
+  两个超时而不是一个：GET 5s（读的是缓存投影）、写 25s（`pro new` 在冷 herdr 上要建
+  workspace 再拉 agent）；一个数字要么掐死 new，要么让 state 挂着。宽度锁 60-160 列，
+  id 列宽是**量出来的**（6-20，超上限的裁掉但保留那一格空隙，一行仍读作两个东西），因为
+  定宽要么截断 herdr 的 workspace id，要么给每行白送十四个空格；id 必须整只出来——抄不
+  下来的 id 就是打不出来的命令。
+  两件永远不做的事：CLI 没有 `send-keys`（它回答注意力队列、登记任务，不开车）；
+  `pro recovery` 只读，应用恢复计划留在 Bench 窗口——应用会建 workspace、拉 agent、往
+  pane 里打 re-prompt，而 `recoveryOp` 记的 provenance 是 `source: 'gui'`，终端在这件
+  事上只能撒谎。e2e 里三个新用例直接跑**打好的 CLI**（`electron <repo> pro state`，
+  自己的 `CODEWAIFU_HOME`，对着同一个假 herdr），这是 argv 路由、endpoint 握手和渲染
+  第一次作为一个产物被验，而不是三个各自绿的单测。
+- 还没做：macOS 实机验证——darwin 侧能从这边核实的都核实了（语音运行时与 koffi 在
+  registry 上按 pin 版本可解、`build/` 只有 `icon.png` 没有 `icon.icns`、并且**没有**
+  macOS 自启动：`install.sh --autostart` 只写 `~/.config/autostart`，没有 LoginItems
+  这条路）；以及给树的投影（`buildBench` / `deriveGroups` / `groupKeyFor` /
+  `compareTasks`）补一个自己的 `proTree.test.ts`，现在它们只被 `proCli.test.ts` 当
+  fixture 工厂间接覆盖。

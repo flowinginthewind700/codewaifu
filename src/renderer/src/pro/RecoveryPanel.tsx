@@ -1,11 +1,9 @@
 /**
  * The recovery tab (F5): what survives a crash, and how to put it back.
  *
- * The service plans recovery for *every* task; this panel shows only the ones
- * with something to do. `intact` is the normal case, and listing thirty green
- * rows to say "nothing is broken" is the kind of noise that trains people to
- * ignore the tab. `parked` is filtered too: a task the human deliberately
- * stopped is not a disaster, and recovery is contractually forbidden to touch it.
+ * The service plans recovery for *every* task; which of those plans are worth a
+ * row is `needsRecovery` in `shared/pro`, the same predicate the tab's count
+ * badge and `codewaifu pro recovery` use.
  *
  * An offline herdr short-circuits everything. Without it no fact can be probed,
  * so every task would carry the same `offline` verdict; one honest sentence
@@ -13,6 +11,7 @@
  */
 import { useMemo, type ReactElement } from 'react'
 import { Play, RotateCcw } from 'lucide-react'
+import { needsRecovery } from '@shared/pro'
 import type { RecoveryPlan, RecoveryVerdict } from '@shared/pro'
 import { fill, type StringKey, type Translate } from './i18n'
 import { PlanSteps } from './PlanSteps'
@@ -34,21 +33,6 @@ const VERDICT_KEY: Record<RecoveryVerdict, StringKey> = {
   lost: 'verdictLost',
   offline: 'verdictOffline',
   parked: 'verdictParked'
-}
-
-/** Verdicts that do not earn a row here. */
-export const HIDDEN_VERDICTS: readonly RecoveryVerdict[] = ['intact', 'parked']
-
-/**
- * Which plans this panel would actually render, as a pure function.
- *
- * The bench needs the same filter the panel uses to draw the tab's count badge,
- * and the only way to keep those two numbers from drifting apart is to compute
- * both from one predicate. Tests pin it too: it encodes a product decision
- * ("do not show me green rows"), not a rendering detail.
- */
-export function needsRecovery(plans: readonly RecoveryPlan[]): RecoveryPlan[] {
-  return plans.filter((plan) => !HIDDEN_VERDICTS.includes(plan.verdict))
 }
 
 export function RecoveryPanel({

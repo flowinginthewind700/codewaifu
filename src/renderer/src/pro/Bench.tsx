@@ -25,6 +25,7 @@ import { resolveUiLang, systemLangFromLocales } from '@shared/lang'
 import {
   DEFAULT_SNOOZE_MINUTES,
   attentionActions,
+  needsRecovery,
   type AttentionAction,
   type AttentionItem,
   type BenchView,
@@ -39,7 +40,7 @@ import { InstallCard } from './InstallCard'
 import { LedgerPanel } from './LedgerPanel'
 import { NewTaskDialog } from './NewTaskDialog'
 import { PaneGrid } from './PaneGrid'
-import { RecoveryPanel, needsRecovery } from './RecoveryPanel'
+import { RecoveryPanel } from './RecoveryPanel'
 import { TaskCard } from './TaskCard'
 import { TopBar } from './TopBar'
 import { TreeRail } from './TreeRail'

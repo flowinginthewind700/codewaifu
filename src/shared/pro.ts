@@ -824,6 +824,61 @@ export interface RecoveryPlan {
   actionable: boolean
 }
 
+/**
+ * Verdicts that do not earn a row in the recovery tab, or a line from
+ * `codewaifu pro recovery`.
+ *
+ * `intact` is the normal case, and listing thirty green rows to say "nothing is
+ * broken" is the kind of noise that trains people to ignore the tab. `parked` is
+ * filtered too: a task the human deliberately stopped is not a disaster, and
+ * recovery is contractually forbidden to touch it.
+ */
+export const HIDDEN_VERDICTS: readonly RecoveryVerdict[] = ['intact', 'parked']
+
+/**
+ * Which plans are worth showing, as a pure function of the projection.
+ *
+ * The recovery tab's count badge, the panel's rows and the CLI's list are three
+ * renders of one decision, so the decision lives here and nowhere else. A filter
+ * duplicated in a component and in a terminal renderer is how a badge ends up
+ * saying 1 while the list below it says 0.
+ */
+export function needsRecovery(plans: readonly RecoveryPlan[]): RecoveryPlan[] {
+  return plans.filter((plan) => !HIDDEN_VERDICTS.includes(plan.verdict))
+}
+
+/**
+ * The command-shaped summary of one step, in the words both surfaces use.
+ *
+ * `prompt` and `notice` collapse to one line on purpose: a 400-token re-prompt
+ * inside a banner, or inside a terminal row, buries the thing it belongs to.
+ */
+export function recoveryStepText(step: RecoveryStep): string {
+  switch (step.kind) {
+    case 'workspace':
+      return step.cwd || step.label
+    case 'worktree': {
+      const base = step.base ? ` ${step.base}` : ''
+      return `git worktree add ${step.path} -b ${step.branch}${base}`
+    }
+    case 'agent':
+      return [step.agent, ...step.args].filter(Boolean).join(' ')
+    case 'prompt':
+    case 'notice':
+      return oneLineText(step.text)
+  }
+}
+
+/**
+ * `...`, not the typographic ellipsis: this one string is rendered by a browser
+ * and by a terminal, and `shared/proCli` promises ASCII because a console we
+ * cannot see is no place to gamble on a code page.
+ */
+function oneLineText(text: string, limit = 120): string {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim()
+  return flat.length > limit ? `${flat.slice(0, limit - 3)}...` : flat
+}
+
 /** Probed facts about the world, gathered by main/pro/recovery.ts. */
 export interface RecoveryFacts {
   herdrOnline: boolean

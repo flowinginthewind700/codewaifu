@@ -227,6 +227,35 @@ hook 都重新读它。这正是端口策略敢随便搬家而不改任何 agent
 
 所有命令都支持 `--json`,方便脚本消费。
 
+### 在终端里开工作台
+
+同一个二进制也能驱动 Pro,所以 shell alias、cron 任务和 agent 都能不开窗口读到
+工作台。Linux 上安装器会把 `codewaifu` 放进 `~/.local/bin`;其他平台用打包好的
+二进制,在下面每条命令前加 `--cli`。
+
+```bash
+codewaifu pro                        # 动词表
+codewaifu pro state                  # 树:分组、任务、实时状态、谁在等你
+codewaifu pro attention              # 排好序的队列,带着回答所需的 id
+codewaifu pro answer <id> "可以,继续"
+codewaifu pro approve <id>           # 或 deny <id>、snooze <id> --minutes 30
+codewaifu pro new "修掉这个 flaky 测试" --dir ~/dev/thing --agent codex
+codewaifu pro recovery               # 上次中断后还剩什么,以及接回来要哪几步
+codewaifu pro log <taskId> --digest  # 目标 / 计划 / 已做的决定 / 下一步
+codewaifu pro park <taskId>          # 不再统计它;它的 pane 继续跑
+```
+
+每个动词都支持 `--json`。输出是 ASCII,按终端宽度收在 60-160 列之间;id 一律完整
+打印——抄不下来的 id,就是打不出来的命令。
+
+退出码是契约而不是心情,所以轮询能分清「没人等我」和「没人在家」:0 成功、
+2 参数不对、3 工作台或 herdr 没在跑、4 没有这个任务或条目、5 听懂了但拒绝、
+6 应用不认我们的 token。
+
+有两件事它永远不做。没有 `send-keys`:CLI 回答的是待办队列,不去驱动终端。
+`pro recovery` 也是只读的——执行一份恢复计划会建工作区、拉起 agent、往 pane 里
+打一段重启提示,而账本要记下是谁下的手,所以计划由 Bench 窗口执行,终端负责报告。
+
 ## 你的数据
 
 CodeWaifu 写的所有东西都在 `~/.codewaifu`(Windows:`%USERPROFILE%\.codewaifu`):
@@ -239,7 +268,7 @@ CodeWaifu 写的所有东西都在 `~/.codewaifu`(Windows:`%USERPROFILE%\.codewa
 ```bash
 npm install
 npm run dev          # electron-vite 热重载
-npm test             # vitest,854 个测试:relay 测试台、Pro 桥接、真实 TTS
+npm test             # vitest,984 个测试:relay 测试台、Pro 桥接、真实 TTS
 npm run test:e2e     # 需要显示器;先构建,约二十秒
 npm run typecheck
 npm run dist:mac     # 或 dist:win;产物在 release/

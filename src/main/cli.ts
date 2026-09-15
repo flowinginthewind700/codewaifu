@@ -1,61 +1,63 @@
-import fs from 'node:fs'
-import { parseEndpointEnv, type Endpoint } from '../shared/endpoint'
 import { detectLang, toSpeakable } from '../shared/lang'
+import type { Endpoint } from '../shared/endpoint'
 import type { RuntimeState } from '../shared/protocol'
-import { endpointFile, envPinnedPort } from './env'
+import { envPinnedPort } from './env'
+import { cliStderr as stderr, cliStdout as stdout, readEndpoint as endpoint } from './cliIo'
 import { installAgentHooks, reportHooks, uninstallAgentHooks } from './hooksInstaller'
 import { log } from './log'
+import { runProCli } from './pro/cli'
 import { isCodeWaifuPort, probeHealth, requestJson } from './probe'
 import { readConfig } from './store'
 import { Speaker } from './tts'
-
-function endpoint(): Endpoint | null {
-  try {
-    return parseEndpointEnv(fs.readFileSync(endpointFile, 'utf8'))
-  } catch {
-    return null
-  }
-}
 
 function out(value: unknown, asJson: boolean, human: string): void {
   if (asJson) stdout(`${JSON.stringify(value, null, 2)}\n`)
   else stdout(`${human}\n`)
 }
 
-/**
- * Synchronous stdout/stderr. The CLI path ends in `app.exit()`, and Node's async
- * pipe writes would be dropped by it - `install.sh` parses this output, so a
- * truncated line is a failed install.
- */
-function stdout(text: string): void {
-  try {
-    fs.writeSync(1, text)
-  } catch {
-    process.stdout.write(text)
-  }
-}
-
-export function stderr(text: string): void {
-  try {
-    fs.writeSync(2, text)
-  } catch {
-    process.stderr.write(text)
-  }
-}
-
 const USAGE = `CodeWaifu CLI
 
 Usage:
   CodeWaifu --cli <command> [--json]
+  codewaifu pro <verb>          (driving the bench needs no --cli)
 
 Commands:
+  pro <verb>         Drive the bench: state, attention, answer, new, log (see below)
   install            Write the hook relay and register hooks for Codex + Claude Code
   uninstall          Remove CodeWaifu hooks and relay scripts (agent configs are backed up first)
   status             Show hook registration, relay port and whether the app is running
   say <text...>      Speak a line now (through the running app when possible)
   endpoint           Print the relay port and token
   help               Show this message
+
+Run \`codewaifu pro help\` for the bench's own verbs.
 `
+
+/**
+ * Commands that also work with no `--cli` in front of them.
+ *
+ * A control surface you have to remember a flag to reach is not a control
+ * surface, and the bench is the part of this app an agent or a shell alias
+ * drives. The installer verbs keep the flag: `install.sh` already passes it, and
+ * `codewaifu install` reading as "install the app" is a confusion worth keeping.
+ */
+const BARE_CLI_COMMANDS = new Set(['pro'])
+
+/**
+ * Decide CLI mode from `process.argv`, and hand back the args to run.
+ *
+ * `--cli` wins when both are present, so nothing that works today changes
+ * meaning. The bare form starts at argv[1] rather than argv[0]: argv[0] is the
+ * binary path, and a checkout directory called `pro` must not turn a launch into
+ * a CLI call.
+ */
+export function cliArgsFrom(argv: readonly string[]): { cli: boolean; args: string[] } {
+  const flagAt = argv.indexOf('--cli')
+  if (flagAt >= 0) return { cli: true, args: argv.slice(flagAt + 1) }
+  const bareAt = argv.findIndex((arg, index) => index > 0 && BARE_CLI_COMMANDS.has(arg.toLowerCase()))
+  if (bareAt >= 0) return { cli: true, args: argv.slice(bareAt) }
+  return { cli: false, args: [] }
+}
 
 /**
  * Headless entry point. `install.sh` drives the whole install through this so
@@ -187,6 +189,11 @@ export async function runCli(args: string[]): Promise<number> {
       case '':
         stdout(USAGE)
         return 0
+      case 'pro': {
+        // The whole argv goes in: `shared/proCli.ts` finds `pro` itself, so a
+        // flag order we did not anticipate here still parses the same way there.
+        return runProCli(args)
+      }
       default:
         stderr(`unknown command: ${command}\n\n${USAGE}`)
         return 2
