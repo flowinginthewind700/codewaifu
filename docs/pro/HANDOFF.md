@@ -110,16 +110,19 @@ now that both the widget and the bench import it.
 | F1 tree rail | `renderer/src/pro/TreeRail.tsx` | `proClient`, `proSocket` | done |
 | F2 create / adopt / park | `main/pro/bench.ts`, `NewTaskDialog.tsx` | `proCommand` | done |
 | F3 attention queue | `main/pro/triage.ts`, `AttentionQueue.tsx` | `proCommand`, `hookEvent` | done |
-| F4 pane grid | `main/pro/herdr/terminalBridge.ts`, `Pane.tsx`, `PaneGrid.tsx` | `proBridge`, `proNdjson`, `findQuery`, `termKeys` | done |
+| F4 pane grid | `main/pro/herdr/terminalBridge.ts`, `Pane.tsx`, `PaneGrid.tsx` | `proBridge`, `proNdjson`, `findQuery`, `termKeys`, `bridgeErrorText` | done |
 | F5 ledger + recovery | `main/pro/ledger.ts`, `recovery.ts`, `LedgerPanel.tsx`, `RecoveryPanel.tsx` | `proLedger` | done |
 | F6 HTTP API | `main/server.ts` (`/pro/*`) | `server` | done |
 | F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand`, `companionLink`, `bubbleAnswer` | done |
 
 Acceptance criteria 6.1-6.4 and 6.7 are exercised by unit tests against recorded
 fixtures (`tests/fixtures/herdr/`, captured with
-`scripts/capture-herdr-fixtures.mjs`). 6.5 (20 tasks over 4 repos, keyboard-only,
-flat memory for an hour) and 6.6's GUI half are still **manual** - nobody has run
-the hour.
+`scripts/capture-herdr-fixtures.mjs`). 6.5 has been run once, on Linux, by
+`scripts/soak-bench.mjs`: 20 busy tasks over 4 herdr workspaces, 78
+keyboard-only selection cycles, per-process RSS every 20s for an hour. The
+memory curve is a bounded GC sawtooth rather than a climb and not one of the
+178 samples dropped a frame; the numbers, and the one caveat that comes with
+them, are in `docs/pro/soak.md`. 6.6's GUI half is the fourth gate in section 3.
 
 The terminal itself (F4) carries what a real terminal has: Unicode 11 widths,
 WebGL rendering with a DOM fallback on context loss, links out to the OS browser
@@ -292,19 +295,10 @@ without reading those first.
 
 ## 6. Known gaps, in the order they should be taken
 
-1. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
-   renderer has a fallback path for a lost context and for no WebGL at all, but
-   neither the memory claim nor the fallback has been observed on real hardware.
-2. **Pane-level spawn failures show raw errno.** Discovery explains a missing
-   herdr in prose, but a bridge whose `spawn` throws ENOENT surfaces
-   `spawn ... ENOENT` in the pane header tooltip.
-3. **Timing flake.** One full-suite run in about six showed a single failure in
+1. **Timing flake.** One full-suite run in about six showed a single failure in
    `steer` or `matchaVoice`; both do real waiting and neither reproduced on
    rerun. Worth converting to a fake clock if it recurs.
-4. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
-   never mention Pro. The e2e artifact in section 3 is the only screenshot of the
-   Bench that exists, and it is a git-ignored test output.
-5. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
+2. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
    tray (a long `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench
    window, and voice-runtime packaging via `npm run dist:mac`. The Cmd/Ctrl chord
    table itself is pure and tested on both.
@@ -323,7 +317,13 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F7 都已实现并有单测（834 passed / 12 skipped，skipped 是 Windows 专用）。
+- 状态：F1-F7 都已实现并有单测（842 passed / 12 skipped，skipped 是 Windows 专用）。
+- 面板桥接起不来时不再吐裸 errno：ENOENT 变成「装上 herdr，或把 pro.herdrPath
+  指到可执行文件」，EACCES/EPERM 变成「chmod +x」，认不出的消息原文照抄；重试
+  退避 1s→8s，一帧到达就把错误文案和连续计数一起清零。
+- 验收 6.5 的一小时在 Linux 上跑过了：20 个忙任务、4 个工作区、78 次纯键盘选择、
+  每 20 秒一次逐进程 RSS。内存是有界锯齿而非单调增长，178 个样本 0 丢帧；数字与
+  那句保留意见在 docs/pro/soak.md。README 两份也补了 Pro 一节与工作台截图。
   终端这一层分两轮补齐质量：Unicode 11 宽字符、WebGL 渲染与降级、链接走系统浏览器、
   OSC 52 剪贴板、复制粘贴不抢 Ctrl+C、响铃指示、输出内搜索（Ctrl+Shift+F / macOS 上
   Cmd+F）；这一轮再加上搜索的正则与大小写模式、非法 pattern 把拒绝原因写进计数器、
