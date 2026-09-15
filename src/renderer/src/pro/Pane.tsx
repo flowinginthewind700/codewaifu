@@ -286,7 +286,11 @@ export function Pane({
       lineHeight: 1.22,
       cursorBlink: true,
       scrollback: 4000,
-      allowProposedApi: false,
+      // The Unicode11 addon below reads `terminal.unicode`, which xterm gates
+      // behind its proposed-API flag. With the flag off, activating the addon
+      // throws inside the first Pane's mount effect and React unmounts the
+      // tree, so the bench comes up as a blank frame on every platform.
+      allowProposedApi: true,
       theme: THEME
     })
     const fit = new FitAddon()
