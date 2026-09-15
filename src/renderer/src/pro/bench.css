@@ -1107,6 +1107,33 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* A transient light, mounted only while the pane is ringing. It sits before the
+   phase read-out, so the thing actually being scanned keeps its right edge and
+   the flexible title absorbs the width for as long as the bell is lit. Holding
+   the slot open permanently would cost every quiet pane 14px of title in a grid
+   where headers are already the narrowest thing on screen. */
+.pane-bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--amber);
+  animation: pane-bell-in 160ms ease-out;
+}
+
+@keyframes pane-bell-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .pane-flag[data-live='true'] {
   color: var(--mint);
 }

@@ -164,7 +164,9 @@ export const proApi = {
       call<{ agents: string[] }>(CH.proHost, { op: 'agents' }),
     pickDir: (): Promise<ProResult<{ path: string }>> =>
       call<{ path: string }>(CH.proHost, { op: 'pickDir' }),
-    openPath: (path: string): Promise<ProResult> => call(CH.proHost, { op: 'openPath', path })
+    openPath: (path: string): Promise<ProResult> => call(CH.proHost, { op: 'openPath', path }),
+    openExternal: (url: string): Promise<ProResult> =>
+      call(CH.proHost, { op: 'openExternal', url })
   },
 
   companion: {

@@ -140,6 +140,8 @@ export interface ProHost {
   openBench: () => void
   pickDir: () => Promise<string>
   openPath: (path: string) => void
+  /** Hand a link to the OS browser. The scheme allow-list already ran. */
+  openExternal: (url: string) => void
   log: (level: string, message: string, extra?: unknown) => void
 }
 
@@ -1969,6 +1971,9 @@ export class ProService implements CompanionApi {
       case 'openPath':
         this.host.openPath(request.path)
         return okResult({ path: request.path }, '', 'opened')
+      case 'openExternal':
+        this.host.openExternal(request.url)
+        return okResult({ url: request.url }, '', 'opened')
     }
   }
 

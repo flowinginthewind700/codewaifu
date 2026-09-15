@@ -69,7 +69,11 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "koffi": "^3.2.1",
     "sherpa-onnx-node": "^1.13.8"

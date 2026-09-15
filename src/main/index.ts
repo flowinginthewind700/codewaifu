@@ -291,6 +291,11 @@ function proHost(instance: Core): ProHost {
     openPath: (target) => {
       void revealPath(target)
     },
+    // `openExternal`, never `openPath`: a URL is not a file, and `openPath` on
+    // one would fall through to `showItemInFolder` and open a file manager.
+    openExternal: (url) => {
+      shell.openExternal(url).catch((error) => log('warn', 'could not open link', String(error)))
+    },
     log: (level, message, extra) => log(narrowLogLevel(level), message, extra)
   }
 }

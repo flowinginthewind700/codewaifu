@@ -214,6 +214,8 @@ const STRINGS = {
   phaseClosed: { zh: '已关闭', en: 'Closed' },
   phaseError: { zh: '桥接错误', en: 'Bridge error' },
   droppedFrames: { zh: '丢了 {n} 帧', en: '{n} frames dropped' },
+  paneBell: { zh: '终端响铃', en: 'Terminal bell' },
+  paneCopyFailed: { zh: '复制失败', en: 'Copy failed' },
   paneZoomOn: { zh: '放大此面板', en: 'Zoom this pane' },
   paneZoomOff: { zh: '退出放大', en: 'Unzoom' },
   paneFocusHerdr: { zh: '在 herdr 里聚焦', en: 'Focus in herdr' },
