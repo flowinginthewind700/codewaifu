@@ -32,8 +32,9 @@ what every agent is doing right now.
   steer a running Codex thread by queueing a message, or copy the message for
   agents without an injection API.
 - **Media transport.** Play / pause / next / previous for the player that owns
-  your system session (Music and Spotify on macOS, system media on Windows),
-  with the current track shown in the panel.
+  your system session (Music and Spotify on macOS, the system session on
+  Windows, any MPRIS player through `playerctl` on Linux), with the current
+  track shown in the panel.
 - **A window that behaves.** Draggable anywhere, always-on-top, click-through
   when you want it ghosted, opacity and scale sliders, collapses to a 320px
   bubble and expands to a full panel with tabs.
@@ -56,8 +57,56 @@ irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/main/scripts
 ```
 
 The installer downloads the latest release, places the app in `/Applications`
-(or `%LOCALAPPDATA%\Programs\CodeWaifu`), registers the agent hooks with
-backups, and prints what to do next. Re-running it repairs an install.
+(Windows: `%LOCALAPPDATA%\Programs\CodeWaifu`, Linux: `~/.local/share/CodeWaifu`),
+registers the agent hooks with backups, and prints what to do next. Re-running
+it repairs an install; `bash install.sh --uninstall --purge` removes it again.
+
+### Linux
+
+Two supported shapes. Pick by whether you want the Chromium sandbox:
+
+| | command | lands in | sandbox |
+| --- | --- | --- | --- |
+| user install | the one-liner above | `~/.local/share/CodeWaifu`, launcher in `~/.local/bin/codewaifu`, entry in `~/.local/share/applications` | runs unsandboxed on kernels that refuse unprivileged user namespaces |
+| system install | `sudo apt install ./CodeWaifu-0.3.0-linux-amd64.deb` | `/opt/CodeWaifu` | full: the postinst adds an AppArmor profile and a setuid sandbox helper |
+
+The user install never needs root, which is also why it cannot set the sandbox
+up. Ubuntu 23.10+ ships `kernel.apparmor_restrict_unprivileged_userns=1`, and
+under it Chromium refuses to start unconfined - it aborts before any JavaScript
+runs, so the app cannot fix this from the inside. The launcher the installer
+wires up (`AppRun`, which electron-builder puts in every AppImage) probes for
+exactly that at every start and passes `--no-sandbox` only when the kernel
+really refuses. To keep the sandbox instead, install the `.deb`, or relax the
+restriction:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+Shared libraries the app needs (a stock Ubuntu desktop already has them; the
+installer runs `ldd` and names any that are missing):
+
+```bash
+sudo apt install libgtk-3-0t64 libnotify4 libnss3 libxss1 libxtst6 \
+  libatspi2.0-0t64 libsecret-1-0 libasound2t64
+```
+
+Optional, and each one turns a feature on:
+
+- `playerctl` - media transport, against any MPRIS player (Spotify, Rhythmbox,
+  VLC, mpd...). Without it the transport row says `playerctl not installed`.
+- `espeak-ng` - the OS-voice fallback. The bundled neural Matcha voice needs
+  nothing installed; this is only the second choice behind it.
+- `gnome-shell-extension-appindicator` - GNOME has no tray by default, so
+  without it the icon cannot appear. Log out and back in after installing.
+
+Useful flags: `--autostart` also drops the entry into `~/.config/autostart`,
+`--from <path>` installs a local `.AppImage` / `.deb` / build directory through
+the same code path, `--version vX.Y.Z` pins a release.
+
+Verified on Ubuntu 24.04 (GNOME, X11). On a Wayland session she still runs, but
+the click-through input shape and the compositor probe are X11 calls, so an X11
+session (or XWayland) is what those two features were tested against.
 
 ### Or install it from inside your agent
 
@@ -82,15 +131,15 @@ the plugin commands both drive the same installer.
 ### First launch
 
 1. Open the app. It greets you and parks in the menu bar (macOS) or tray
-   (Windows).
+   (Windows, Linux).
 2. Codex gates third-party hooks behind a one-time trust prompt: open Codex,
    run `/hooks`, and trust the CodeWaifu entries. Claude Code needs nothing.
 3. Start an agent session. Stop events, permission requests and notifications
    now arrive as speech and bubbles.
 
-Requirements: macOS 12+ or Windows 10+, and Codex CLI and/or Claude Code recent
-enough to support hooks. Linux works for hooks and speech where a TTS backend
-exists; media transport is macOS/Windows only.
+Requirements: macOS 12+, Windows 10+, or a glibc desktop Linux (Ubuntu 22.04+,
+Debian 12+, Fedora 40+; x64), plus Codex CLI and/or Claude Code recent enough
+to support hooks.
 
 ## How it works
 
@@ -168,6 +217,9 @@ drawn from signed distance fields at build time - the repo stays text-only.
   launch (the installer clears the quarantine flag) and Windows SmartScreen may
   ask once.
 - Speech uses the OS voices; quality depends on what your system ships.
+- On Linux the companion runs unsandboxed when installed without root, because
+  a user-space install cannot add the AppArmor profile Chromium wants. The
+  `.deb` is the sandboxed path.
 - Steer can queue into Codex threads; for Claude Code it copies the message to
   your clipboard, because there is no supported injection API.
 

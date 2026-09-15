@@ -27,7 +27,8 @@
 - **线程看板。** 列出所有 Codex 线程与 Claude Code 会话及实时状态;对运行中的
   Codex 线程可以直接排队插话,对没有注入接口的 agent 则把消息复制到剪贴板。
 - **媒体控制。** 播放 / 暂停 / 下一曲 / 上一曲,作用于当前占用系统媒体会话的
-  播放器(macOS 的 Music 与 Spotify,Windows 的系统媒体),面板里同步显示曲目。
+  播放器(macOS 的 Music 与 Spotify,Windows 的系统媒体,Linux 通过 `playerctl`
+  作用于任意 MPRIS 播放器),面板里同步显示曲目。
 - **守规矩的窗口。** 任意拖拽、始终置顶、可开启点击穿透,透明度与缩放滑杆,
   收起是 320px 的小气泡,展开是带标签页的完整面板。
 - **只走回环。** relay 只绑 `127.0.0.1`,除 `/health` 外所有路由都要带本机安装时
@@ -48,8 +49,53 @@ irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/main/scripts
 ```
 
 安装器会下载最新发行版,把应用放进 `/Applications`(Windows 为
-`%LOCALAPPDATA%\Programs\CodeWaifu`),带备份地注册 agent hook,并打印接下来
-要做的事。重复执行即修复安装,不会重复写入。
+`%LOCALAPPDATA%\Programs\CodeWaifu`,Linux 为 `~/.local/share/CodeWaifu`),
+带备份地注册 agent hook,并打印接下来要做的事。重复执行即修复安装,不会重复
+写入;`bash install.sh --uninstall --purge` 可以完整卸载。
+
+### Linux
+
+两种受支持的形态,按你要不要 Chromium 沙箱来选:
+
+| | 命令 | 装在哪 | 沙箱 |
+| --- | --- | --- | --- |
+| 用户态安装 | 上面那行一行命令 | `~/.local/share/CodeWaifu`,启动器 `~/.local/bin/codewaifu`,桌面入口进 `~/.local/share/applications` | 在拒绝非特权 user namespace 的内核上以 no-sandbox 运行 |
+| 系统安装 | `sudo apt install ./CodeWaifu-0.3.0-linux-amd64.deb` | `/opt/CodeWaifu` | 完整沙箱:postinst 会写入 AppArmor profile 并安装 setuid sandbox helper |
+
+用户态安装全程不需要 root,代价也正是它没法替你把沙箱配好。Ubuntu 23.10+
+默认带 `kernel.apparmor_restrict_unprivileged_userns=1`,在这个内核下 Chromium
+拒绝以「无 profile 约束」的身份启动——它在任何 JavaScript 跑起来之前就 abort,
+所以应用内部无法自救。安装器接上的启动器(`AppRun`,electron-builder 在每个
+AppImage 里都放了一份)每次启动都会探测这件事,只有内核真的拒绝时才补
+`--no-sandbox`。想保住沙箱,要么装 `.deb`,要么放开这条限制:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+依赖的共享库(Ubuntu 桌面版本来就有;安装器会跑 `ldd` 并点名缺哪个):
+
+```bash
+sudo apt install libgtk-3-0t64 libnotify4 libnss3 libxss1 libxtst6 \
+  libatspi2.0-0t64 libsecret-1-0 libasound2t64
+```
+
+可选项,每装一个就点亮一块功能:
+
+- `playerctl` —— 媒体控制,对接任意 MPRIS 播放器(Spotify、Rhythmbox、VLC、
+  mpd……)。没装的话那一行会显示 `playerctl not installed`。
+- `espeak-ng` —— 系统语音兜底。自带的 Matcha 神经语音不需要额外安装,这只是
+  它后面的第二选择。
+- `gnome-shell-extension-appindicator` —— GNOME 默认没有托盘,不装它图标根本
+  出不来。装完要注销再登录。
+
+常用参数:`--autostart` 顺手把桌面入口复制进 `~/.config/autostart`(开机自启),
+`--from <路径>` 用同一套代码路径安装本地 `.AppImage` / `.deb` / 构建目录,
+`--version vX.Y.Z` 锁定发行版。
+
+已在 Ubuntu 24.04(GNOME,X11)上实测。Wayland 会话下她照样能跑,但点击穿透
+用的 input shape 与合成器探测都是 X11 调用,这两块是在 X11(或 XWayland)上
+验证的。
 
 ### 或者在 agent 里一句话安装
 
@@ -73,13 +119,14 @@ mkdir -p ~/.codex/skills/codewaifu && curl -fsSL \
 
 ### 首次启动
 
-1. 打开应用。它会跟你打招呼,然后停进菜单栏(macOS)或托盘(Windows)。
+1. 打开应用。它会跟你打招呼,然后停进菜单栏(macOS)或托盘(Windows、Linux)。
 2. Codex 对第三方 hook 有一次性信任确认:打开 Codex,执行 `/hooks`,信任
    CodeWaifu 的条目。Claude Code 无需任何操作。
 3. 开一个 agent 会话。结束事件、权限请求、通知从此以语音和气泡到达。
 
-环境要求:macOS 12+ 或 Windows 10+,以及支持 hooks 的较新版本 Codex CLI /
-Claude Code。Linux 可用 hook 与语音(取决于系统 TTS),媒体控制仅 macOS/Windows。
+环境要求:macOS 12+、Windows 10+,或 glibc 桌面版 Linux(Ubuntu 22.04+、
+Debian 12+、Fedora 40+;x64),外加支持 hooks 的较新版本 Codex CLI /
+Claude Code。
 
 ## 工作原理
 
@@ -150,6 +197,8 @@ Node/Electron,图标在构建期由符号距离场画出来——仓库保持纯
 - 目前未签名:macOS 首次启动会有 Gatekeeper 提示(安装器会清掉隔离属性),
   Windows SmartScreen 可能询问一次。
 - 语音使用系统自带声音,质量取决于系统装了什么。
+- Linux 上非 root 安装时伙伴以 no-sandbox 运行:用户态安装没法写入 Chromium
+  想要的 AppArmor profile。要沙箱就走 `.deb`。
 - 插话对 Codex 线程是排队注入;Claude Code 没有受支持的注入接口,因此走剪贴板。
 
 ## 许可证

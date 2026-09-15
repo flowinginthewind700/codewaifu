@@ -1,6 +1,7 @@
 {
   "name": "codewaifu",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "desktopName": "codewaifu",
   "description": "A Live2D-style desktop companion that watches Codex and Claude Code, speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
   "keywords": [
     "codex",
@@ -46,6 +47,7 @@
     "dist": "node scripts/ensure-voice-runtime.mjs && electron-vite build && electron-builder",
     "dist:mac": "node scripts/ensure-voice-runtime.mjs darwin arm64 x64 && electron-vite build && electron-builder --mac",
     "dist:win": "node scripts/ensure-voice-runtime.mjs win x64 && electron-vite build && electron-builder --win",
+    "dist:linux": "node scripts/ensure-voice-runtime.mjs linux x64 && electron-vite build && electron-builder --linux",
     "cli": "node bin/codewaifu.mjs"
   },
   "devDependencies": {

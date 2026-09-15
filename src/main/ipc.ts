@@ -6,6 +6,7 @@ import type { Agent } from '../shared/protocol'
 import type { MediaCommand } from '../shared/media'
 import type { AppConfig } from '../shared/config'
 import { IPC } from '../shared/ipcChannels'
+import { coerceRegionRects, type RegionRect } from '../shared/linuxRuntime'
 
 export { IPC }
 
@@ -17,6 +18,11 @@ export interface UiHooks {
   applyConfig: (config: AppConfig) => void
   /** The renderer measured its card; resize the frame to exactly that height. */
   fitHeight: (height: number) => void
+  /**
+   * Linux only: the measured solid boxes that become the window's input shape.
+   * Ignored on the platforms where mouse-event forwarding already works.
+   */
+  setSolidRegion: (rects: readonly RegionRect[]) => void
   /** Drag the frame by a screen-space delta (JS drag over the Live2D canvas). */
   moveWindow: (dx: number, dy: number) => void
   /** The renderer's Web Audio player mounted (true) or went away (false). */
@@ -121,6 +127,13 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
 
   handle(IPC.fitHeight, (payload) => {
     ui.fitHeight(Number(payload))
+    return { ok: true }
+  })
+
+  handle(IPC.solidRegion, (payload) => {
+    // Validated here, not in the window: `setShape` hands these numbers straight
+    // to the X server, and one NaN would cost us the shape we already have.
+    ui.setSolidRegion(coerceRegionRects(payload))
     return { ok: true }
   })
 

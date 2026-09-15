@@ -38,7 +38,8 @@ import {
 import { resolveUiLang } from '@shared/lang'
 import { expressionForMood } from '@shared/live2dMood'
 import type { Live2DMotionRef } from '@shared/live2dCatalog'
-import { api, CH } from './api'
+import type { RegionRect } from '@shared/linuxRuntime'
+import { api, CH, platform } from './api'
 import { Avatar } from './Avatar'
 import { Bubble } from './Bubble'
 import { makeTranslator, type Translate } from './i18n'
@@ -58,6 +59,8 @@ const Live2DAvatar = lazy(() =>
 )
 
 const THREAD_POLL_MS = 8000
+/** How often Linux re-measures its solid boxes (see the shape reporter below). */
+const SOLID_POLL_MS = 200
 const TOAST_MS = 4200
 /** Events worth a gesture, not just a face. */
 const GESTURE_KINDS: ReadonlySet<string> = new Set(['stop', 'session_start', 'permission'])
@@ -238,6 +241,12 @@ export function App(): ReactElement {
 
   /* ---- click-through: only the card catches the pointer ---------------- */
   useEffect(() => {
+    // Linux is exempt on purpose: forwarding mouse events through a
+    // click-through window is `@platform darwin,win32`, so a window we made
+    // click-through there would never hear the pointer come back over the card
+    // and would stay unclickable until the app restarted. Main shapes the
+    // window's input region instead, fed by the reporter below.
+    if (platform === 'linux') return
     const onMove = (event: globalThis.MouseEvent): void => {
       const target = event.target as Element | null
       const solid = Boolean(target?.closest?.('[data-solid]'))
@@ -247,6 +256,44 @@ export function App(): ReactElement {
     }
     window.addEventListener('mousemove', onMove, { passive: true })
     return () => window.removeEventListener('mousemove', onMove)
+  }, [])
+
+  /* ---- Linux: hand main the part of the frame that is really ours -------
+     `getBoundingClientRect()` is CSS pixels, and a frameless Electron window
+     maps CSS pixels 1:1 onto the device-independent pixels `setShape` wants,
+     so viewport-relative boxes are already window-relative.
+
+     Polled rather than observed because the boxes come from a dozen components
+     (card, panel, stage tools, bubble, the Live2D canvas, toasts) and none of
+     them announce themselves. 200ms is comfortably inside a bubble's fade-in,
+     and the key string keeps an unchanged layout from costing an IPC round
+     trip five times a second for the life of the process. */
+  useEffect(() => {
+    if (platform !== 'linux') return
+    let last = ''
+    const report = (): void => {
+      const rects: RegionRect[] = []
+      for (const node of Array.from(document.querySelectorAll<HTMLElement>('[data-solid]'))) {
+        const box = node.getBoundingClientRect()
+        // A display:none branch measures 0x0; shaping the window to that would
+        // hide her, so collapsed elements are simply not part of the region.
+        if (!(box.width > 0) || !(box.height > 0)) continue
+        rects.push({ x: box.left, y: box.top, width: box.width, height: box.height })
+      }
+      const key = rects
+        .map((rect) => `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}`)
+        .join(';')
+      if (key === last) return
+      last = key
+      void api.setSolidRegion(rects)
+    }
+    const timer = window.setInterval(report, SOLID_POLL_MS)
+    window.addEventListener('resize', report)
+    report()
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('resize', report)
+    }
   }, [])
 
   /* ---- the widget owns the audible path --------------------------------

@@ -65,8 +65,32 @@ portable:
   artifactName: ${productName}-${version}-win-${arch}-portable.${ext}
 linux:
   target:
-    - AppImage
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
   category: Development
+  # Wayland matches a window to its launcher entry by app_id, which Electron
+  # takes from desktopName in package.json. Without the sync the dock keeps a
+  # second generic icon while the companion is running.
+  syncDesktopName: true
+  # Mandatory for the deb: without an address electron-builder writes the npm
+  # author into the Maintainer field and dpkg complains on install.
+  maintainer: flowinginthewind700 <flowinginthewind700@users.noreply.github.com>
+  synopsis: Desktop companion for Codex and Claude Code
+  desktop:
+    entry:
+      # The window's WM_CLASS, so the launcher icon groups with the running
+      # companion instead of spawning a second generic entry in the dock.
+      # Electron derives it from the executable name; verified with xprop.
+      StartupWMClass: codewaifu
+      StartupNotify: 'true'
+      Terminal: 'false'
+      Keywords: codex;claude;agent;companion;live2d;
+      # GNOME only shows notification icons for apps that declare this.
+      X-GNOME-UsesNotifications: 'true'
 publish:
   provider: github
   owner: flowinginthewind700

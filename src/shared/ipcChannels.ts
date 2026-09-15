@@ -35,6 +35,14 @@ export const IPC = {
   neuralRetry: 'cw:neural-retry',
   /** Renderer measured the card; main resizes the frame to fit it exactly. */
   fitHeight: 'cw:fit-height',
+  /**
+   * Linux only: the renderer's measured `[data-solid]` boxes, which main turns
+   * into the window's input shape. This is the stand-in for
+   * `setIgnoreMouseEvents(..., { forward: true })`, an option Linux does not
+   * implement: without forwarding, a click-through window never hears the
+   * pointer come back and stays unclickable for the rest of the session.
+   */
+  solidRegion: 'cw:solid-region',
   /** Renderer's Web Audio player is mounted and can accept speech bytes. */
   voiceReady: 'cw:voice-ready',
   /** Renderer finished (or failed) playing one line of speech. */
@@ -79,6 +87,7 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.moveWindow,
   IPC.neuralRetry,
   IPC.fitHeight,
+  IPC.solidRegion,
   IPC.voiceReady,
   IPC.speechAck
 ]

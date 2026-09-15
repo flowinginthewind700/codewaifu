@@ -7,7 +7,7 @@ import { LIVE2D_KEEP_URLS } from '../shared/live2dCatalog'
 import { prewarmAssets, registerAssetProtocol, registerAssetScheme } from './assets'
 import { runCli } from './cli'
 import { Core } from './core'
-import { isMac } from './env'
+import { isLinux, isMac } from './env'
 import { IPC, registerIpc, send } from './ipc'
 import { closeLog, log } from './log'
 import { getMediaState, platformSupportsMedia } from './media'
@@ -15,6 +15,7 @@ import * as neuralTts from './neuralTts'
 import { effectivePath } from './shellPath'
 import { RendererVoice } from './voiceBridge'
 import { createWindow, type WindowHandle } from './window'
+import { APP_USER_MODEL_ID, chromiumSwitches, logSandboxState } from '../shared/linuxRuntime'
 
 /**
  * One binary, two entry points. `CodeWaifu --cli install` is what `install.sh`
@@ -41,6 +42,34 @@ const GREET_NEURAL_MS = 30000
 // them afterwards. This is what lets the widget load Live2D models from
 // ~/.codewaifu/assets through `cw-asset://` instead of the network.
 registerAssetScheme()
+
+/*
+ * Linux desktop plumbing, all of it pre-ready because Chromium reads these
+ * switches once at startup:
+ *
+ * - `chromiumSwitches()` adds the ozone hint for a Wayland session with no
+ *   XWayland, where Electron would otherwise refuse to start. It deliberately
+ *   does NOT add `no-sandbox`: on Ubuntu 24.04+ Chromium aborts before this
+ *   file is even loaded, so that flag has to come from the launcher (AppRun,
+ *   the install shim or bin/codewaifu.mjs). `logSandboxState` records what we
+ *   ended up with so an unsandboxed session is never a mystery.
+ * - The AppUserModelID has to match the `.desktop` file's identity or GNOME
+ *   files our notifications under a generic icon.
+ */
+if (isLinux) {
+  for (const entry of chromiumSwitches()) {
+    const at = entry.indexOf('=')
+    if (at < 0) app.commandLine.appendSwitch(entry)
+    else app.commandLine.appendSwitch(entry.slice(0, at), entry.slice(at + 1))
+    log('info', 'chromium switch', entry)
+  }
+  log('info', 'sandbox', logSandboxState(process.argv))
+  try {
+    app.setAppUserModelId(APP_USER_MODEL_ID)
+  } catch (error) {
+    log('warn', 'setAppUserModelId failed', String(error))
+  }
+}
 
 let core: Core | null = null
 let handle: WindowHandle | null = null
@@ -197,6 +226,7 @@ async function boot(): Promise<void> {
     setClickThrough: (through) => handle?.setClickThrough(through),
     applyConfig: (config) => handle?.applyConfig(config),
     fitHeight: (height) => handle?.fitHeight(height),
+    setSolidRegion: (rects) => handle?.setSolidRegion(rects),
     moveWindow: (dx, dy) => handle?.moveBy(dx, dy),
     voiceReady: (ready) => rendererVoice?.setReady(ready),
     speechAck: (id, ok, error) => rendererVoice?.ack(id, ok, error),
@@ -252,6 +282,10 @@ async function boot(): Promise<void> {
 async function main(): Promise<void> {
   if (cliMode) {
     if (isMac) app.dock?.hide()
+    // The CLI prints and exits; there is no window to accelerate, and on a
+    // headless box (CI, ssh, a container) initialising GL is the difference
+    // between `codewaifu status` working and it hanging.
+    app.disableHardwareAcceleration()
     let code = 0
     try {
       code = await runCli(cliArgs)
@@ -277,8 +311,13 @@ async function main(): Promise<void> {
   })
 
   app.on('window-all-closed', () => {
-    // The tray keeps us alive; only Windows/Linux quit when the widget is closed.
-    if (!isMac) app.quit()
+    // macOS stays up as a background accessory. On Linux a window manager can
+    // close our frame behind our back (Alt+F4, "close all"), and with a tray
+    // icon up that must not kill the companion: the tray click brings her back.
+    // Where there is no tray there is nothing left to click, so we do quit.
+    if (isMac) return
+    if (isLinux && handle?.tray) return
+    app.quit()
   })
 
   app.on('activate', () => handle?.show(true))

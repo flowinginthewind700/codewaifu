@@ -12,8 +12,16 @@ import {
 import { IPC } from '../shared/ipcChannels'
 import type { AppConfig } from '../shared/config'
 import { hotkeyAction } from '../shared/hotkey'
-import { isMac } from './env'
+import {
+  shapeForRegion,
+  sameRegion,
+  unionRect,
+  windowSurface,
+  type RegionRect
+} from '../shared/linuxRuntime'
+import { isLinux, isMac } from './env'
 import { here } from './here'
+import { compositorProbe, currentSession, logDesktop } from './linux'
 import { log } from './log'
 import { waifuIconPng } from './png'
 
@@ -35,6 +43,11 @@ export interface WindowHandle {
   /** Widen the widget while a thread chat is open; ignored when collapsed. */
   setChatMode: (on: boolean) => void
   setClickThrough: (through: boolean) => void
+  /**
+   * Linux only: the renderer's measured solid region, used as the window's
+   * input shape. Ignored everywhere else, where mouse-event forwarding works.
+   */
+  setSolidRegion: (rects: readonly RegionRect[]) => void
   applyConfig: (config: AppConfig) => void
   isVisible: () => boolean
   /** Move the frame by a screen-space delta (renderer-driven drag). */
@@ -77,13 +90,23 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   const wanted = stored || defaultPosition(WINDOW_WIDTH, height)
   const position = clampToDisplay(wanted.x, wanted.y, WINDOW_WIDTH, height)
 
+  /*
+   * Transparency is a constructor argument, so the desktop has to be probed
+   * before the window exists. Off Linux this is the plain frameless-alpha
+   * behaviour the app has always had.
+   */
+  const surface = isLinux
+    ? windowSurface(process.env, currentSession(), compositorProbe())
+    : { transparent: true, backgroundColor: '#00000000', reason: 'native' }
+  if (isLinux) log('info', 'window surface', { reason: surface.reason })
+
   const win = new BrowserWindow({
     width: WINDOW_WIDTH,
     height,
     x: position.x,
     y: position.y,
     frame: false,
-    transparent: true,
+    transparent: surface.transparent,
     resizable: false,
     movable: true,
     hasShadow: false,
@@ -95,9 +118,12 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     show: false,
     alwaysOnTop: config.alwaysOnTop,
     opacity: config.opacity,
-    backgroundColor: '#00000000',
+    backgroundColor: surface.backgroundColor,
     roundedCorners: false,
     title: 'CodeWaifu',
+    // The taskbar / Alt-Tab icon comes from the window on X11 and Windows, not
+    // from the bundle, so without this Linux shows the stock Electron atom.
+    icon: isMac ? undefined : nativeImage.createFromBuffer(waifuIconPng(256)),
     webPreferences: {
       preload: preloadEntry(),
       sandbox: false,
@@ -113,7 +139,9 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   })
 
   if (config.alwaysOnTop) win.setAlwaysOnTop(true, 'floating')
-  if (isMac) {
+  if (isMac || isLinux) {
+    // Keep her on every workspace: a companion that disappears when you switch
+    // to another desktop is a companion nobody looks at.
     try {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     } catch (error) {
@@ -162,6 +190,14 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     return { width, height }
   }
 
+  /**
+   * Last input shape applied on Linux, so an unchanged measurement costs
+   * nothing. Declared above `applyGeometry` because that function clears it:
+   * the shape is window-relative, so a resized frame invalidates the one we
+   * have and the renderer's next report must be taken at its word.
+   */
+  let shaped: RegionRect | null = null
+
   const applyGeometry = (): void => {
     const size = targetSize()
     const [x, y] = win.getPosition()
@@ -173,6 +209,7 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     const nextX = Math.round(x + width > area.x + area.width ? Math.max(area.x, area.x + area.width - width) : x)
     const nextY = Math.round(y + height > area.y + area.height ? Math.max(area.y, area.y + area.height - height) : y)
     win.setBounds({ x: nextX, y: nextY, width, height })
+    shaped = null
     handlers.onMoved({ x: nextX, y: nextY })
   }
 
@@ -223,8 +260,21 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     win.setPosition(next.x, next.y)
   }
 
+  /**
+   * Letting the empty margins pass clicks through, per platform.
+   *
+   * macOS and Windows use `setIgnoreMouseEvents(through, { forward: true })`:
+   * forwarding is what lets the page see the pointer come back over the card and
+   * undo it. Linux has no forwarding — the option is documented
+   * `@platform darwin,win32` — so a click-through window there never receives
+   * another mousemove and would stay unclickable for the rest of the session.
+   * Linux gets an input shape instead (`setSolidRegion`), which is strictly
+   * better: outside the region nothing is drawn and nothing is caught, inside it
+   * everything works, and no forwarding is needed.
+   */
   let clickThrough = false
   const setClickThrough = (through: boolean): void => {
+    if (isLinux) return
     if (through === clickThrough) return
     clickThrough = through
     try {
@@ -235,6 +285,26 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     }
   }
   setClickThrough(false)
+
+  const setSolidRegion = (rects: readonly RegionRect[]): void => {
+    if (!isLinux || win.isDestroyed()) return
+    const bounds = win.getBounds()
+    const next = shapeForRegion(unionRect(rects), {
+      x: 0,
+      y: 0,
+      width: bounds.width,
+      height: bounds.height
+    })
+    // null means "do not trust this measurement": keep the shape we have. An
+    // empty `setShape([])` is not a reset on Linux, it is a zero-area window.
+    if (!next || sameRegion(next, shaped)) return
+    try {
+      win.setShape([next])
+      shaped = next
+    } catch (error) {
+      log('warn', 'setShape failed', String(error))
+    }
+  }
 
   const show = (focus: boolean): void => {
     if (!win.isDestroyed()) {
@@ -292,6 +362,7 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     setExpanded,
     setChatMode,
     setClickThrough,
+    setSolidRegion,
     isVisible: () => !win.isDestroyed() && win.isVisible(),
     moveBy,
     fitHeight,
@@ -327,6 +398,11 @@ function createTray(
     const size = isMac ? 22 : 32
     const image = nativeImage.createFromBuffer(waifuIconPng(size * 4)).resize({ width: size, height: size })
     const tray = new Tray(image)
+    if (isLinux) {
+      // A Tray object is created even when no host will ever show it, so the
+      // bus probe is the only way to tell the user why the icon is missing.
+      logDesktop()
+    }
     tray.setToolTip('CodeWaifu')
     const build = (): Menu => {
       const muted = handlers.isMuted()

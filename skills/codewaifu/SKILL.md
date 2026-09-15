@@ -22,13 +22,33 @@ The installer downloads the latest release, puts the app in `/Applications`
 which merges hooks into `~/.codex/hooks.json` and `~/.claude/settings.json`
 with backups. Never hand-edit those two files for this purpose.
 
-Then launch the app (`open /Applications/CodeWaifu.app`) so the relay binds and
-the greeting plays.
+On Linux the user-space install lands in `~/.local/share/CodeWaifu` (extracted
+AppImage tree), with a launcher at `~/.local/bin/codewaifu` and a desktop entry
+in `~/.local/share/applications`. Nothing needs root; the `.deb` release asset is
+the root-installed alternative at `/opt/CodeWaifu`.
+
+Linux only, and expected: a user-space install cannot add an AppArmor profile or
+a setuid sandbox helper, and Ubuntu 23.10+ sets
+`kernel.apparmor_restrict_unprivileged_userns=1`, under which Chromium aborts
+before any of our JavaScript runs. The installer detects that and marks the
+install with `~/.local/share/CodeWaifu/.no-sandbox`, so the launcher passes
+`--no-sandbox`; the log then reads `sandbox disabled (argv:--no-sandbox)`. That
+warning is not a failure. To keep the Chromium sandbox instead, install the
+`.deb` with `sudo apt install ./CodeWaifu-<ver>-linux-amd64.deb` (its postinst
+adds the profile), or relax the sysctl - but do not chase the warning.
+
+Then launch the app so the relay binds and the greeting plays: macOS
+`open /Applications/CodeWaifu.app`, Linux
+`setsid codewaifu >/dev/null 2>&1 < /dev/null &` (detached, or it dies with the
+shell), Windows from the Start menu.
 
 ## Verify
 
 `/Applications/CodeWaifu.app/Contents/MacOS/CodeWaifu --cli status`
 (Windows: `%LOCALAPPDATA%\Programs\CodeWaifu\CodeWaifu.exe --cli status`).
+On Linux use `codewaifu status` if the launcher is on `PATH`, otherwise
+`~/.local/share/CodeWaifu/AppRun --cli status`. `--cli` still needs a display:
+on a headless box wrap it in `xvfb-run -a`.
 
 Healthy output: `app: running`, `relay: 127.0.0.1:<port>`, both agents listed
 with events, `runner: installed`. A `relay.conflict` note means the preferred
@@ -50,6 +70,16 @@ silent while Claude Code already works. Always mention this after installing.
 
 - Nothing speaks: check `speak` and volume in the companion's Settings tab, and
   that the OS TTS voice for the chosen language exists.
+- Linux speaks nothing and the log names `espeak-ng`: install `espeak-ng` (the
+  offline voice), and `playerctl` if the media transport buttons are dead (MPRIS).
+- Linux shows no tray icon under GNOME: install
+  `gnome-shell-extension-appindicator` - GNOME dropped legacy tray support, and
+  the app only warns about it. The window itself is unaffected.
+- Linux app exits at once with `platform failed to initialize`: no `DISPLAY`.
+  Use a real session or `xvfb-run -a`.
+- Linux missing shared libraries (`ldd ~/.local/share/CodeWaifu/codewaifu` shows
+  `not found`): install `libgtk-3-0t64 libnss3 libasound2t64` (names vary by
+  distro/release; `libasound2` before Ubuntu 24.04).
 - Hooks fire but no bubble: the app was not running; events are not queued
   across launches by design.
 - Log: `~/.codewaifu/codewaifu.log`.

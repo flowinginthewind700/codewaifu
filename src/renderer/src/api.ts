@@ -1,5 +1,6 @@
 import type { ConfigPatch } from '@shared/config'
 import type { ChatTranscript } from '@shared/chat'
+import type { RegionRect } from '@shared/linuxRuntime'
 import type { MediaCommand, MediaState } from '@shared/media'
 import type {
   Agent,
@@ -87,6 +88,11 @@ export const api = {
 
   setExpanded: (expanded: boolean) => call<{ ok: boolean }>(CH.expanded, expanded),
   setClickThrough: (through: boolean) => call<{ ok: boolean }>(CH.clickThrough, through),
+  /**
+   * Linux only: report which parts of the frame are actually ours, so main can
+   * shape the window's input region around them.
+   */
+  setSolidRegion: (rects: readonly RegionRect[]) => call<{ ok: boolean }>(CH.solidRegion, rects),
   /** Drag the frame; deltas are screen pixels since the last pointer sample. */
   moveWindow: (dx: number, dy: number) => call<{ ok: boolean }>(CH.moveWindow, { dx, dy }),
   hide: () => call<{ ok: boolean }>(CH.hide),
