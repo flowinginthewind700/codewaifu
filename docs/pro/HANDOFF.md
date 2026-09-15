@@ -141,6 +141,12 @@ without reading those first.
 - **The companion never becomes a second keyboard.** There is deliberately no
   `input` or `keys` verb on the companion channel; `proCommand.test.ts` pins
   their absence.
+- **Attach does not replay scrollback.** A pane shows output produced from
+  the moment of attach; a terminal that keeps a backlog replays history at the
+  user forever (`terminalBridge.ts`). An idle pane is therefore legitimately
+  empty, and with WebGL active its DOM rows are empty too (two canvases carry
+  the pixels) - neither is a bug. Proven live by typing `echo ...` into the pane
+  with trusted CDP key events and watching the find bar count the matches.
 - **Terminal output is untrusted.** It is the only string in the app we do not
   author, so links leave through the `openExternal` host op behind an
   http/https/mailto allow-list that runs in main.
