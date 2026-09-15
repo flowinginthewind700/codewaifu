@@ -1,0 +1,2002 @@
+/* ==========================================================================
+   CodeWaifu Pro - the Bench
+
+   Layout contract, in one place so the JSX never invents a size:
+
+     .bench  = grid, areas "top top top" / "rail center right"
+               columns 264px | flexible | 344px, rows 46px | flexible
+
+   Two rules the whole file obeys:
+
+   1. Nothing is translucent. The widget is glass because it floats over the
+      desktop and must not hide it; the bench is an opaque work surface that
+      sits beside your editor, and a terminal you can see your wallpaper
+      through is a terminal you cannot read. Tokens are imported for the
+      accents, the radii and the motion curves - not for --bg.
+   2. Every scrolling region declares `min-height: 0`. A grid child defaults to
+      `min-height: auto`, which means it grows to fit its content and pushes the
+      pane grid off the bottom of the window. Every "the list overflows the
+      window" bug in a CSS grid is this.
+   ========================================================================== */
+
+@import '../tokens.css';
+
+:root {
+  /* Opaque warm charcoal, a shade darker than the widget so the bench reads as
+     "the room the widget lives in". Three surfaces, never more: a fourth is a
+     card-in-a-card. */
+  --bench-bg: #14121a;
+  --bench-panel: #191621;
+  --bench-panel-2: #1f1b29;
+  --bench-line: rgba(255, 255, 255, 0.08);
+  --bench-line-soft: rgba(255, 255, 255, 0.045);
+  --bench-term: #0f0d14;
+
+  /* Awaiting review. Not one of the four shared accents: "finished, waiting for
+     my eyes" is a fifth state and it deserves its own colour rather than
+     borrowing mint (which means working) or amber (which means blocked). */
+  --bench-review: #82aaff;
+
+  --rail-w: 264px;
+  --right-w: 344px;
+  --topbar-h: 46px;
+
+  /* Type. The bench is dense: 12.5px body, 11px labels, 12px terminals. */
+  --fs-body: 12.5px;
+  --fs-small: 11px;
+  --fs-term: 12.5px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bench-bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  letter-spacing: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One scrollbar style for every scrolling region in the window. */
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+
+.bench {
+  display: grid;
+  height: 100%;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--right-w);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  grid-template-areas:
+    'top top top'
+    'rail center right';
+}
+
+.boot {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  gap: 10px;
+  color: var(--muted);
+  font-size: var(--fs-body);
+}
+
+/* ==========================================================================
+   Topbar
+   ========================================================================== */
+
+.bench-topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  min-width: 0;
+  background: var(--bench-panel);
+  border-bottom: 1px solid var(--bench-line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.brand-sub {
+  font-size: var(--fs-small);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  white-space: nowrap;
+}
+
+.counts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--bench-panel-2);
+  border: 1px solid var(--bench-line-soft);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.count b {
+  font-weight: 650;
+}
+
+/* A zero is not information. Dimmed rather than hidden, so the row never
+   reflows and your eye keeps its place. */
+.count[data-zero='true'] {
+  opacity: 0.4;
+}
+
+.count[data-state='working'] {
+  color: var(--mint);
+  border-color: rgba(89, 215, 179, 0.3);
+}
+
+.count[data-state='blocked'] {
+  color: var(--amber);
+  border-color: rgba(245, 180, 92, 0.32);
+}
+
+.count[data-state='needsMe'] {
+  color: var(--pink);
+  border-color: rgba(255, 125, 150, 0.34);
+}
+
+.count[data-state='done'] {
+  color: var(--bench-review);
+  border-color: rgba(130, 170, 255, 0.28);
+}
+
+.spacer {
+  flex: 1 1 auto;
+  min-width: 4px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.toggles {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-line-soft);
+}
+
+/* A toggle is an icon button with a checked state, not a checkbox with a label:
+   the topbar has room for three glyphs and a word, not three sentences. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    color var(--dur-1) var(--ease-swift),
+    background var(--dur-1) var(--ease-swift);
+}
+
+.toggle:hover {
+  color: var(--muted);
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle:has(input:checked) {
+  color: var(--text);
+  background: var(--bench-panel-2);
+}
+
+.toggle:has(input:focus-visible) {
+  outline: 2px solid var(--pink);
+  outline-offset: 1px;
+}
+
+.toggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* `.select` defaults to full width because it normally lives in a dialog. In the
+   topbar it is one compact control among many, and a native select truncates its
+   own label, so a max-width is enough - no custom dropdown, no clipped text. */
+.bench-topbar .select {
+  width: auto;
+  max-width: 168px;
+  padding: 2px 6px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.bench-topbar .select:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.bench-topbar .select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (max-width: 1180px) {
+  .bench-topbar .select {
+    max-width: 108px;
+  }
+}
+
+/* ==========================================================================
+   Controls
+   ========================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--bench-line);
+  background: var(--bench-panel-2);
+  color: var(--text);
+  font-size: var(--fs-small);
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur-1) var(--ease-swift),
+    border-color var(--dur-1) var(--ease-swift),
+    color var(--dur-1) var(--ease-swift);
+}
+
+.btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: 1px;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+/* Primary = the companion's colour. There is at most one per surface. */
+.btn.primary {
+  background: var(--pink);
+  border-color: transparent;
+  color: #2a1620;
+  font-weight: 600;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #ff92a7;
+  border-color: transparent;
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: rgba(255, 107, 129, 0.16);
+  border-color: rgba(255, 107, 129, 0.4);
+  color: var(--danger);
+}
+
+.btn.approve {
+  background: rgba(89, 215, 179, 0.14);
+  border-color: rgba(89, 215, 179, 0.34);
+  color: var(--mint);
+}
+
+.btn.approve:hover:not(:disabled) {
+  background: rgba(89, 215, 179, 0.24);
+  border-color: rgba(89, 215, 179, 0.5);
+  color: var(--mint);
+}
+
+.btn.deny:hover:not(:disabled) {
+  background: rgba(240, 145, 107, 0.16);
+  border-color: rgba(240, 145, 107, 0.42);
+  color: var(--coral);
+}
+
+.btn.sm {
+  padding: 2px 7px;
+  font-size: 10.5px;
+}
+
+.btn.icon {
+  padding: 3px;
+  width: 24px;
+  height: 24px;
+}
+
+/* An action whose sub-panel is currently open stays lit, so "which of these did
+   I just expand" is answerable without reading the panel below. */
+.btn[data-open] {
+  background: var(--pink-soft);
+  border-color: rgba(255, 125, 150, 0.4);
+  color: var(--pink);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--bench-line);
+  background: var(--bench-bg);
+  font-size: var(--fs-small);
+  color: var(--muted);
+  min-width: 0;
+}
+
+.chip.online {
+  color: var(--mint);
+  border-color: rgba(89, 215, 179, 0.3);
+  background: rgba(89, 215, 179, 0.08);
+}
+
+.chip.offline {
+  color: var(--danger);
+  border-color: rgba(255, 107, 129, 0.32);
+  background: rgba(255, 107, 129, 0.08);
+}
+
+/* Truncation lives on the text, not the chip, so the border never clips. */
+.chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 15px;
+  letter-spacing: 0;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Agent colours match the widget's thread list: codex mint, claude coral. Two
+   surfaces disagreeing about which agent is which colour is a real cost. */
+.tag.codex {
+  color: var(--mint);
+  background: rgba(89, 215, 179, 0.13);
+}
+
+.tag.claude {
+  color: var(--coral);
+  background: rgba(240, 145, 107, 0.13);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field > span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--faint);
+}
+
+.input,
+.textarea,
+.select {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--bench-line);
+  background: var(--bench-bg);
+  color: var(--text);
+  font-size: var(--fs-body);
+  outline: none;
+  transition: border-color var(--dur-1) var(--ease-swift);
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  border-color: rgba(255, 125, 150, 0.55);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--faint);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 54px;
+  line-height: 1.5;
+}
+
+.select {
+  cursor: pointer;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.hint {
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+
+.section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--faint);
+}
+
+.empty-note {
+  padding: 18px 14px;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: 1.6;
+}
+
+/* ==========================================================================
+   Left rail: the tree
+   ========================================================================== */
+
+.bench-rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bench-panel);
+  border-right: 1px solid var(--bench-line);
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+}
+
+.rail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0 8px;
+}
+
+.rail-foot {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-top: 1px solid var(--bench-line-soft);
+  color: var(--faint);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.group {
+  margin-bottom: 2px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 4px 9px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--muted);
+  border-radius: 0;
+}
+
+.group-head:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.group-head:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: -2px;
+}
+
+.group-head svg.chev {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform var(--dur-1) var(--ease-swift);
+}
+
+.group-head[data-open='true'] svg.chev {
+  transform: rotate(90deg);
+}
+
+.group-name {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.group-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 9px 4px 18px;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.task-row:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.task-row:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: -2px;
+}
+
+.task-row[data-selected='true'] {
+  background: rgba(255, 125, 150, 0.11);
+  border-left-color: var(--pink);
+}
+
+/* Keyboard cursor is drawn even when the row is not focused: you should be able
+   to see where j/k landed while reading a pane. */
+.task-row[data-cursor='true']:not([data-selected='true']) {
+  background: rgba(255, 255, 255, 0.07);
+  border-left-color: rgba(255, 255, 255, 0.28);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  flex: 0 0 auto;
+  background: var(--faint);
+}
+
+.dot[data-state='working'] {
+  background: var(--mint);
+  box-shadow: 0 0 0 3px rgba(89, 215, 179, 0.14);
+}
+
+.dot[data-state='blocked'] {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(245, 180, 92, 0.16);
+}
+
+.dot[data-state='done'] {
+  background: var(--bench-review);
+}
+
+.dot[data-state='idle'] {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.task-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.task-name {
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--faint);
+  min-width: 0;
+}
+
+.task-sub .branch {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.task-sub .warn {
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.task-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 99px;
+  font-size: 9.5px;
+  line-height: 14px;
+  background: rgba(255, 125, 150, 0.16);
+  color: var(--pink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pill.quiet {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--faint);
+}
+
+/* ==========================================================================
+   Center: task card + pane grid
+   ========================================================================== */
+
+.bench-center {
+  grid-area: center;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bench-bg);
+}
+
+.task-card {
+  flex: 0 0 auto;
+  padding: 9px 12px 10px;
+  border-bottom: 1px solid var(--bench-line);
+  background: var(--bench-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-card-title {
+  font-size: 14px;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Facts are a definition list, not chips: they are read as "branch = x", and a
+   wall of pills is slower to scan than a row of label/value pairs. */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  margin: 0;
+  min-width: 0;
+}
+
+.facts > div {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.facts dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.facts dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.facts dd[data-empty='true'] {
+  color: var(--faint);
+  font-family: var(--font);
+  font-style: italic;
+}
+
+.intent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.intent-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.intent-row .section-label {
+  flex: 0 0 54px;
+}
+
+.intent-row p {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text);
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.intent-row p[data-empty='true'] {
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* "Next" is the one line that answers "what should I do about this task", so it
+   gets the review colour and slightly more weight than the goal above it. */
+.intent-row p.next {
+  color: var(--bench-review);
+  font-weight: 500;
+}
+
+.verbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.steer {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+}
+
+.steer .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Recovery banner. Amber for resumable/rebuild, coral for lost: the difference
+   is "we can put it back" versus "we can only tell you what it was". */
+.banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(245, 180, 92, 0.3);
+  background: rgba(245, 180, 92, 0.07);
+  min-width: 0;
+}
+
+.banner[data-tone='lost'] {
+  border-color: rgba(240, 145, 107, 0.34);
+  background: rgba(240, 145, 107, 0.08);
+}
+
+.banner-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.banner-head svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--amber);
+}
+
+.banner[data-tone='lost'] .banner-head svg {
+  color: var(--coral);
+}
+
+.banner-title {
+  font-size: var(--fs-small);
+  font-weight: 620;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.banner[data-tone='lost'] .banner-title {
+  color: var(--coral);
+}
+
+.banner-reason {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.banner-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* The plan's steps are shown before you press Apply. Executing four shell
+   commands because a button said "Apply" is not acceptable in a cockpit. */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  min-width: 0;
+}
+
+.steps .step-kind {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--faint);
+  width: 62px;
+}
+
+.steps .step-body {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Pane grid
+   ========================================================================== */
+
+.panes {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 1px;
+  background: var(--bench-line-soft);
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.panes[data-count='2'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.panes[data-count='3'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.panes[data-count='3'] > .pane:last-child {
+  grid-column: 1 / -1;
+}
+
+.panes[data-count='4'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: repeat(2, minmax(0, 1fr));
+}
+
+/* Zoomed means one pane fills the grid; the rest stay mounted but hidden, so
+   unzooming does not cost a re-attach and a full repaint. */
+.panes[data-zoomed='true'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bench-term);
+  position: relative;
+}
+
+.pane[data-zoom-hidden='true'] {
+  display: none;
+}
+
+.pane[data-active='true'] {
+  outline: 1px solid rgba(255, 125, 150, 0.5);
+  outline-offset: -1px;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  background: var(--bench-panel);
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.pane-title {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pane-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--faint);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-flag[data-live='true'] {
+  color: var(--mint);
+}
+
+.pane-flag[data-phase='error'] {
+  color: var(--danger);
+}
+
+.pane-flag[data-phase='respawning'],
+.pane-flag[data-phase='starting'] {
+  color: var(--amber);
+}
+
+/* Absolutely positioned so xterm's own viewport owns the scroll and the flex
+   parent never has to know the terminal's pixel height. */
+.pane-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 0 2px 4px;
+}
+
+/* The grid's own empty state: no task selected, or the task has no live pane.
+   Same visual weight as a pane would have had, so the window never looks broken. */
+.panes-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 26px;
+  color: var(--faint);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  text-align: center;
+}
+
+.pane-body .xterm {
+  position: absolute;
+  inset: 0;
+}
+
+.pane-body .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.pane-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  background: rgba(15, 13, 20, 0.82);
+  color: var(--faint);
+  font-size: var(--fs-small);
+  text-align: center;
+  padding: 12px;
+  z-index: 2;
+}
+
+.spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 99px;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-top-color: var(--pink);
+  animation: bench-spin 0.7s linear infinite;
+}
+
+@keyframes bench-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation-duration: 2s;
+  }
+
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==========================================================================
+   Right rail: queue / ledger / recovery
+   ========================================================================== */
+
+.bench-right {
+  grid-area: right;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bench-panel);
+  border-left: 1px solid var(--bench-line);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 5px 6px 0;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--bench-line-soft);
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px 7px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--muted);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: -2px;
+}
+
+.tab[data-active='true'] {
+  color: var(--text);
+  border-bottom-color: var(--pink);
+}
+
+.tab .tab-count {
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.09);
+  font-variant-numeric: tabular-nums;
+}
+
+.tab[data-active='true'] .tab-count {
+  background: var(--pink-soft);
+  color: var(--pink);
+}
+
+.panel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.panel-foot {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-top: 1px solid var(--bench-line-soft);
+  color: var(--faint);
+  font-size: 10px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------- attention queue */
+
+.queue {
+  display: flex;
+  flex-direction: column;
+}
+
+.qitem {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  border-left: 2px solid transparent;
+  min-width: 0;
+}
+
+.qitem[data-cursor='true'] {
+  background: rgba(255, 255, 255, 0.045);
+  border-left-color: var(--pink);
+}
+
+.qitem[data-snoozed='true'] {
+  opacity: 0.55;
+}
+
+.qitem[data-resolved='true'] {
+  opacity: 0.35;
+}
+
+.qitem-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.kind {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  font-size: 9.5px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.kind[data-kind='permission'] {
+  background: rgba(245, 180, 92, 0.16);
+  color: var(--amber);
+}
+
+.kind[data-kind='question'] {
+  background: rgba(255, 125, 150, 0.15);
+  color: var(--pink);
+}
+
+.kind[data-kind='failed'] {
+  background: rgba(255, 107, 129, 0.16);
+  color: var(--danger);
+}
+
+.kind[data-kind='review'] {
+  background: rgba(130, 170, 255, 0.16);
+  color: var(--bench-review);
+}
+
+.kind[data-kind='stalled'] {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.qitem-where {
+  font-size: 10.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.qitem-wait {
+  font-size: 10px;
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.qitem-text {
+  font-size: var(--fs-body);
+  color: var(--text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  /* Three lines is enough to recognise a prompt; more belongs in the pane. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.qitem-detail {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.qitem-cmd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-line-soft);
+  border-radius: var(--radius-xs);
+  padding: 3px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.qactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The keys a decision will press, shown before it presses them. This is the
+   whole honesty argument for sending keystrokes into someone else's TUI. */
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--faint);
+}
+
+.keycap kbd {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid var(--bench-line);
+  border-bottom-width: 2px;
+  background: var(--bench-panel-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.keys-preview {
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.no-recipe {
+  font-size: 10.5px;
+  color: var(--amber);
+  line-height: 1.5;
+}
+
+.answer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.answer-row {
+  display: flex;
+  gap: 5px;
+}
+
+.answer-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------- ledger */
+
+.ledger {
+  display: flex;
+  flex-direction: column;
+}
+
+.entry {
+  display: flex;
+  gap: 7px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  min-width: 0;
+}
+
+.entry-kind {
+  flex: 0 0 62px;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--faint);
+  padding-top: 2px;
+}
+
+.entry[data-kind='decision'] .entry-kind {
+  color: var(--mint);
+}
+
+.entry[data-kind='next'] .entry-kind {
+  color: var(--bench-review);
+}
+
+.entry[data-kind='goal'] .entry-kind {
+  color: var(--pink);
+}
+
+.entry[data-kind='git'] .entry-kind {
+  color: var(--coral);
+}
+
+.entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.entry-text {
+  font-size: var(--fs-body);
+  color: var(--text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.entry-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.capture {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  border-top: 1px solid var(--bench-line);
+  background: var(--bench-panel-2);
+  flex: 0 0 auto;
+}
+
+.capture-row {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+.capture-row .select {
+  flex: 0 0 88px;
+}
+
+.capture-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------- recovery tab */
+
+.plan {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  min-width: 0;
+}
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-title {
+  font-size: var(--fs-body);
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.plan-reason {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.verdict {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  font-size: 9.5px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.verdict[data-verdict='resumable'] {
+  background: rgba(245, 180, 92, 0.16);
+  color: var(--amber);
+}
+
+.verdict[data-verdict='rebuild'] {
+  background: rgba(240, 145, 107, 0.16);
+  color: var(--coral);
+}
+
+.verdict[data-verdict='lost'] {
+  background: rgba(255, 107, 129, 0.16);
+  color: var(--danger);
+}
+
+.verdict[data-verdict='intact'] {
+  background: rgba(89, 215, 179, 0.14);
+  color: var(--mint);
+}
+
+.plan-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* The bulk verb sits above the list, sticky-free: one button, one place. */
+.recovery-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--bench-line);
+  background: var(--bench-panel-2);
+}
+
+/* The title is the row's navigation. It is a real button so it is reachable by
+   keyboard and announces itself to a screen reader, restyled back to text. */
+button.plan-title {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+button.plan-title:hover {
+  color: var(--pink);
+}
+
+button.plan-title:focus-visible {
+  outline: 1px solid var(--pink);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ==========================================================================
+   Toasts, dialog, install card
+   ========================================================================== */
+
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  z-index: 40;
+  pointer-events: none;
+  max-width: min(560px, 92vw);
+}
+
+.toast {
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--bench-line);
+  background: var(--bench-panel-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: var(--fs-small);
+  color: var(--text);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  animation: toast-in var(--dur-2) var(--ease-spring);
+}
+
+.toast[data-tone='error'] {
+  border-color: rgba(255, 107, 129, 0.42);
+  color: var(--danger);
+}
+
+.toast[data-tone='warn'] {
+  border-color: rgba(245, 180, 92, 0.4);
+  color: var(--amber);
+}
+
+.toast[data-tone='ok'] {
+  border-color: rgba(89, 215, 179, 0.36);
+  color: var(--mint);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 12, 0.62);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  padding: 20px;
+  animation: fade-in var(--dur-1) var(--ease-swift);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.dialog {
+  width: min(560px, 100%);
+  max-height: min(86vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bench-panel);
+  border: 1px solid var(--bench-line);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  animation: dialog-in var(--dur-2) var(--ease-spring);
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+.dialog-head {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+}
+
+.dialog-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 620;
+}
+
+.dialog-grid {
+  padding: 12px 13px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.dialog-grid .wide {
+  grid-column: 1 / -1;
+}
+
+/* An input plus its Browse button on one line. `min-width: 0` on the input is
+   what stops a long absolute path from pushing the button out of the dialog. */
+.dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dialog-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dialog-row .btn {
+  flex: 0 0 auto;
+}
+
+.dialog-foot {
+  padding: 9px 13px;
+  border-top: 1px solid var(--bench-line-soft);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  accent-color: var(--pink);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.dialog-error {
+  color: var(--danger);
+  font-size: var(--fs-small);
+}
+
+/* ---------------------------------------------------------- install card */
+
+.install {
+  grid-area: center;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.install-card {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--bench-line);
+  border-radius: var(--radius);
+  background: var(--bench-panel);
+}
+
+.install-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 640;
+}
+
+.install-body {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: 1.65;
+}
+
+.install-error {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--coral);
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-line-soft);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  overflow-wrap: anywhere;
+}
+
+.install-step {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* Selectable, because the fix is a command the user has to run themselves. */
+.install-cmd {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--bench-bg);
+  border: 1px solid var(--bench-line-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--text);
+  user-select: all;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.install-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   Narrow windows
+
+   The bench has a 760px minimum, but a 900px window is a real case (half a
+   1080p screen beside an editor). Below 980px the right rail becomes a drawer
+   that overlays the panes rather than stealing width from them: a terminal
+   squeezed to 300px is useless, a queue you summon when you need it is not.
+   ========================================================================== */
+
+.right-toggle {
+  display: none;
+}
+
+@media (max-width: 980px) {
+  .bench {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    grid-template-areas:
+      'top top'
+      'rail center';
+  }
+
+  .right-toggle {
+    display: inline-flex;
+  }
+
+  .right-toggle[data-count]:not([data-count='0'])::after {
+    content: attr(data-count);
+    font-size: 9.5px;
+    padding: 0 4px;
+    border-radius: 99px;
+    background: var(--pink);
+    color: #2a1620;
+    font-weight: 650;
+  }
+
+  .bench-right {
+    position: fixed;
+    top: var(--topbar-h);
+    right: 0;
+    bottom: 0;
+    width: min(var(--right-w), 88vw);
+    z-index: 30;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.5);
+    transform: translateX(101%);
+    transition: transform var(--dur-2) var(--ease-spring);
+  }
+
+  .bench[data-right='open'] .bench-right {
+    transform: translateX(0);
+  }
+}
+
+/* Below 720px the tree is also too wide to keep beside the panes. It becomes a
+   drawer from the left, same mechanism, and the topbar keeps only the verbs. */
+@media (max-width: 720px) {
+  .bench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'top'
+      'center';
+  }
+
+  .rail-toggle {
+    display: inline-flex;
+  }
+
+  .bench-rail {
+    position: fixed;
+    top: var(--topbar-h);
+    left: 0;
+    bottom: 0;
+    width: min(var(--rail-w), 84vw);
+    z-index: 30;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.5);
+    transform: translateX(-101%);
+    transition: transform var(--dur-2) var(--ease-spring);
+  }
+
+  .bench[data-rail='open'] .bench-rail {
+    transform: translateX(0);
+  }
+
+  .brand-sub,
+  .counts .count[data-state='idle'],
+  .counts .count[data-state='unknown'] {
+    display: none;
+  }
+}
+
+.rail-toggle {
+  display: none;
+}
