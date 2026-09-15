@@ -90,8 +90,10 @@ import type { HerdrClient, ReadFormat, ReadSource } from './herdr/client'
 import {
   describeDiscovery,
   discoverHerdr,
-  type DiscoveryDeps,
-  type HerdrTarget
+  fsPathExists,
+  type ExistsFn,
+  type HerdrTarget,
+  type ResolveDeps
 } from './herdr/discovery'
 import { HerdrSession, type SessionChange, type SessionStatus } from './herdr/session'
 import type { ConnectFn } from './herdr/socket'
@@ -287,7 +289,14 @@ export interface ProServiceDeps {
   host: ProHost
   timers?: ServiceTimers
   intervals?: Partial<ServiceIntervals>
-  discover?: (deps: DiscoveryDeps) => HerdrTarget
+  discover?: (deps: ResolveDeps) => HerdrTarget
+  /**
+   * The probe the default discovery resolves its candidate lists with. Real by
+   * default (`fsPathExists`); a test fakes it to lay out a herdr that is not
+   * installed. It is a dep rather than a constant so that "discovery cannot see
+   * the filesystem" stays a testable state instead of an invisible one.
+   */
+  exists?: ExistsFn
   /** Injected into `HerdrSession` and `HerdrClient`; a test fakes the socket. */
   connect?: ConnectFn
   spawn?: SpawnFn
@@ -392,7 +401,8 @@ export class ProService implements CompanionApi {
   private readonly host: ProHost
   private readonly timers: ServiceTimers
   private readonly intervals: ServiceIntervals
-  private readonly discoverFn: (deps: DiscoveryDeps) => HerdrTarget
+  private readonly discoverFn: (deps: ResolveDeps) => HerdrTarget
+  private readonly existsFn: ExistsFn
   private readonly connect: ConnectFn | undefined
   private readonly spawn: SpawnFn | undefined
   private readonly env: () => Record<string, string | undefined>
@@ -444,6 +454,7 @@ export class ProService implements CompanionApi {
     this.host = deps.host
     this.timers = deps.timers ?? realServiceTimers
     this.intervals = { ...DEFAULT_INTERVALS, ...(deps.intervals ?? {}) }
+    this.existsFn = deps.exists ?? fsPathExists
     this.discoverFn = deps.discover ?? ((input) => discoverHerdr(input))
     this.connect = deps.connect
     this.spawn = deps.spawn
@@ -631,6 +642,7 @@ export class ProService implements CompanionApi {
     try {
       target = this.discoverFn({
         env: this.env(),
+        exists: this.existsFn,
         binaryPath: cfg.herdrPath,
         socketPath: cfg.socketPath,
         session: cfg.herdrSession

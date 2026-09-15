@@ -14,9 +14,13 @@
  *   override   = $HERDR_SOCKET_PATH wins over both
  *
  * Debug builds of herdr use `herdr-dev` as the directory name, so both spellings
- * are probed. Nothing here touches the filesystem by default: `exists` is
- * injected, which is what makes the whole module unit-testable.
+ * are probed. The candidate lists below stay pure - they compute paths without
+ * touching the filesystem, which is what makes them unit-testable. Resolving them
+ * is the impure half, so `discoverHerdr` *requires* an `exists` probe: a caller
+ * that forgets it fails to compile instead of reporting "no herdr" on a machine
+ * where herdr is running. `fsPathExists` is the real probe.
  */
+import fs from 'node:fs'
 
 export type PlatformName = 'linux' | 'darwin' | 'win32'
 
@@ -31,6 +35,14 @@ export interface DiscoveryDeps {
   socketPath?: string
   /** ProConfig.herdrSession: an explicit session name chosen in settings. */
   session?: string
+}
+
+/** The filesystem probe discovery resolves its candidate lists with. */
+export type ExistsFn = (path: string) => boolean
+
+/** What resolving needs: the candidate deps plus a probe that really looks. */
+export interface ResolveDeps extends DiscoveryDeps {
+  exists: ExistsFn
 }
 
 /** Both the release and the debug-build directory names, in probe order. */
@@ -172,14 +184,34 @@ export interface HerdrTarget {
 }
 
 /**
+ * The real probe. Discovery looks for exactly two kinds of thing - an executable
+ * and a unix socket - so both count and a directory does not. That last part is
+ * not decoration: `binaryCandidates` walks every entry in `PATH`, and a directory
+ * that happens to be named `herdr` would otherwise resolve as the binary and fail
+ * much later, at spawn time, with an error pointing nowhere near here. A dangling
+ * symlink throws inside `statSync` and reads as absent, which is the same answer
+ * herdr itself would get.
+ */
+export function fsPathExists(target: string): boolean {
+  const candidate = String(target || '').trim()
+  if (!candidate) return false
+  try {
+    const stat = fs.statSync(candidate)
+    return stat.isFile() || stat.isSocket()
+  } catch {
+    return false
+  }
+}
+
+/**
  * Resolve both halves of "where is herdr". A missing binary is not fatal for
  * reading state (the socket is enough), and a missing socket is not fatal for
  * spawning bridges (the binary is enough), so each is resolved independently
  * and `reason` names whichever is missing.
  */
-export function discoverHerdr(deps: DiscoveryDeps = {}): HerdrTarget {
+export function discoverHerdr(deps: ResolveDeps): HerdrTarget {
   const env = deps.env ?? {}
-  const exists = deps.exists ?? (() => false)
+  const exists = deps.exists
   const session = normalizeSession(deps.session ?? env[SESSION_ENV_VAR])
   const triedSockets = socketCandidates(deps)
   const socketPath = triedSockets.find((candidate) => exists(candidate)) ?? null
