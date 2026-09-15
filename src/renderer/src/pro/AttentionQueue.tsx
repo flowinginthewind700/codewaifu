@@ -27,7 +27,9 @@ import {
   X
 } from 'lucide-react'
 import {
+  ANSWER_MAX_CHARS,
   DEFAULT_SNOOZE_MINUTES,
+  answerText,
   attentionActions,
   decisionKeys,
   type AttentionAction,
@@ -37,6 +39,7 @@ import {
 import { fill, type Translate } from './i18n'
 import { dur } from './time'
 import type { Tone } from './toast'
+import { useImeEnter } from '../useIme'
 
 export interface AttentionQueueProps {
   /** readonly: the queue renders the service's ranking; it never reorders or edits it. */
@@ -81,6 +84,10 @@ export function AttentionQueue({
 }: AttentionQueueProps): ReactElement {
   const [answering, setAnswering] = useState('')
   const [draft, setDraft] = useState('')
+  // Enter sends only outside a composition: the Enter that commits a Chinese
+  // candidate is a keydown like any other, and without this it ships half-typed
+  // pinyin to the agent as an answer.
+  const ime = useImeEnter()
 
   if (!items.length) {
     return (
@@ -92,7 +99,10 @@ export function AttentionQueue({
   }
 
   const sendAnswer = (item: AttentionItem): void => {
-    const text = draft.trim()
+    // Same normalization the widget bubble and `POST /pro/answer` go through:
+    // a pasted paragraph folds to one line, because a newline reaching the pane
+    // is Enter and submits the first half early.
+    const { text } = answerText(draft)
     if (!text) {
       onNotify(t('answerNeedsText'), 'warn')
       return
@@ -167,16 +177,22 @@ export function AttentionQueue({
                       autoFocus
                       value={draft}
                       placeholder={t('answerPlaceholder')}
+                      maxLength={ANSWER_MAX_CHARS}
                       onChange={(event) => setDraft(event.target.value)}
                       onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          sendAnswer(item)
-                        } else if (event.key === 'Escape') {
+                        if (event.key === 'Escape') {
+                          // Mid-composition Escape belongs to the IME: it drops
+                          // the candidate, not the answer box.
+                          if (ime.swallows(event)) return
                           setAnswering('')
                           setDraft('')
+                          return
                         }
+                        if (!ime.submits(event)) return
+                        event.preventDefault()
+                        sendAnswer(item)
                       }}
+                      {...ime.composition}
                     />
                     <button type="button" className="btn primary sm" onClick={() => sendAnswer(item)}>
                       {t('answerSend')}

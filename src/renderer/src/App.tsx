@@ -38,7 +38,7 @@ import {
   type PanelTab
 } from '@shared/ui'
 import { shouldClearBubble, type BenchCommand } from '@shared/companionLink'
-import type { AttentionAction } from '@shared/pro'
+import { answerText, type AttentionAction } from '@shared/pro'
 import type { ProCompanionPush, ProResult } from '@shared/proIpc'
 import { resolveUiLang } from '@shared/lang'
 import { expressionForMood } from '@shared/live2dMood'
@@ -74,6 +74,14 @@ const GESTURE_KINDS: ReadonlySet<string> = new Set(['stop', 'session_start', 'pe
 const REPORT_MS_PER_LINE = 2600
 /** How long a hand-picked face wins over the event-driven mood. */
 const MANUAL_FACE_MS = 8000
+/**
+ * How long a bubble stays up after its answer composer closes without sending.
+ *
+ * The composer suspends the bubble's own hold, so closing it has to hand back a
+ * clock: without one, an Escape leaves the question on screen until the next
+ * push happens to clear it.
+ */
+const ANSWER_TAIL_MS = 4000
 
 /**
  * OS language as the renderer can see it, used only for the frames before
@@ -141,6 +149,15 @@ export function App(): ReactElement {
    * now, and a stale closure would leave a lie up there.
    */
   const bubbleRef = useRef<BubbleMessage | null>(null)
+  /**
+   * True while a sentence is being typed into the bubble. Both clocks that can
+   * take a bubble down stand down here - its own hold timer, and
+   * `shouldClearBubble` on a bench push - because the push reporting "the queue
+   * drained" is exactly the one an in-flight answer causes.
+   */
+  const composingRef = useRef(false)
+  /** The notice that arrived while the composer held the bubble, if any. */
+  const heldBubble = useRef<{ message: BubbleMessage; holdMs: number; at: number } | null>(null)
   const toastTimer = useRef<number | null>(null)
   const clickThrough = useRef(false)
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -165,16 +182,29 @@ export function App(): ReactElement {
   /** Take the bubble down immediately; used when bench state outdates it. */
   const hideBubble = useCallback(() => {
     bubbleRef.current = null
+    // The composer's pin dies with the bubble it was pinning. Left set, it
+    // would hold every later notice forever: `onCompose(false)` is a no-op once
+    // this flag is clear, so nothing else stands it down.
+    composingRef.current = false
+    heldBubble.current = null
     if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current)
     bubbleTimer.current = null
     setBubble(null)
   }, [])
 
   const showBubble = useCallback((message: BubbleMessage, holdMs: number) => {
+    const hold = Math.max(1200, holdMs)
+    // A sentence being typed into the current bubble outranks a new notice:
+    // replacing the bubble would throw the text away. The notice is held and
+    // shown when the composer closes, so nothing is silently dropped.
+    if (composingRef.current) {
+      heldBubble.current = { message, holdMs: hold, at: Date.now() }
+      return
+    }
     bubbleRef.current = message
     setBubble(message)
     if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current)
-    bubbleTimer.current = window.setTimeout(hideBubble, Math.max(1200, holdMs))
+    bubbleTimer.current = window.setTimeout(hideBubble, hold)
   }, [hideBubble])
 
   const notice = useCallback((text: string) => {
@@ -288,7 +318,7 @@ export function App(): ReactElement {
         const push = payload as ProCompanionPush
         if (!push || typeof push.notices !== 'number' || !push.counts) return
         setBench((prev) => (sameBench(prev, push) ? prev : push))
-        if (shouldClearBubble(push, bubbleRef.current)) hideBubble()
+        if (shouldClearBubble(push, bubbleRef.current, composingRef.current)) hideBubble()
       }),
       api.on(CH.openPanel, () => {
         setExpanded(true)
@@ -506,7 +536,7 @@ export function App(): ReactElement {
 
   const onBubbleAct = useCallback(
     (route: BubbleRoute, action: string) => {
-      // No item to settle (or a verb that needs words): land on the pane instead.
+      // No item to settle: land on the pane instead.
       if (!route.itemId) {
         onBubbleOpen(route)
         return
@@ -523,6 +553,77 @@ export function App(): ReactElement {
         .then(reportPro)
     },
     [hideBubble, onBubbleOpen, reportPro]
+  )
+
+  /**
+   * The bubble's answer composer opened or closed.
+   *
+   * Opening it suspends the hold timer; closing it hands a clock back, because a
+   * bubble with no timer is a bubble that stays up until the next push happens to
+   * clear it. A notice that arrived while pinned is shown on the way out with
+   * whatever hold it has left - unless that hold already ran out, since a
+   * two-minute-old hook line surfacing out of nowhere is worse than not
+   * surfacing at all.
+   */
+  const onBubbleCompose = useCallback(
+    (open: boolean) => {
+      if (open) {
+        composingRef.current = true
+        if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current)
+        bubbleTimer.current = null
+        return
+      }
+      // Not coming out of a pin (Bubble reports a close on mount and whenever
+      // the message changes), so there is no clock to hand back.
+      if (!composingRef.current) return
+      composingRef.current = false
+      const held = heldBubble.current
+      heldBubble.current = null
+      const left = held ? held.holdMs - (Date.now() - held.at) : 0
+      if (held && left > 0) {
+        showBubble(held.message, left)
+        return
+      }
+      if (bubbleRef.current) showBubble(bubbleRef.current, ANSWER_TAIL_MS)
+    },
+    [showBubble]
+  )
+
+  /**
+   * A sentence typed into the bubble, sent as the same `answer` act the Bench's
+   * queue sends: the widget never owns state, it issues the verb.
+   *
+   * The result is checked for `sent` and not merely for `ok`. When the item was
+   * resolved elsewhere, `resolveCommand` degrades the command to "show that
+   * task" and answers `ok` - and reporting that as delivered is the one lie this
+   * feature could tell, of the expensive kind: the human walks away believing an
+   * agent is unblocked when all that happened was a window came forward.
+   */
+  const onBubbleAnswer = useCallback(
+    (route: BubbleRoute, text: string) => {
+      // Folded and capped here as well as in the service, so the widget's own
+      // "clipped" warning describes the text that is actually on its way.
+      const answer = answerText(text)
+      if (!route.itemId || !answer.text) return
+      hideBubble()
+      void api
+        .proCommand({
+          type: 'act',
+          action: 'answer',
+          itemId: route.itemId,
+          taskId: route.taskId,
+          paneId: route.paneId,
+          text: answer.text
+        })
+        .then((result) => {
+          if (!result?.ok) {
+            reportPro(result)
+            return
+          }
+          notice(result.code === 'sent' ? t('bubbleAnswered') : t('bubbleAnswerGone'))
+        })
+    },
+    [hideBubble, notice, reportPro, t]
   )
 
   /**
@@ -676,7 +777,13 @@ export function App(): ReactElement {
             data-compact={chatThread ? '1' : undefined}
             style={{ height: stageHeight(config.avatar.mode, view) }}
           >
-            <Bubble message={bubble} onOpen={onBubbleOpen} onAct={onBubbleAct} />
+            <Bubble
+              message={bubble}
+              onOpen={onBubbleOpen}
+              onAct={onBubbleAct}
+              onAnswer={onBubbleAnswer}
+              onCompose={onBubbleCompose}
+            />
             {live2d ? (
               <Suspense fallback={<span className="l2d-slot" />}>
                 <Live2DAvatar

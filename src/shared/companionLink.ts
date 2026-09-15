@@ -295,6 +295,21 @@ export function routeFor(item: AttentionItem, lang: Lang): BubbleRoute {
   }
 }
 
+/**
+ * May this bubble offer a typed answer?
+ *
+ * Two conditions, both of them the widget's own business: there has to be an
+ * item to answer (a hook notice or a status report has none), and `answer` has
+ * to be legal for its kind. `actions` is what main already checked against
+ * `attentionActions`, so this reads it rather than re-deriving verbs from
+ * `kind` - a second derivation is how the bubble ends up offering a verb the
+ * service will refuse.
+ */
+export function routeCanAnswer(route: BubbleRoute | null | undefined): boolean {
+  if (!route?.itemId) return false
+  return route.actions.includes('answer')
+}
+
 /** One number, three renders: tray badge, widget bubble, tree header. */
 export function badgeFor(view: BenchView): number {
   return needsMeCount(view.attention, view.generatedAt)
@@ -370,9 +385,17 @@ export function badgeLabel(push: ProCompanionPush | null): string {
  */
 export function shouldClearBubble(
   push: ProCompanionPush | null,
-  bubble: BubbleMessage | null
+  bubble: BubbleMessage | null,
+  composing = false
 ): boolean {
   if (!push || !bubble) return false
+  // A sentence half typed into the bubble outranks every push, including the
+  // two below. The push that says "the queue drained" is precisely the one an
+  // in-flight answer causes (the Bench resolved it, or the agent moved on), so
+  // honouring it here would delete the text the human is still writing. What
+  // they get instead is the send being refused out loud, which `resolveCommand`
+  // already arranges.
+  if (composing) return false
   const itemId = bubble.route?.itemId ?? ''
   // A hook bubble with no route is the companion's own business, not the
   // bench's; bench state must never clear it.

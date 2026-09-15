@@ -670,6 +670,62 @@ button.bubble-text:hover {
   background: rgba(255, 125, 150, 0.22);
 }
 
+/* ---- bubble answer composer (F7) --------------------------------------
+   `answer` is the one bubble verb that needs words, and the widget is the
+   surface for a human who is not at the desk: making them open the Bench to
+   type would cost exactly the window switch the bubble exists to avoid. So the
+   bubble grows one row. It widens while composing rather than staying at 196px
+   because a field narrower than a dozen characters hides the sentence being
+   typed, and the window has the room (320px, and 420px in the chat cameo where
+   the bubble already owns the row). */
+
+.bubble[data-compose='1'] {
+  max-width: 244px;
+}
+
+.bubble-answer {
+  margin-top: 6px;
+}
+
+.bubble-answer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* `input.bubble-input` for the same reason as `input.filter-input`: the shared
+   field rule is `input[type='text']` (0,1,1) and a lone class loses to it. */
+input.bubble-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  user-select: text;
+}
+
+input.bubble-input::placeholder {
+  color: var(--faint);
+}
+
+.bubble-answer-row .bubble-chip {
+  flex: 0 0 auto;
+}
+
+/* An empty answer is refused by the service ('an answer needs text'), so the
+   button says so first rather than letting the click do nothing. */
+.bubble-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bubble-answer-warn {
+  margin: 4px 0 0;
+  font-size: 9.5px;
+  line-height: 1.4;
+  color: var(--amber);
+}
+
 /* ---- media bar -------------------------------------------------------- */
 
 .media {

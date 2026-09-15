@@ -502,6 +502,53 @@ function none(input: AttentionPlanInput, code: NoExecCode, reason: string): Atte
 }
 
 /**
+ * The longest answer one click may type into a pane.
+ *
+ * This is not a UI preference. An answer is delivered as keystrokes: the
+ * `agent.prompt` path when herdr knows the agent, and `sendText` + `enter` when
+ * it does not. A TUI's input line has its own buffer, and past it the readline
+ * layer starts dropping or re-wrapping bytes - so an unbounded paste does not
+ * fail loudly, it arrives mangled and the agent answers a question nobody asked.
+ * Past the cap the honest move is to open the pane, which is one click away.
+ */
+export const ANSWER_MAX_CHARS = 400
+
+export interface AnswerText {
+  /** What will actually be sent: one line, at most {@link ANSWER_MAX_CHARS}. */
+  text: string
+  /** True when the cap cut something off, so the UI can say so instead of lying. */
+  clipped: boolean
+}
+
+/**
+ * Normalize a human answer into the one line a pane can take.
+ *
+ * Every whitespace run - including the newlines a pasted paragraph carries -
+ * folds to a single space, because a newline is Enter: the fallback path sends
+ * the text and then presses enter itself, so an embedded one submits the first
+ * half and types the rest into whatever the agent shows next. Length is counted
+ * in code points, not UTF-16 units, so the cap never cuts an emoji in half and
+ * leaves a lone surrogate to be typed into the terminal.
+ *
+ * Shared by all three callers (Bench answer box, widget bubble, `POST
+ * /pro/answer`) through {@link planAttentionAction}, so what the ledger records
+ * is what the pane received.
+ */
+export function answerText(raw: unknown): AnswerText {
+  const flat = String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const points = Array.from(flat)
+  if (points.length <= ANSWER_MAX_CHARS) return { text: flat, clipped: false }
+  // Cut on a space when one is near the end: a half word in the pane reads as a
+  // typo, and the same half word is what the ledger line will quote forever.
+  const head = points.slice(0, ANSWER_MAX_CHARS).join('')
+  const lastSpace = head.lastIndexOf(' ')
+  const text = (lastSpace > ANSWER_MAX_CHARS * 0.6 ? head.slice(0, lastSpace) : head).trimEnd()
+  return { text, clipped: true }
+}
+
+/**
  * Compile a click into a herdr instruction.
  *
  * The load-bearing rule is the `null` recipe: an agent we have no keystroke
@@ -513,7 +560,10 @@ export function planAttentionAction(input: AttentionPlanInput): AttentionExecuti
   const { item, action, now } = input
   const taskId = item.taskId
   const paneId = item.paneId
-  const text = String(input.text ?? '').trim()
+  // Folded and capped here rather than in each caller: the Bench answer box, the
+  // widget bubble and `POST /pro/answer` all reach this line, and a newline that
+  // survives to `sendText` submits half a sentence early.
+  const { text } = answerText(input.text)
 
   switch (action) {
     case 'approve':
