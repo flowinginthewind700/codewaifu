@@ -1,0 +1,167 @@
+// @vitest-environment jsdom
+/**
+ * The number in the topbar's `needs me` chip.
+ *
+ * `badgeFor` is the documented single source for "how many things need you", and
+ * it counts *queue items*: one task holding two open decisions is two things to
+ * answer. The chip used to render `counts.needsMe`, which counts *tasks*, so the
+ * bar said 1 while the bell beside it, the tray badge, the widget bubble, the
+ * queue tab and `codewaifu pro state` all said 2. Same words, two numbers, on one
+ * screen - and the smaller one was in the place you look first.
+ *
+ * The fixture is built here rather than imported from `tests/helpers/pro.ts`:
+ * that helper imports `src/main/server`, and a `.tsx` test sits in
+ * `tsconfig.web.json`, which does not list the main-process sources (TS6307).
+ */
+import { act, type ReactNode } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { emptyCounts, type AttentionItem, type BenchView } from '../src/shared/pro'
+import { badgeFor } from '../src/shared/companionLink'
+import { makeTranslator } from '../src/renderer/src/pro/i18n'
+import { TopBar } from '../src/renderer/src/pro/TopBar'
+
+const NOW = 1_700_000_000_000
+const t = makeTranslator('en')
+
+function item(patch: Partial<AttentionItem> = {}): AttentionItem {
+  const kind = patch.kind ?? 'question'
+  const taskId = patch.taskId ?? 't1'
+  return {
+    id: `${taskId}:${kind}:hook`,
+    kind,
+    source: 'hook',
+    taskId,
+    paneId: 'pane-1',
+    workspaceId: 'ws-1',
+    agentKind: 'codex',
+    taskTitle: 'ship the bench',
+    groupLabel: 'codewaifu',
+    title: 'which environment should I use?',
+    detail: '',
+    toolName: '',
+    command: '',
+    since: NOW - 60_000,
+    updatedAt: NOW - 60_000,
+    snoozedUntil: 0,
+    resolved: false,
+    ...patch
+  }
+}
+
+/**
+ * One task, two open decisions on it. Only `counts` and `attention` reach the
+ * chip, so the tree stays empty: a fixture with less in it has less to go stale.
+ */
+function bench(attention: AttentionItem[], taskCount: number): BenchView {
+  return {
+    generatedAt: NOW,
+    herdr: {
+      online: true,
+      version: '0.9.0',
+      socketPath: '/tmp/herdr.sock',
+      error: '',
+      workspaces: 1,
+      panes: 1
+    },
+    counts: { ...emptyCounts(), working: 1, blocked: 1, needsMe: taskCount, total: 1 },
+    groups: [],
+    tasks: [],
+    attention,
+    recovery: [],
+    companion: { visible: false, notices: 0 }
+  }
+}
+
+let container: HTMLDivElement
+let root: Root
+
+async function render(node: ReactNode): Promise<void> {
+  await act(async () => {
+    root.render(node)
+  })
+}
+
+function renderBar(view: BenchView): Promise<void> {
+  return render(
+    <TopBar
+      view={view}
+      pro={null}
+      railOpen={true}
+      rightOpen={true}
+      t={t}
+      onToggle={vi.fn()}
+      onSummon={vi.fn()}
+      onCompanion={vi.fn()}
+      onSnoozeAll={vi.fn()}
+      onAdopt={vi.fn()}
+      onNewTask={vi.fn()}
+      onRediscover={vi.fn()}
+      onToggleRail={vi.fn()}
+      onToggleRight={vi.fn()}
+    />
+  )
+}
+
+function chip(): HTMLElement {
+  const el = container.querySelector<HTMLElement>('.count[data-state="needsMe"]')
+  if (!el) throw new Error('the needs-me chip is not rendered')
+  return el
+}
+
+function bell(): HTMLElement {
+  const el = container.querySelector<HTMLElement>('.right-toggle')
+  if (!el) throw new Error('the queue bell is not rendered')
+  return el
+}
+
+beforeEach(() => {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+})
+
+afterEach(async () => {
+  await act(async () => {
+    root.unmount()
+  })
+  container.remove()
+})
+
+describe('the needs-me chip', () => {
+  it('shows the badge number, not the task number', async () => {
+    const view = bench([item({ kind: 'question' }), item({ kind: 'permission' })], 1)
+    // The shape that split the two numbers: one task, two things to answer.
+    expect(view.counts.needsMe).toBe(1)
+    expect(badgeFor(view)).toBe(2)
+    await renderBar(view)
+    expect(chip().querySelector('b')?.textContent).toBe('2')
+  })
+
+  it('agrees with the bell three controls to its right', async () => {
+    const view = bench([item({ kind: 'question' }), item({ kind: 'permission' })], 1)
+    await renderBar(view)
+    expect(bell().dataset.count).toBe(chip().querySelector('b')?.textContent)
+  })
+
+  it('reads 0 when nothing is open, so the row does not reflow', async () => {
+    const view = bench([], 0)
+    await renderBar(view)
+    expect(chip().querySelector('b')?.textContent).toBe('0')
+    expect(chip().dataset.zero).toBe('true')
+  })
+
+  /**
+   * Why the numbers have to match rather than the labels having to differ: the
+   * chip and the queue it opens are the same words in both languages, so a
+   * reader has no way to tell that one counts tasks and the other counts items.
+   */
+  it('uses the same words as the queue, which is why it may not use a different number', async () => {
+    expect(t('countNeedsMe').toLowerCase()).toBe(t('queueTitle').toLowerCase())
+    const view = bench([item()], 1)
+    await renderBar(view)
+    expect(chip().textContent).toContain(t('countNeedsMe'))
+    expect(bell().getAttribute('aria-label')).toBe(t('queueTitle'))
+  })
+})

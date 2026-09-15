@@ -310,7 +310,15 @@ export function routeCanAnswer(route: BubbleRoute | null | undefined): boolean {
   return route.actions.includes('answer')
 }
 
-/** One number, three renders: tray badge, widget bubble, tree header. */
+/**
+ * One number, every render: the tray badge, the widget bubble, the topbar chip
+ * and the bell beside it, the queue tab, and `codewaifu pro state`.
+ *
+ * It counts queue items, not tasks. One task holding two open decisions is two
+ * things to answer, so a surface that renders `counts.needsMe` instead disagrees
+ * with the badge while using the badge's own words - which is the exact
+ * confusion this function exists to prevent.
+ */
 export function badgeFor(view: BenchView): number {
   return needsMeCount(view.attention, view.generatedAt)
 }

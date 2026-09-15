@@ -98,7 +98,12 @@ export function TopBar({
         <Count state="working" n={counts.working} label={t('countWorking')} />
         <Count state="blocked" n={counts.blocked} label={t('countBlocked')} />
         <Count state="done" n={counts.done} label={t('countDone')} />
-        <Count state="needsMe" n={counts.needsMe} label={t('countNeedsMe')} />
+        {/* Items, not tasks. Its three neighbours count tasks, and this one
+            deliberately does not: `badgeFor` already renders the same number on
+            the tray badge, the widget bubble and the bell below, so a chip
+            reading 1 next to a bell reading 2 is two answers to one question.
+            A task holding two open decisions is two things to answer. */}
+        <Count state="needsMe" n={attentionCount} label={t('countNeedsMe')} />
       </div>
 
       <span className="spacer" />
