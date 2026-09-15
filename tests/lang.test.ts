@@ -52,6 +52,21 @@ describe('systemLangFromLocales', () => {
     expect(systemLangFromLocales(['fr-FR', 'en-US'])).toBe('en')
   })
 
+  it('survives a world without process, which is what the bench renderer is', () => {
+    // `nodeIntegration` is off in the bench window, so `process` is not a global
+    // there. Reading it unconditionally threw on the first mount and the window
+    // came up blank; every test in this file runs in Node, where it cannot.
+    const saved = globalThis.process
+    delete (globalThis as Partial<typeof globalThis>).process
+    try {
+      expect(systemLangFromLocales(['zh-Hans-CN'])).toBe('zh')
+      expect(systemLangFromLocales(['en-GB'])).toBe('en')
+      expect(systemLangFromLocales([])).toBe('zh')
+    } finally {
+      globalThis.process = saved
+    }
+  })
+
   it('resolveUiLang follows the system only when the user asked it to', () => {
     expect(resolveUiLang('auto', 'en')).toBe('en')
     expect(resolveUiLang('auto', 'zh')).toBe('zh')

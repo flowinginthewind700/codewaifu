@@ -33,6 +33,18 @@ export function resolveUiLang(pref: Lang | 'auto', system: Lang): Lang {
 }
 
 /**
+ * POSIX locale variables, when there is a process to read them from. The bench
+ * renderer runs with `nodeIntegration` off, so `process` is not a global there:
+ * reading it unconditionally threw on the first mount and left the window a
+ * blank frame. `navigator.languages`, which the caller always passes, is the
+ * renderer's half of the same question.
+ */
+function posixLocales(): readonly string[] {
+  if (typeof process === 'undefined' || !process.env) return []
+  return [process.env.LC_ALL ?? '', process.env.LC_MESSAGES ?? '', process.env.LANG ?? '']
+}
+
+/**
  * Pick a UI language from the OS's preferred-language list (`zh-Hans-CN`,
  * `en-GB`, …). Falls back to the usual POSIX locale variables so the headless
  * CLI reports the same language the widget would, and to `zh` when nothing is
@@ -41,9 +53,7 @@ export function resolveUiLang(pref: Lang | 'auto', system: Lang): Lang {
 export function systemLangFromLocales(locales: readonly string[]): Lang {
   const candidates = [
     ...locales,
-    process.env.LC_ALL ?? '',
-    process.env.LC_MESSAGES ?? '',
-    process.env.LANG ?? ''
+    ...posixLocales()
   ]
   for (const raw of candidates) {
     const value = String(raw || '').trim().toLowerCase()
