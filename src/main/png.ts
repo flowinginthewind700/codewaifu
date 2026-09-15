@@ -175,6 +175,77 @@ export function paintWaifuIcon(size: number): (x: number, y: number) => Rgba {
   return compose(painters)
 }
 
-export function waifuIconPng(size: number): Buffer {
-  return encodePng(size, size, paintWaifuIcon(size))
+/**
+ * 3x5 bitmaps for the ten digits and a plus. A tray badge is drawn at 22-32px,
+ * where a font is both unavailable and illegible, so the glyphs are pixels.
+ */
+const DIGIT_ROWS: Readonly<Record<string, readonly string[]>> = {
+  '0': ['111', '101', '101', '101', '111'],
+  '1': ['010', '110', '010', '010', '111'],
+  '2': ['111', '001', '111', '100', '111'],
+  '3': ['111', '001', '111', '001', '111'],
+  '4': ['101', '101', '111', '001', '001'],
+  '5': ['111', '100', '111', '001', '111'],
+  '6': ['111', '100', '111', '101', '111'],
+  '7': ['111', '001', '010', '010', '010'],
+  '8': ['111', '101', '111', '101', '111'],
+  '9': ['111', '101', '111', '001', '111'],
+  '+': ['000', '010', '111', '010', '000']
+}
+
+/** The badge string for a count: '' hides it, ten and up collapse to '9+'. */
+export function badgeDigits(count: number): string {
+  const n = Math.trunc(Number(count))
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return n > 9 ? '9+' : String(n)
+}
+/**
+ * Below this icon size a digit is one pixel wide and reads as a smudge, so the
+ * badge becomes a plain dot: the tray still says "something needs you" and the
+ * tooltip carries the number. Drawing unreadable glyphs is worse than none.
+ */
+const BADGE_TEXT_MIN = 40
+
+/** Red disc, white ring, white digits, bottom-right corner. */
+export function paintBadge(size: number, label: string): Painter {
+  const r = size * 0.26
+  const cx = size - r - size * 0.03
+  const cy = size - r - size * 0.03
+  const soft = Math.max(0.6, size / 64)
+  const glyph = size >= BADGE_TEXT_MIN ? label : ''
+  const cell = glyph ? Math.max(1, Math.floor((r * 1.5) / (glyph.length * 3 + 2))) : 0
+  const step = cell * 4
+  const textW = glyph ? glyph.length * step - cell : 0
+  const originX = cx - textW / 2
+  const originY = cy - (cell * 5) / 2
+
+  const digits: Painter = (x, y) => {
+    if (!glyph || cell <= 0) return null
+    const col = Math.floor((x + 0.5 - originX) / cell)
+    const row = Math.floor((y + 0.5 - originY) / cell)
+    if (row < 0 || row > 4 || col < 0) return null
+    const at = Math.floor(col / 4)
+    if (at >= glyph.length) return null
+    const rows = DIGIT_ROWS[glyph[at]]
+    if (!rows || rows[row][col - at * 4] !== '1') return null
+    return [255, 255, 255, 255]
+  }
+
+  return compose([
+    ellipse(cx, cy, r + soft * 1.6, r + soft * 1.6, [255, 255, 255, 235], soft),
+    ellipse(cx, cy, r, r, [226, 68, 78, 255], soft),
+    digits
+  ])
+}
+
+/**
+ * The tray/app icon, with the live attention count composited on when there is
+ * one. One function, so the badge and the mark cannot disagree about the corner
+ * they share.
+ */
+export function waifuIconPng(size: number, badge = 0): Buffer {
+  const base = paintWaifuIcon(size)
+  const label = badgeDigits(badge)
+  if (!label) return encodePng(size, size, base)
+  return encodePng(size, size, compose([base, paintBadge(size, label)]))
 }

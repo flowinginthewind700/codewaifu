@@ -23,7 +23,7 @@ import { isLinux, isMac } from './env'
 import { here } from './here'
 import { compositorProbe, currentSession, logDesktop } from './linux'
 import { log } from './log'
-import { waifuIconPng } from './png'
+import { badgeDigits, waifuIconPng } from './png'
 
 export interface WindowHandlers {
   onExpanded: (expanded: boolean) => void
@@ -59,6 +59,11 @@ export interface WindowHandle {
   fitHeight: (height: number) => void
   /** Hotkey guard: a non-empty focused input in our window suspends the hotkey. */
   setInputActive: (active: boolean) => void
+  /**
+   * Mirror the live attention count onto the tray icon (F7). `0` restores the
+   * plain mark. A no-op where the platform gave us no tray at all.
+   */
+  setBadge: (count: number) => void
 }
 
 function rendererEntry(): string {
@@ -335,7 +340,8 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     setExpanded(false)
   }
 
-  const tray = createTray(win, handlers, summon, show)
+  const trayHandle = createTray(win, handlers, summon, show)
+  const tray = trayHandle.tray
 
   /* ---- system-wide summon hotkey (rules in shared/hotkey.ts) ------------- */
   let inputActive = false
@@ -383,6 +389,7 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     setInputActive: (active: boolean) => {
       inputActive = active
     },
+    setBadge: (count: number) => trayHandle.setBadge(count),
     applyConfig: (next: AppConfig) => {
       if (win.isDestroyed()) return
       try {
@@ -402,16 +409,38 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   }
 }
 
+/** The tray, plus the one thing Pro needs from it. */
+interface TrayHandle {
+  tray: Tray | null
+  setBadge: (count: number) => void
+}
+
+/** Tray icon edge in device-independent pixels, per platform convention. */
+function trayIconSize(): number {
+  return isMac ? 22 : 32
+}
+
+/**
+ * Rendered at 4x and downscaled on purpose. A badge digit drawn straight at
+ * 32px is three pixels wide and reads as a smudge; the same glyph drawn at
+ * 128px and resampled stays a number.
+ */
+function trayImage(size: number, badge: number): Electron.NativeImage {
+  return nativeImage
+    .createFromBuffer(waifuIconPng(size * 4, badge))
+    .resize({ width: size, height: size })
+}
+
 function createTray(
   win: BrowserWindow,
   handlers: WindowHandlers,
   summon: (focus: boolean) => void,
   show: (focus: boolean) => void
-): Tray | null {
+): TrayHandle {
   try {
-    const size = isMac ? 22 : 32
-    const image = nativeImage.createFromBuffer(waifuIconPng(size * 4)).resize({ width: size, height: size })
-    const tray = new Tray(image)
+    const size = trayIconSize()
+    const tray = new Tray(trayImage(size, 0))
+    let badgeCount = 0
     if (isLinux) {
       // A Tray object is created even when no host will ever show it, so the
       // bus probe is the only way to tell the user why the icon is missing.
@@ -455,9 +484,29 @@ function createTray(
     tray.on('double-click', () => summon(true))
     // Rebuilt on open so the mute label reflects the current state.
     tray.on('right-click', () => tray.popUpContextMenu(build()))
-    return tray
+
+    /**
+     * One number, three renders: tray icon, tray tooltip, Bench header. The
+     * icon is re-encoded rather than picked from cached variants because the
+     * count is a range, not a set.
+     */
+    const setBadge = (count: number): void => {
+      const next = Math.max(0, Math.trunc(Number(count)) || 0)
+      if (next === badgeCount) return
+      badgeCount = next
+      try {
+        tray.setImage(trayImage(size, next))
+        tray.setToolTip(next > 0 ? `CodeWaifu - ${next} need you` : 'CodeWaifu')
+        // macOS can put the number beside the icon as text, which is the only
+        // tray badge readable at 22px; elsewhere the glyph carries it.
+        if (isMac) tray.setTitle(next > 0 ? ` ${badgeDigits(next)}` : '')
+      } catch (error) {
+        log('warn', 'tray badge failed', String(error))
+      }
+    }
+    return { tray, setBadge }
   } catch (error) {
     log('warn', 'tray unavailable (headless session?)', String(error))
-    return null
+    return { tray: null, setBadge: () => {} }
   }
 }
