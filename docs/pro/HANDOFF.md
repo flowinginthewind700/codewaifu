@@ -1,6 +1,6 @@
 # Pro handoff
 
-`main` @ `7cf35b9` - typecheck, 700 tests and `electron-vite build` all green on
+`main` @ `482782e` - typecheck, 705 tests and `electron-vite build` all green on
 Linux (Ubuntu, node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built
 for but not yet run.
 
@@ -72,6 +72,12 @@ fixtures (`tests/fixtures/herdr/`, captured with
 flat memory for an hour) and 6.6's GUI half are still **manual** - nobody has run
 the hour.
 
+The terminal itself (F4) carries what a real terminal has: Unicode 11 widths,
+WebGL rendering with a DOM fallback on context loss, links out to the OS browser
+through a scheme allow-list, OSC 52, copy/paste chords that never claim Ctrl+C, a
+bell light in the pane header, and scrollback search with a match counter
+(`Ctrl+Shift+F`, `Cmd+F` on macOS).
+
 ## 5. Settled decisions
 
 These are argued in the code comments where they live; do not re-litigate them
@@ -95,6 +101,16 @@ without reading those first.
   queued, one respawn is armed no matter how many frames were dropped, and a
   drop-driven resync doubles its delay to a 4s ceiling because a resync costs a
   full repaint.
+- **Search takes Ctrl+Shift+F, not Ctrl+F.** Plain Ctrl+F is readline
+  forward-char, vim's page-down and less's next-page; claiming it fails silently,
+  because nothing errors and the cursor just stops moving right. The decision
+  lives in the pure table at `src/shared/termKeys.ts` next to the copy chords, so
+  the keys that must reach the PTY are pinned by a test rather than by a
+  component behaving well today.
+- **The find bar is an overlay, not a row.** Taking layout height would fire the
+  ResizeObserver, which fits the terminal and pushes the new size to the PTY, so
+  opening find would reflow the agent's screen. Its match counter has a fixed
+  width floor for the same reason: the bar must not move while somebody types.
 - **The companion never becomes a second keyboard.** There is deliberately no
   `input` or `keys` verb on the companion channel; `proCommand.test.ts` pins
   their absence.
@@ -141,6 +157,7 @@ without reading those first.
   herdr 现状重新推导。
 - 状态：F1-F7 都已实现并有单测；本轮补齐了终端本身的质量（Unicode 11 宽字符、
   WebGL 渲染与降级、链接走系统浏览器、OSC 52 剪贴板、复制粘贴不抢 Ctrl+C、
-  响铃指示），并修掉一个真 bug：resync 之后桥接进程会以每秒 4 次的速度无限重启。
+  响铃指示、输出内搜索 Ctrl+Shift+F / macOS 上 Cmd+F），并修掉一个真 bug：
+  resync 之后桥接进程会以每秒 4 次的速度无限重启。
 - 还没做：浮窗里的自由文本回答、Bench 的 e2e、连续一小时高输出的内存实测、README
   里的 Pro 章节、macOS 实机验证。
