@@ -1,8 +1,8 @@
 # Pro handoff
 
-`main` @ `18fe279` - typecheck, 753 tests and `electron-vite build` all green on
-Linux (Ubuntu, node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built
-for but not yet run.
+`main` @ `df4613d` - typecheck, 795 tests (plus the 12 Windows-only skips) and
+`electron-vite build` all green on Linux (Ubuntu, node 20+, herdr 0.9.0). Verified
+platform is Linux; macOS is built for but not yet run.
 
 The spec is [MVP.md](./MVP.md) and it is still the authority: F1-F7, the
 acceptance criteria in section 6, the phases in section 7. This file is the
@@ -78,7 +78,7 @@ rather than warning. `tests/installWindows.test.ts` self-skips off Windows
 | F1 tree rail | `renderer/src/pro/TreeRail.tsx` | `proClient`, `proSocket` | done |
 | F2 create / adopt / park | `main/pro/bench.ts`, `NewTaskDialog.tsx` | `proCommand` | done |
 | F3 attention queue | `main/pro/triage.ts`, `AttentionQueue.tsx` | `proCommand`, `hookEvent` | done |
-| F4 pane grid | `main/pro/herdr/terminalBridge.ts`, `Pane.tsx`, `PaneGrid.tsx` | `proBridge`, `proNdjson` | done |
+| F4 pane grid | `main/pro/herdr/terminalBridge.ts`, `Pane.tsx`, `PaneGrid.tsx` | `proBridge`, `proNdjson`, `findQuery`, `termKeys` | done |
 | F5 ledger + recovery | `main/pro/ledger.ts`, `recovery.ts`, `LedgerPanel.tsx`, `RecoveryPanel.tsx` | `proLedger` | done |
 | F6 HTTP API | `main/server.ts` (`/pro/*`) | `server` | done |
 | F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand` | done except free-text answers |
@@ -91,19 +91,39 @@ the hour.
 
 The terminal itself (F4) carries what a real terminal has: Unicode 11 widths,
 WebGL rendering with a DOM fallback on context loss, links out to the OS browser
-through a scheme allow-list, OSC 52, copy/paste chords that never claim Ctrl+C, a
-bell light in the pane header, and scrollback search with a match counter
-(`Ctrl+Shift+F`, `Cmd+F` on macOS).
+through a scheme allow-list - plain URLs *and* OSC 8 hyperlinks, which is what
+`ls --hyperlink`, cargo, pytest and git emit on purpose - OSC 52, copy/paste
+chords that never claim Ctrl+C, a bell light in the pane header, and scrollback
+search with regex and case modes plus a match counter (`Ctrl+Shift+F`, `Cmd+F` on
+macOS). Scrollback is 10 000 rows, which is a ceiling rather than a growth rate:
+xterm keeps three 32-bit words per cell in a circular buffer, and only the
+selected task's panes are mounted at all. The keyboard reaches a terminal on `i`
+and comes back on Shift+Tab; the bench never hands it over unasked.
 
-The renderer has no error boundary and no tests of its own, so a throw inside a
-mount effect unmounts the tree and the window is a blank frame while the main log
-stays clean. Two crashes shipped that way and were found only over CDP:
-`shared/lang.ts` reading `process.env` in a module the bench imports, and `Pane.tsx`
-constructing the terminal with `allowProposedApi: false` before loading the
-Unicode11 addon, which is a proposed API. Both are fixed; the lang one is pinned by
-a test that deletes `globalThis.process`, and the pane grid was verified live over
-CDP against a running herdr session (one pane, task list, attention queue and
-recovery panel all rendering).
+What the pane deliberately does not carry is written down with its reasons in
+`thirdparty/README.md` under "Read and refused": no OSC 133 prompt marks (herdr
+owns PTY spawn, so "jump to the last prompt" is not ours to build), no kitty
+keyboard protocol (`Ctrl+I` stays `Tab`), no inline images.
+
+The renderer is wrapped in `FaultBoundary` (`pro/main.tsx`), so a throw in a render
+or a mount effect is a card carrying the kind, the message, four frames and two
+buttons instead of an empty window next to a clean main log. Every decision the
+card makes about the error lives in `shared/renderFault.ts` - guarded property
+reads, no serialisation - because there is no boundary behind the boundary. Its
+first sentence is the one that matters: herdr owns the PTYs, so a dead renderer
+has killed nobody and reloading is safe.
+
+That card exists because two crashes shipped as blank frames and were found only
+over CDP: `shared/lang.ts` reading `process.env` in a module the bench imports, and
+`Pane.tsx` constructing the terminal with `allowProposedApi: false` before loading
+the Unicode11 addon, which is a proposed API. Both are fixed and the lang one is
+pinned by a test that deletes `globalThis.process`. Neither was caught by a green
+suite, because until `tests/faultBoundary.test.tsx` no test in this repo could
+render a pro component: 14 jsdom cases now mount the boundary for real (including
+what React dev's guarded-callback replay does to a thrown value whose getters
+throw), and `renderFault.test.ts` pins the pure half with 20 more. The pane grid
+itself was verified live over CDP against a running herdr session (one pane, task
+list, attention queue and recovery panel all rendering).
 
 ## 5. Settled decisions
 
@@ -150,33 +170,67 @@ without reading those first.
 - **Terminal output is untrusted.** It is the only string in the app we do not
   author, so links leave through the `openExternal` host op behind an
   http/https/mailto allow-list that runs in main.
+- **OSC 8 links are output, not navigation.** xterm's built-in handler for them is
+  a `confirm()` reading "WARNING: This link could potentially be dangerous" and
+  then `window.open()`. Ours go through the same allow-list as every other
+  untrusted string and open in the OS browser, where the user's session is.
+- **A search is planned before it is run.** `shared/findQuery.ts` compiles the
+  pattern with the exact flags SearchAddon will use, and refuses a pattern that
+  matches the empty string (`a*`, `^`, `(?:)`) because that "succeeds" with a
+  highlight on every cell boundary and a count in the tens of thousands that is
+  arithmetically right and useless. SearchAddon lets the compile throw escape from
+  a debounce timer; the bar now shows the engine's reason in the counter that
+  otherwise shows the match count, and a mode toggle rescans immediately rather
+  than waiting for the next keystroke.
+- **`i` is the only door into a terminal.** MVP F7's "focusTask focuses that pane"
+  is grid selection and deliberately not keyboard focus: a companion bubble that
+  brought the window forward and quietly took the keyboard would send the next `d`
+  into the agent's shell instead of denying the head of the queue, which breaks the
+  a/d/s loop F3 calls the whole product. Both ways `i` can fail are shown and say
+  different things, because "this task has no panes" and "that pane is released"
+  have different fixes. Shift+Tab is the way out; xterm's helper textarea sits in
+  the tab order ahead of the pane header buttons, so tabbing alone cannot escape.
+- **The fault card asks nobody for anything.** No `proApi`, no config, no context,
+  no import of `Bench`, and its language comes from `navigator` rather than from
+  the user's `uiLang` setting - a card in the wrong language still beats a blank
+  frame. Its copy button shows a refusal rather than swallowing it, because a
+  silent failure there is a lost bug report, and the usual cause (an unfocused
+  window) is exactly the state a crash can leave you in.
+- **Renderer tests opt into jsdom per file** with a `// @vitest-environment jsdom`
+  pragma, so the node environment stays the default and the thirty-odd pure suites
+  keep running without a DOM. The price is two things in `vitest.config.ts` that
+  must mirror `electron.vite.config.ts`: the `@shared` alias and
+  `esbuild.jsx: 'automatic'` (a `.tsx` test sits outside both tsconfig projects, so
+  esbuild cannot discover `react-jsx`).
 - **Comment voice.** ASCII only, and a comment explains the failure mode being
   prevented rather than restating the line below it.
 
 ## 6. Known gaps, in the order they should be taken
 
-1. **A renderer crash is a blank frame.** No error boundary and no renderer
-   tests, so a mount-time throw leaves an empty window and a clean main log; see
-   section 4 for the two that shipped and section 2 for the CDP recipe that sees
-   the Bench without pixels. The smallest fix is an error boundary that prints the
-   message in-window; the real one is a Playwright smoke that mounts `pro.html`.
+1. **No e2e smoke for the Bench.** Phase 3 in MVP.md asks for "manual + e2e
+   smoke", and there is no Playwright in this repo yet - the widget has none
+   either. This is the top gap now rather than the third one. The boundary and the
+   jsdom suite cover a renderer that throws, but both crashes that shipped were
+   failures of the *bundled document* (`process.env` absent where the dev
+   transform had it; a proposed-API flag that only exists at runtime), and jsdom
+   never loads a bundle. `_electron.launch` plus an assertion that `pro.html`
+   paints a tree row would have caught both; the CDP recipe in section 2 is the
+   manual version of the same check.
 2. **Free-text answers from the widget.** F7's "answer" and "reprompt" paths take
    a fixed verb; typing a real sentence into a bubble was deliberately deferred.
    The plumbing (`AttentionAction`, `agent.send_keys`) is there.
-3. **No e2e smoke for the Bench.** Phase 3 in MVP.md asks for "manual + e2e
-   smoke". There is no Playwright in this repo yet; the widget has none either.
-4. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
+3. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
    renderer has a fallback path for a lost context and for no WebGL at all, but
    neither the memory claim nor the fallback has been observed on real hardware.
-5. **Pane-level spawn failures show raw errno.** Discovery explains a missing
+4. **Pane-level spawn failures show raw errno.** Discovery explains a missing
    herdr in prose, but a bridge whose `spawn` throws ENOENT surfaces
    `spawn ... ENOENT` in the pane header tooltip.
-6. **Timing flake.** One full-suite run in about six showed a single failure in
+5. **Timing flake.** One full-suite run in about six showed a single failure in
    `steer` or `matchaVoice`; both do real waiting and neither reproduced on
    rerun. Worth converting to a fake clock if it recurs.
-7. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
+6. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
    never mention Pro. No screenshot of the Bench.
-8. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
+7. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
    tray (a long `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench
    window, and voice-runtime packaging via `npm run dist:mac`. The Cmd/Ctrl chord
    table itself is pure and tested on both.
@@ -193,12 +247,24 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F7 都已实现并有单测；本轮补齐了终端本身的质量（Unicode 11 宽字符、
-  WebGL 渲染与降级、链接走系统浏览器、OSC 52 剪贴板、复制粘贴不抢 Ctrl+C、
-  响铃指示、输出内搜索 Ctrl+Shift+F / macOS 上 Cmd+F），并修掉一个真 bug：
-  resync 之后桥接进程会以每秒 4 次的速度无限重启。
+- 状态：F1-F7 都已实现并有单测（795 passed / 12 skipped，skipped 是 Windows 专用）。
+  终端这一层分两轮补齐质量：Unicode 11 宽字符、WebGL 渲染与降级、链接走系统浏览器、
+  OSC 52 剪贴板、复制粘贴不抢 Ctrl+C、响铃指示、输出内搜索（Ctrl+Shift+F / macOS 上
+  Cmd+F）；这一轮再加上搜索的正则与大小写模式、非法 pattern 把拒绝原因写进计数器、
+  OSC 8 超链接改走主进程白名单（不再弹 xterm 自带的 confirm）、scrollback 4000 ->
+  10000 行（只挂载选中任务的 pane，所以这是上限不是增长速率）、`i` 把键盘交给终端、
+  Shift+Tab 交回来。早先还修掉一个真 bug：resync 之后桥接进程以每秒 4 次无限重启。
 - 命名会话：discovery 不猜会话名。`pro.herdrSession` 留空（或纯空白）时落到环境变量
   `HERDR_SESSION`；配置里写了名字（包括字面 `default`）就以配置为准。
+- 崩了不再白屏：`pro/main.tsx` 用 `FaultBoundary` 包住整棵树，卡片第一句是你的代理还在
+  herdr 里跑着（PTY 归 herdr，renderer 死了没杀掉任何人，重载安全）。
+  卡片对错误的所有判断都在 `shared/renderFault.ts`：读属性一律带 try、绝不 JSON.stringify，
+  因为边界后面没有第二层边界。
+  这也是本仓库第一批 renderer 测试：`tests/faultBoundary.test.tsx` 用 jsdom 真挂了 14 例，
+  `renderFault.test.ts` 20 例盯纯逻辑。
+  此前 `npm test` 连一个 pro 组件都渲染不出来，所以两次白屏崩溃都是绿的。跑 `.tsx` 测试
+  靠 `vitest.config.ts` 里的 `@shared` alias 与 `jsx: 'automatic'`，改
+  `electron.vite.config.ts` 的 alias 时要同步。
 - 这台机器上 dev 要加 `ELECTRON_DISABLE_SANDBOX=1`；正式版 companion 在跑时 dev 不起
   relay（`endpoint.env` 被占），要验 F6 先退正式版。
 - 截图在这台机器拿不到：GNOME 的 Screenshot D-Bus 回 `AccessDenied`，`import`/`xwd`
@@ -206,5 +272,8 @@ without reading those first.
   --remote-debugging-port=9229`，对 `CodeWaifu Pro` 这个 target 做 `Runtime.evaluate`。
   两个白屏 renderer 崩溃（shared/lang.ts 读 `process.env`、Pane 的 `allowProposedApi`）
   就是这么抓到的，现已修复；pane 网格对着真实 herdr 会话验过渲染。
-- 还没做：renderer 的错误边界与 e2e、浮窗里的自由文本回答、连续一小时高输出的内存
-  实测、README 里的 Pro 章节、macOS 实机验证。
+  同类崩溃现在会在窗口里显示成一张卡片，CDP 回到它本来的用途：看渲染结果，而不是找
+  崩溃的唯一手段。
+- 还没做：Bench 的 e2e（jsdom 渲染不了打包后的 document，而两次白屏都是 bundle 层的
+  失败）、浮窗里的自由文本回答、连续一小时高输出的内存实测、README 里的 Pro 章节、
+  macOS 实机验证。

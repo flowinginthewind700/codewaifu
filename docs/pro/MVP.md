@@ -190,11 +190,20 @@
 Built-in editor · diff viewer · in-app browser · cloud/mobile companion UI · multi-machine
 SSH UI (herdr has it; we inherit later) · token/cost dashboards · plugin system ·
 node-pty fallback when herdr is missing (the empty state is an **install card** instead) ·
-scrollback search · theming · project management / issue tracking · a second Live2D model for
+theming · project management / issue tracking · a second Live2D model for
 the bench (the companion is one widget with two jobs, not two widgets) · voice *recognition*
 for approvals (speech out only; a misheard "deny" is worse than a keystroke).
 
  Cutting these is what keeps Pro a cockpit rather than an Orca-scale ADE.
+
+**One cut was reversed.** Scrollback search shipped: `Ctrl+Shift+F` (`Cmd+F` on
+macOS), with regex and case modes and a match counter. The reasoning that cut it -
+the pane is a control surface, not a log reader - is wrong about the failure it
+produces. Once the pane grid is the only view of an agent's output, the line you
+need has usually scrolled off, and the alternative is a second terminal onto a
+session herdr already owns. It cost a pure planner (`shared/findQuery.ts`, tested)
+plus xterm's own SearchAddon, so this was a mistaken cut rather than a premature
+one.
 
  ## 6. Acceptance criteria (MVP is done when)
 
