@@ -1,6 +1,6 @@
 # Pro handoff
 
-`main` @ `df4613d` - typecheck, 795 tests (plus the 12 Windows-only skips) and
+`main` @ `ab4ff51` - typecheck, 834 tests (plus the 12 Windows-only skips) and
 `electron-vite build` all green on Linux (Ubuntu, node 20+, herdr 0.9.0). Verified
 platform is Linux; macOS is built for but not yet run.
 
@@ -71,6 +71,19 @@ npm run typecheck && npx vitest run && npx electron-vite build
 rather than warning. `tests/installWindows.test.ts` self-skips off Windows
 (that is the 12 skipped in the count).
 
+A `.tsx` test belongs to `tsconfig.web.json` and a `.ts` test to
+`tsconfig.node.json`, and neither project lists the other's sources. So a `.tsx`
+test must not import `tests/helpers/pro.ts`: that helper pulls in
+`src/main/server`, and the web project answers with TS6307 ("file is not listed
+within the file list of project") rather than a type error. Build the fixture
+locally instead; widening the include to silence it would drag electron into the
+web project.
+
+In the build output, `assets/useIme-*.js` is around 235 kB and is not the IME
+hook. It is the chunk both entries share - react, react-dom, scheduler, lucide -
+named by vite after the smallest module in it, which happens to be `useIme.ts`
+now that both the widget and the bench import it.
+
 ## 4. What is built
 
 | Feature | Owner | Pinned by | State |
@@ -81,7 +94,7 @@ rather than warning. `tests/installWindows.test.ts` self-skips off Windows
 | F4 pane grid | `main/pro/herdr/terminalBridge.ts`, `Pane.tsx`, `PaneGrid.tsx` | `proBridge`, `proNdjson`, `findQuery`, `termKeys` | done |
 | F5 ledger + recovery | `main/pro/ledger.ts`, `recovery.ts`, `LedgerPanel.tsx`, `RecoveryPanel.tsx` | `proLedger` | done |
 | F6 HTTP API | `main/server.ts` (`/pro/*`) | `server` | done |
-| F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand` | done except free-text answers |
+| F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand`, `companionLink`, `bubbleAnswer` | done |
 
 Acceptance criteria 6.1-6.4 and 6.7 are exercised by unit tests against recorded
 fixtures (`tests/fixtures/herdr/`, captured with
@@ -104,6 +117,25 @@ What the pane deliberately does not carry is written down with its reasons in
 `thirdparty/README.md` under "Read and refused": no OSC 133 prompt marks (herdr
 owns PTY spawn, so "jump to the last prompt" is not ours to build), no kitty
 keyboard protocol (`Ctrl+I` stays `Tab`), no inline images.
+
+A question can be answered in words from either surface (F7). The widget's
+bubble grows one row - an Answer chip, a single-line field, a Send - and widens
+to 244px while composing, because a field narrower than a dozen characters hides
+the sentence being typed and the window has the room. It is pinned for as long as
+the composer is open: its own hold timer is suspended and `shouldClearBubble`
+stands down, since the push that reports "the queue drained" is exactly the one
+an in-flight answer causes. A notice arriving mid-sentence is held and shown on
+the way out with whatever hold it has left. The Bench's queue has had an answer
+box all along; what changed there is the keyboard.
+
+Both composers fold and cap through the same `answerText` in `shared/pro.ts`,
+called from `planAttentionAction` rather than from either UI, so what the ledger
+records is what the pane received. An answer is delivered by typing it, so a
+newline is Enter and an unbounded length is a TUI input buffer that drops bytes
+without complaining: neither failure is loud, which is why both are handled in
+the plan. The Bench field hard-caps with `maxLength`; the bubble warns instead,
+because a widget that silently discards the end of a sentence is worse than one
+that says so. `reprompt` is not folded - it compiles a multi-line brief.
 
 The renderer is wrapped in `FaultBoundary` (`pro/main.tsx`), so a throw in a render
 or a mount effect is a card carrying the kind, the message, four frames and two
@@ -161,6 +193,36 @@ without reading those first.
 - **The companion never becomes a second keyboard.** There is deliberately no
   `input` or `keys` verb on the companion channel; `proCommand.test.ts` pins
   their absence.
+- **An answer is a verb, not an exception to that rule.** The bubble sends
+  `act`/`answer` with text and lets `planAttentionAction` decide what reaches the
+  pane; it never sends keystrokes. `routeCanAnswer` reads the action list main
+  already validated rather than re-deriving verbs from the item's kind, because a
+  second derivation is how a bubble ends up offering a button the service will
+  refuse - and a dead button is worse than no button.
+- **A half-typed answer outranks every push.** The composer pins the bubble:
+  its hold timer is suspended and `shouldClearBubble` returns false. The push
+  that would otherwise take it down is the one an in-flight answer causes, so
+  honouring it deletes the sentence; what the human gets instead is a refused
+  send, out loud. The pin has to hand back a clock on close, or an Escape leaves
+  the question up until the next push happens to clear it.
+- **Delivery is confirmed by `code`, not by `ok`.** When the item is already
+  gone, `resolveCommand` degrades the command to "show that task" and answers
+  `ok`; reporting that as delivered is the one expensive lie this feature could
+  tell, because somebody walks away believing an agent is unblocked when all that
+  happened was a window came forward. The two outcomes have separate strings.
+- **Answer normalization lives in the plan, not in the UI.** Three callers reach
+  `planAttentionAction` (the Bench box, the bubble, `POST /pro/answer`) and only
+  the last one can still carry a newline - a single-line field sanitizes its own
+  value before our code sees it. Folding in the plan is what keeps the ledger
+  equal to what the pane received, and the cap counts code points so a cut never
+  leaves a lone surrogate to be typed into a terminal.
+- **IME guards are wiring, so the wiring is what gets tested.** `shared/ime.ts`
+  already pins the predicate, with all three signals and the post-compositionend
+  grace window; `bubbleAnswer.test.tsx` and `attentionAnswer.test.tsx` mount both
+  composers and assert that a composing Enter, a `keyCode === 229` Enter and the
+  macOS commit Enter after compositionend all fail to send. Removing the guards
+  from `Bubble.tsx` turns exactly three cases red, which is the point: a bare
+  `key === 'Enter'` reads correctly, passes review, and ships half-typed pinyin.
 - **Attach does not replay scrollback.** A pane shows output produced from
   the moment of attach; a terminal that keeps a backlog replays history at the
   user forever (`terminalBridge.ts`). An idle pane is therefore legitimately
@@ -209,28 +271,24 @@ without reading those first.
 
 1. **No e2e smoke for the Bench.** Phase 3 in MVP.md asks for "manual + e2e
    smoke", and there is no Playwright in this repo yet - the widget has none
-   either. This is the top gap now rather than the third one. The boundary and the
-   jsdom suite cover a renderer that throws, but both crashes that shipped were
-   failures of the *bundled document* (`process.env` absent where the dev
-   transform had it; a proposed-API flag that only exists at runtime), and jsdom
-   never loads a bundle. `_electron.launch` plus an assertion that `pro.html`
-   paints a tree row would have caught both; the CDP recipe in section 2 is the
-   manual version of the same check.
-2. **Free-text answers from the widget.** F7's "answer" and "reprompt" paths take
-   a fixed verb; typing a real sentence into a bubble was deliberately deferred.
-   The plumbing (`AttentionAction`, `agent.send_keys`) is there.
-3. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
+   either. The boundary and the jsdom suite cover a renderer that throws, but both
+   crashes that shipped were failures of the *bundled document* (`process.env`
+   absent where the dev transform had it; a proposed-API flag that only exists at
+   runtime), and jsdom never loads a bundle. `_electron.launch` plus an assertion
+   that `pro.html` paints a tree row would have caught both; the CDP recipe in
+   section 2 is the manual version of the same check.
+2. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
    renderer has a fallback path for a lost context and for no WebGL at all, but
    neither the memory claim nor the fallback has been observed on real hardware.
-4. **Pane-level spawn failures show raw errno.** Discovery explains a missing
+3. **Pane-level spawn failures show raw errno.** Discovery explains a missing
    herdr in prose, but a bridge whose `spawn` throws ENOENT surfaces
    `spawn ... ENOENT` in the pane header tooltip.
-5. **Timing flake.** One full-suite run in about six showed a single failure in
+4. **Timing flake.** One full-suite run in about six showed a single failure in
    `steer` or `matchaVoice`; both do real waiting and neither reproduced on
    rerun. Worth converting to a fake clock if it recurs.
-6. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
+5. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
    never mention Pro. No screenshot of the Bench.
-7. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
+6. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
    tray (a long `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench
    window, and voice-runtime packaging via `npm run dist:mac`. The Cmd/Ctrl chord
    table itself is pure and tested on both.
@@ -247,13 +305,29 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F7 都已实现并有单测（795 passed / 12 skipped，skipped 是 Windows 专用）。
+- 状态：F1-F7 都已实现并有单测（834 passed / 12 skipped，skipped 是 Windows 专用）。
   终端这一层分两轮补齐质量：Unicode 11 宽字符、WebGL 渲染与降级、链接走系统浏览器、
   OSC 52 剪贴板、复制粘贴不抢 Ctrl+C、响铃指示、输出内搜索（Ctrl+Shift+F / macOS 上
   Cmd+F）；这一轮再加上搜索的正则与大小写模式、非法 pattern 把拒绝原因写进计数器、
   OSC 8 超链接改走主进程白名单（不再弹 xterm 自带的 confirm）、scrollback 4000 ->
   10000 行（只挂载选中任务的 pane，所以这是上限不是增长速率）、`i` 把键盘交给终端、
   Shift+Tab 交回来。早先还修掉一个真 bug：resync 之后桥接进程以每秒 4 次无限重启。
+- 问题能用文字回答了（F7 收尾）：浮窗气泡多一个「回答」chip + 单行输入框，Bench 队列里
+  原有的回答框修掉了中文输入法（Enter 选词不再把半截拼音当答案发出去）。chip 只在
+  `routeCanAnswer` 认可时出现——它读的是主进程已按 `attentionActions` 校验过的 action
+  列表，不再从 kind 二次推导，否则气泡会长出一个点了没反应的按钮。
+  文本统一走 `shared/pro.ts::answerText` 折叠空白并按 400 个码位截断，调用点在
+  `planAttentionAction`，所以 Bench、浮窗、`POST /pro/answer` 三条路发出去的与账本记下的
+  是同一行字：答案是「打」进 pane 的，换行就是 Enter（会先把半句提交掉），按码位截断才
+  不会把 emoji 劈成半个代理对。`reprompt` 故意不折叠，它是多行恢复简报。
+  打字期间气泡被钉住：hold 计时器停、`shouldClearBubble` 让路，因为「队列空了」那条推送
+  正是一次在途回答自己造成的，照着清就删掉了人正在写的句子；期间到达的 notice 会被暂存，
+  关输入框时按剩余时长补播。发送结果只认 `code === 'sent'`：条目已不在时
+  `resolveCommand` 会降级成「把窗口带到那个任务」并回 `ok`，那不能说成「已送达」。
+  新增 39 例（`proAttention` / `companionLink` / `bubbleAnswer` / `attentionAnswer`），
+  其中把 `Bubble.tsx` 的 IME 守卫拆掉会正好红 3 例——这就是「守卫真在生效」的证据。
+  注意 `.tsx` 测试属于 `tsconfig.web.json`，不要 import `tests/helpers/pro.ts`（它会拽进
+  `src/main/server`，报 TS6307），fixture 就地写。
 - 命名会话：discovery 不猜会话名。`pro.herdrSession` 留空（或纯空白）时落到环境变量
   `HERDR_SESSION`；配置里写了名字（包括字面 `default`）就以配置为准。
 - 崩了不再白屏：`pro/main.tsx` 用 `FaultBoundary` 包住整棵树，卡片第一句是你的代理还在
@@ -275,5 +349,5 @@ without reading those first.
   同类崩溃现在会在窗口里显示成一张卡片，CDP 回到它本来的用途：看渲染结果，而不是找
   崩溃的唯一手段。
 - 还没做：Bench 的 e2e（jsdom 渲染不了打包后的 document，而两次白屏都是 bundle 层的
-  失败）、浮窗里的自由文本回答、连续一小时高输出的内存实测、README 里的 Pro 章节、
-  macOS 实机验证。
+  失败）、连续一小时高输出的内存实测、pane spawn 失败时裸露的 errno、README 里的 Pro
+  章节、macOS 实机验证。

@@ -180,6 +180,18 @@
  input, so "approve the second one" or a free-text answer can be given without switching
  windows. The widget never owns state; it issues the same `AttentionAction` the Bench does.
 
+ **Shipped differently, on purpose.** The free-text answer is a one-line composer in the
+ bubble itself rather than the chat/steer input. The chat view is a mode, so "reuse the chat
+ input" costs the very mode switch this feature exists to avoid; and a chat message is a
+ `steer` to whichever thread is selected, not an `answer` to the item that asked, so routing
+ one through the other lets a reply land on the wrong agent. The invariant this section is
+ actually protecting survives intact: the widget owns no state, it issues the same
+ `AttentionAction`, and the text reaches the pane through the same `agent.prompt` path as the
+ Bench's queue - one implementation, one ledger line. It is capped and folded in
+ `planAttentionAction` (`shared/pro.ts::answerText`) because an answer is delivered as
+ keystrokes, where a newline is Enter and a TUI input buffer drops bytes past its length
+ without complaining.
+
  The contract is one shared type (`CompanionCommand` / `CompanionNotice`) plus
  `src/main/pro/companion.ts`, which translates bench attention into notices and notice clicks
  back into bench commands. Per-kind toggles (`pro.ambient.{speak,bubble,summon}`) live in
