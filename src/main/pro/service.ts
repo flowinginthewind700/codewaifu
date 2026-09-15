@@ -607,6 +607,19 @@ export class ProService implements CompanionApi {
   }
 
   /**
+   * True while Pro is the one who will tell the user about an attention item.
+   * `Core` asks this before speaking for a hook: two voices reading the same
+   * permission prompt is noise, not redundancy. Off (rather than true-but-
+   * silent) whenever we are not running or both ambient channels are muted, so
+   * the legacy companion keeps covering events we would only have logged.
+   */
+  announcesAttention(): boolean {
+    if (!this.running) return false
+    const cfg = this.proConfig()
+    return cfg.enabled && (cfg.speakAttention || cfg.bubbleAttention)
+  }
+
+  /**
    * Re-resolve both halves of "where is herdr". Called at boot, on a timer
    * while it is missing (a human installing herdr should not have to restart
    * the app), and whenever settings change the binary, socket or session.
@@ -1979,7 +1992,6 @@ export class ProService implements CompanionApi {
   async configOp(payload: unknown): Promise<ProResult> {
     const current = this.host.config()
     const next = applyPatch(current, { pro: { ...current.pro, ...recordOf(payload) } }).pro
-    const before = this.appliedPro ?? current.pro
     if (this.host.updateConfig) {
       try {
         await this.host.updateConfig({ pro: next })
@@ -1988,8 +2000,29 @@ export class ProService implements CompanionApi {
         return failResult('write-failed', `could not save config: ${String(error)}`)
       }
     }
-    this.appliedPro = next
+    // The write can reach us twice: once here, once through the host's config
+    // listener calling `syncConfig`. That is harmless because the diff is taken
+    // against whatever we last applied, so the second pass finds nothing to do.
+    await this.applyProDiff(next)
+    return okResult({ pro: next }, '', 'config-applied')
+  }
 
+  /**
+   * React to a `pro.*` change we did not make: the widget's stage bar, the HTTP
+   * relay, or a hand-edited file. The same diff `configOp` applies, minus the
+   * write, because whoever told us already saved it.
+   */
+  async syncConfig(): Promise<void> {
+    await this.applyProDiff(this.proConfig())
+  }
+
+  /**
+   * The one place a config delta becomes behaviour, so a settings toggle, a
+   * host listener and a test cannot disagree about what a change means.
+   */
+  private async applyProDiff(next: ProConfig): Promise<void> {
+    const before = this.appliedPro ?? next
+    this.appliedPro = next
     if (before.stalledAfterMs !== next.stalledAfterMs) {
       this.triage.setStalledAfterMs(next.stalledAfterMs)
     }
@@ -2004,7 +2037,6 @@ export class ProService implements CompanionApi {
       await this.rediscover()
     }
     this.invalidate()
-    return okResult({ pro: next }, '', 'config-applied')
   }
 
   /* ---------------------------------------------------------------- *

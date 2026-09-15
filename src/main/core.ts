@@ -45,6 +45,13 @@ const LOG_LIMIT = 200
 export type EventListener = (plan: EventPlan) => void
 export type StateListener = (speaking: boolean, queueLength: number) => void
 export type NeuralListener = (status: NeuralStatus) => void
+export type ConfigListener = (config: AppConfig) => void
+/**
+ * "This hook event is mine now." Returning true tells Core to keep the event in
+ * its log but stay silent about it, which is what lets the Bench own the
+ * announcement without two voices reading one permission prompt.
+ */
+export type EventClaim = (event: HookEvent) => boolean
 
 /**
  * Everything that is not windowing lives here so the GUI path and the headless
@@ -75,6 +82,8 @@ export class Core {
   private readonly eventListeners = new Set<EventListener>()
   private readonly stateListeners = new Set<StateListener>()
   private readonly neuralListeners = new Set<NeuralListener>()
+  private readonly configListeners = new Set<ConfigListener>()
+  private eventClaim: EventClaim | null = null
   private speaking = false
   private queueLength = 0
   private started = false
@@ -131,6 +140,17 @@ export class Core {
     // long after the download started and must not show a stale "not started".
     listener(this.neuralStatus())
     return () => this.neuralListeners.delete(listener)
+  }
+
+  /** Fired after every persisted config change, whichever call made it. */
+  addConfigListener(listener: ConfigListener): () => void {
+    this.configListeners.add(listener)
+    return () => this.configListeners.delete(listener)
+  }
+
+  /** Hand the hook event path to another owner (Pro). `null` takes it back. */
+  setEventClaim(claim: EventClaim | null): void {
+    this.eventClaim = claim
   }
 
   recentEvents(limit = 60): HookEvent[] {
@@ -371,13 +391,35 @@ export class Core {
 
   ingest(event: HookEvent): void {
     this.tracker.record(event)
-    const plan = planEvent(this.config, event)
+    let plan = planEvent(this.config, event)
+    // The Bench may own this event's announcement. The plan keeps its text and
+    // its place in the log, so the history still reads as a sentence; only the
+    // two side effects that would double up are dropped.
+    if ((plan.speak || plan.popWindow) && this.claimEvent(event)) {
+      plan = { ...plan, speak: false, popWindow: false }
+    }
     this.events.push(plan)
     if (this.events.length > LOG_LIMIT) this.events.splice(0, this.events.length - LOG_LIMIT)
     for (const listener of this.eventListeners) listener(plan)
     if (plan.speak && plan.text) this.speaker.say(plan.text, plan.lang)
     if (plan.popWindow) this.showHandler?.()
     log('info', `hook ${event.agent}/${event.rawEvent}`, { session: event.sessionId.slice(0, 8), speak: plan.speak })
+  }
+
+  /**
+   * Ask the claimant whether it will announce this event instead of us. A
+   * claimant that throws must not silence the companion, so the failure is
+   * logged and the event falls back to the legacy path.
+   */
+  private claimEvent(event: HookEvent): boolean {
+    const claim = this.eventClaim
+    if (!claim) return false
+    try {
+      return claim(event) === true
+    } catch (error) {
+      log('warn', 'event claim failed', String(error))
+      return false
+    }
   }
 
   say(text: string, lang?: 'zh' | 'en'): void {
@@ -404,7 +446,24 @@ export class Core {
       this.prepareNeural()
       this.emitNeural()
     }
+    this.emitConfig()
     return this.config
+  }
+
+  /**
+   * Tell the subscribers the persisted config changed. Pro is the main one: it
+   * has to react to `pro.*` edits made from the widget's stage bar, from the
+   * HTTP relay and from a hand-edited file alike, and it cannot tell those
+   * apart from inside. A subscriber that throws must not fail the write.
+   */
+  private emitConfig(): void {
+    for (const listener of this.configListeners) {
+      try {
+        listener(this.config)
+      } catch (error) {
+        log('warn', 'config listener failed', String(error))
+      }
+    }
   }
 
   reinstallHooks(): InstallReport {
@@ -492,6 +551,8 @@ export class Core {
     this.eventListeners.clear()
     this.stateListeners.clear()
     this.neuralListeners.clear()
+    this.configListeners.clear()
+    this.eventClaim = null
     // endpoint.env is deliberately left behind: it records the last working port
     // for the next launch, and its /health preflight makes a stale file harmless.
   }
