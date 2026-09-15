@@ -13,7 +13,8 @@
  * Electron, and the main-process bridge is left as the only thing that can fail.
  */
 import type { Lang } from './protocol'
-import type { BubbleRoute, Expression } from './ui'
+import type { BubbleMessage, BubbleRoute, Expression } from './ui'
+import type { ProCompanionPush } from './proIpc'
 import {
   attentionActions,
   needsMeCount,
@@ -299,6 +300,87 @@ export function badgeFor(view: BenchView): number {
   return needsMeCount(view.attention, view.generatedAt)
 }
 
+/**
+ * The widget's whole view of the bench, built by one function so that "what the
+ * badge says" and "what her face says" can never be computed in two places.
+ *
+ * It is pushed on every state change rather than pulled: the widget may be
+ * hidden, asleep or mid-animation, and a pull would mean either a timer in the
+ * renderer or a stale badge. Neither is acceptable for the one number that
+ * answers "do I have to go back to my desk?".
+ */
+export interface CompanionViewInput {
+  counts: StateCounts
+  notices: number
+  benchFocused: boolean
+  widgetVisible: boolean
+  /** The item being announced right now, or nothing. */
+  announcing?: { itemId: string; kind: AttentionKind | string } | null
+  /** True while a line of speech is playing: her mouth moves, so `talk` wins. */
+  speaking?: boolean
+  now: number
+}
+
+export function companionView(input: CompanionViewInput): ProCompanionPush {
+  const speaking = Boolean(input.speaking)
+  const announcing = input.announcing ?? null
+  const expression = announcing
+    ? expressionForNotice(announcing.kind, speaking)
+    : expressionForBench(input.counts, speaking)
+  return {
+    notices: Math.max(0, Math.trunc(input.notices) || 0),
+    expression,
+    counts: input.counts,
+    benchFocused: Boolean(input.benchFocused),
+    widgetVisible: Boolean(input.widgetVisible),
+    announcing: announcing?.itemId ?? '',
+    at: input.now
+  }
+}
+
+/**
+ * A widget-side read of the same push. The renderer must not re-derive the
+ * badge from a task list it does not have, so this is the only thing it does
+ * with the payload: decide whether the number is worth showing at all.
+ *
+ * `0` renders as nothing rather than "0", because a permanent zero on the tray
+ * trains the eye to ignore it.
+ */
+export function badgeLabel(push: ProCompanionPush | null): string {
+  const count = push?.notices ?? 0
+  return count > 0 ? (count > 99 ? '99+' : String(count)) : ''
+}
+
+/**
+ * Should a change in bench state take the current bubble down?
+ *
+ * A bubble has its own timer (`config.bubbleMs`), and letting that timer run
+ * out is normally right: the human may still be reading it. Two cases beat the
+ * timer, and only two.
+ *
+ * - The queue drained. A bubble saying "codex needs approval" that survives the
+ *   approval is a lie on screen, and the widget is the surface the human trusts
+ *   precisely because it is not a log.
+ * - Another item took over the announcement. She is now talking about the new
+ *   one, so the old bubble must not sit next to her mouth.
+ *
+ * Everything else returns false, including "the item being announced is still
+ * the one on screen": `pushProCompanion` fires on every herdr event, and a
+ * re-push must not flicker the bubble.
+ */
+export function shouldClearBubble(
+  push: ProCompanionPush | null,
+  bubble: BubbleMessage | null
+): boolean {
+  if (!push || !bubble) return false
+  const itemId = bubble.route?.itemId ?? ''
+  // A hook bubble with no route is the companion's own business, not the
+  // bench's; bench state must never clear it.
+  if (!itemId) return false
+  if (push.announcing === itemId) return false
+  if (push.notices <= 0) return true
+  return Boolean(push.announcing)
+}
 /* ------------------------------------------------------------------ *
  * Recovery chatter
  * ------------------------------------------------------------------ */

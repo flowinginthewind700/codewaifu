@@ -58,7 +58,52 @@ export const IPC = {
   pushNeural: 'cw:neural',
   pushSpeech: 'cw:speech',
   pushSpeechStop: 'cw:speech-stop',
-  openPanel: 'cw:open-panel'
+  openPanel: 'cw:open-panel',
+
+  /* ------------------------------------------------------------------ *
+   * Pro (the Bench). Prefixed `cw-pro:` so a channel list read at a glance
+   * separates the companion's own plumbing from the workbench's, and so
+   * turning Pro off cannot accidentally un-register a widget channel.
+   *
+   * Both windows load the same preload and therefore see the same allow-list:
+   * the Bench uses `pro*` invokes and `pushProState`, the widget uses
+   * `proCommand` and `pushProCompanion`. That is deliberate — one bridge, two
+   * surfaces, no second implementation of "send this to main".
+   * ------------------------------------------------------------------ */
+
+  /** The whole projection: `BenchView`. Called once on open, then pushed. */
+  proState: 'cw-pro:state',
+  /** One attention action (approve/deny/answer/snooze/open/done/reprompt). */
+  proAction: 'cw-pro:action',
+  /** Task lifecycle: create, patch, park, done, remove. */
+  proTask: 'cw-pro:task',
+  /** Intent ledger: read a task's entries, or append one. */
+  proLedger: 'cw-pro:ledger',
+  /** Recovery: plan, apply, handoff text, re-prompt. */
+  proRecovery: 'cw-pro:recovery',
+  /** Terminal bridges: attach/detach a pane, input, resize, scroll. */
+  proPane: 'cw-pro:pane',
+  /** The widget, driven from the Bench: summon/dismiss/toggle/announce. */
+  proCompanion: 'cw-pro:companion',
+  /** A `BenchCommand` coming *from* the widget (bubble click, spoken answer). */
+  proCommand: 'cw-pro:command',
+  /** Pro's own knobs (`pro.*` in config), patched from the Bench stage bar. */
+  proConfig: 'cw-pro:config',
+  /** Directory picker + discovery report, for the install card and New task. */
+  proHost: 'cw-pro:host',
+
+  /** Main -> Bench: the projection changed. Payload is `BenchView`. */
+  pushProState: 'cw-pro:state-changed',
+  /** Main -> Bench: base64 ANSI frames for attached panes. */
+  pushProFrames: 'cw-pro:frames',
+  /** Main -> Bench: one bridge's phase/size/drop counters. */
+  pushProBridge: 'cw-pro:bridge',
+  /** Main -> Bench: select this task/pane (a bubble click landed here). */
+  pushProFocus: 'cw-pro:focus',
+  /** Main -> Bench: a transient line about an action that could not run. */
+  pushProNotice: 'cw-pro:notice',
+  /** Main -> widget: badge count, resting expression, fleet counts. */
+  pushProCompanion: 'cw-pro:companion-state'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -89,7 +134,17 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.fitHeight,
   IPC.solidRegion,
   IPC.voiceReady,
-  IPC.speechAck
+  IPC.speechAck,
+  IPC.proState,
+  IPC.proAction,
+  IPC.proTask,
+  IPC.proLedger,
+  IPC.proRecovery,
+  IPC.proPane,
+  IPC.proCompanion,
+  IPC.proCommand,
+  IPC.proConfig,
+  IPC.proHost
 ]
 
 /** Main -> renderer pushes the preload is willing to subscribe to. */
@@ -104,5 +159,11 @@ export const PUSH_CHANNELS: readonly IpcChannel[] = [
   IPC.pushNeural,
   IPC.pushSpeech,
   IPC.pushSpeechStop,
-  IPC.openPanel
+  IPC.openPanel,
+  IPC.pushProState,
+  IPC.pushProFrames,
+  IPC.pushProBridge,
+  IPC.pushProFocus,
+  IPC.pushProNotice,
+  IPC.pushProCompanion
 ]

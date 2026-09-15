@@ -459,6 +459,107 @@ export function decisionKeys(
 }
 
 /* ------------------------------------------------------------------ *
+ * From "the human clicked Approve" to "what herdr is told to do"
+ * ------------------------------------------------------------------ */
+
+/**
+ * The compiled form of an attention action. One union, produced by a pure
+ * function, consumed by exactly one executor: the Bench button, the widget
+ * bubble click and `POST /pro/answer` all end up here, so there is a single
+ * audit trail and a single place that can be wrong.
+ */
+export type AttentionExecution =
+  | { kind: 'keys'; itemId: string; taskId: string; paneId: string; keys: string[]; preview: string }
+  | { kind: 'prompt'; itemId: string; taskId: string; paneId: string; text: string }
+  | { kind: 'focus'; itemId: string; taskId: string; paneId: string }
+  | { kind: 'snooze'; itemId: string; minutes: number; until: number }
+  | { kind: 'resolve'; itemId: string; taskId: string; status: 'done' | 'dismissed' }
+  | { kind: 'none'; itemId: string; code: NoExecCode; reason: string }
+
+/**
+ * Stable codes rather than prose, because "we will not press a button we are
+ * unsure about" is a message the UI has to explain in two languages.
+ */
+export type NoExecCode = 'no-recipe' | 'no-pane' | 'no-text' | 'no-context' | 'unknown-action'
+
+export const DEFAULT_SNOOZE_MINUTES = 10
+
+export interface AttentionPlanInput {
+  item: AttentionItem
+  action: AttentionAction
+  /** Free-text answer, or nothing for the keystroke verbs. */
+  text?: string
+  now: number
+  keys?: KeyOverrides | null
+  snoozeMinutes?: number
+  /** Needed by `reprompt`, which reconstructs the task's context. */
+  task?: TaskRecord | null
+  digest?: LedgerDigest | null
+}
+
+function none(input: AttentionPlanInput, code: NoExecCode, reason: string): AttentionExecution {
+  return { kind: 'none', itemId: input.item.id, code, reason }
+}
+
+/**
+ * Compile a click into a herdr instruction.
+ *
+ * The load-bearing rule is the `null` recipe: an agent we have no keystroke
+ * table for gets `{kind:'none'}` and never a guessed key. Pressing "1" in a TUI
+ * that means something else is the one failure mode this product cannot survive,
+ * because it is silent and it is the agent doing the damage.
+ */
+export function planAttentionAction(input: AttentionPlanInput): AttentionExecution {
+  const { item, action, now } = input
+  const taskId = item.taskId
+  const paneId = item.paneId
+  const text = String(input.text ?? '').trim()
+
+  switch (action) {
+    case 'approve':
+    case 'deny': {
+      if (!paneId) return none(input, 'no-pane', 'no live pane for this task')
+      const recipe = decisionKeys(item.agentKind, action, input.keys ?? null)
+      if (!recipe) {
+        return none(
+          input,
+          'no-recipe',
+          `no ${action} keystrokes known for ${item.agentKind || 'this agent'}`
+        )
+      }
+      return { kind: 'keys', itemId: item.id, taskId, paneId, keys: recipe.keys, preview: recipe.preview }
+    }
+    case 'answer': {
+      if (!text) return none(input, 'no-text', 'an answer needs text')
+      if (!paneId) return none(input, 'no-pane', 'no live pane for this task')
+      return { kind: 'prompt', itemId: item.id, taskId, paneId, text }
+    }
+    case 'reprompt': {
+      if (!paneId) return none(input, 'no-pane', 'no live pane for this task')
+      const task = input.task
+      if (!task) return none(input, 'no-context', 'task record is gone')
+      const body = rePromptText(task, input.digest ?? null)
+      if (!body) return none(input, 'no-context', 'nothing recorded to re-prompt with')
+      return { kind: 'prompt', itemId: item.id, taskId, paneId, text: body }
+    }
+    case 'open': {
+      if (!paneId) return none(input, 'no-pane', 'no live pane for this task')
+      return { kind: 'focus', itemId: item.id, taskId, paneId }
+    }
+    case 'snooze': {
+      const minutes = Math.min(240, Math.max(1, Math.round(input.snoozeMinutes ?? DEFAULT_SNOOZE_MINUTES)))
+      return { kind: 'snooze', itemId: item.id, minutes, until: now + minutes * 60000 }
+    }
+    case 'done':
+      return { kind: 'resolve', itemId: item.id, taskId, status: 'done' }
+    case 'dismiss':
+      return { kind: 'resolve', itemId: item.id, taskId, status: 'dismissed' }
+    default:
+      return none(input, 'unknown-action', `unknown action ${String(action)}`)
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Ledger
  * ------------------------------------------------------------------ */
 
