@@ -33,8 +33,13 @@ import {
   stageHeight,
   widgetView,
   type BubbleMessage,
+  type BubbleRoute,
+  type Expression,
   type PanelTab
 } from '@shared/ui'
+import { shouldClearBubble, type BenchCommand } from '@shared/companionLink'
+import type { AttentionAction } from '@shared/pro'
+import type { ProCompanionPush, ProResult } from '@shared/proIpc'
 import { resolveUiLang } from '@shared/lang'
 import { expressionForMood } from '@shared/live2dMood'
 import type { Live2DMotionRef } from '@shared/live2dCatalog'
@@ -79,6 +84,36 @@ function browserLang(): Lang {
   return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
+/**
+ * Whether two bench pushes would render identically.
+ *
+ * `pushProCompanion` fires on every herdr event and always carries a fresh `at`,
+ * so a naive `setBench(payload)` re-renders the widget continuously on a busy
+ * fleet - for a payload whose every visible field is unchanged.
+ */
+function sameBench(previous: ProCompanionPush | null, next: ProCompanionPush): boolean {
+  if (!previous) return false
+  const a = previous.counts
+  const b = next.counts
+  return (
+    previous.notices === next.notices &&
+    previous.expression === next.expression &&
+    previous.announcing === next.announcing &&
+    previous.benchFocused === next.benchFocused &&
+    previous.widgetVisible === next.widgetVisible &&
+    a.working === b.working &&
+    a.blocked === b.blocked &&
+    a.done === b.done &&
+    a.idle === b.idle &&
+    a.unknown === b.unknown &&
+    a.needsMe === b.needsMe &&
+    a.total === b.total
+  )
+}
+
+/** Failure codes that mean "what you clicked is no longer there". */
+const GONE_CODES: ReadonlySet<string> = new Set(['dropped', 'no-item', 'no-task', 'bad-task'])
+
 export function App(): ReactElement {
   const [config, setConfig] = useState<RedactedConfig | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState | null>(null)
@@ -96,8 +131,16 @@ export function App(): ReactElement {
   const [chatThread, setChatThread] = useState<ThreadInfo | null>(null)
   /** Live2D runtime, once her first frame has painted. */
   const [avatar, setAvatar] = useState<AvatarHandle | null>(null)
+  /** The Bench's view of the fleet, pushed by main (F7). Null until Pro speaks. */
+  const [bench, setBench] = useState<ProCompanionPush | null>(null)
 
   const bubbleTimer = useRef<number | null>(null)
+  /**
+   * Mirror of `bubble` for the push listener, which must not resubscribe every
+   * time a bubble changes: `shouldClearBubble` needs the message on screen right
+   * now, and a stale closure would leave a lie up there.
+   */
+  const bubbleRef = useRef<BubbleMessage | null>(null)
   const toastTimer = useRef<number | null>(null)
   const clickThrough = useRef(false)
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -119,11 +162,20 @@ export function App(): ReactElement {
   const lang = resolveUiLang(config?.uiLang ?? 'auto', runtime?.systemLang ?? browserLang())
   const t: Translate = useMemo(() => makeTranslator(lang), [lang])
 
+  /** Take the bubble down immediately; used when bench state outdates it. */
+  const hideBubble = useCallback(() => {
+    bubbleRef.current = null
+    if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current)
+    bubbleTimer.current = null
+    setBubble(null)
+  }, [])
+
   const showBubble = useCallback((message: BubbleMessage, holdMs: number) => {
+    bubbleRef.current = message
     setBubble(message)
     if (bubbleTimer.current) window.clearTimeout(bubbleTimer.current)
-    bubbleTimer.current = window.setTimeout(() => setBubble(null), Math.max(1200, holdMs))
-  }, [])
+    bubbleTimer.current = window.setTimeout(hideBubble, Math.max(1200, holdMs))
+  }, [hideBubble])
 
   const notice = useCallback((text: string) => {
     if (!text) return
@@ -228,6 +280,16 @@ export function App(): ReactElement {
         setRuntime((prev) => (prev ? { ...prev, neural } : prev))
       }),
       api.on(CH.pushExpanded, (payload) => setExpanded(Boolean(payload))),
+      /* ---- the Bench, pushed by main (F7) ------------------------------
+       * One payload drives the badge, her resting face and the bubble's
+       * right to stay on screen, so all three are derived here rather than in
+       * three places that could drift. */
+      api.on(CH.pushProCompanion, (payload) => {
+        const push = payload as ProCompanionPush
+        if (!push || typeof push.notices !== 'number' || !push.counts) return
+        setBench((prev) => (sameBench(prev, push) ? prev : push))
+        if (shouldClearBubble(push, bubbleRef.current)) hideBubble()
+      }),
       api.on(CH.openPanel, () => {
         setExpanded(true)
         void api.setExpanded(true)
@@ -237,7 +299,7 @@ export function App(): ReactElement {
     // `config.bubbleMs` is read inside the listeners; resubscribing on every
     // slider tick would drop pushes mid-flight, so the ref-free read is fine
     // because a stale hold time is harmless.
-  }, [showBubble, config?.bubbleMs])
+  }, [showBubble, hideBubble, config?.bubbleMs])
 
   /* ---- click-through: only the card catches the pointer ---------------- */
   useEffect(() => {
@@ -334,20 +396,30 @@ export function App(): ReactElement {
     }
   }, [])
 
+  /* ---- her face: one expression, two sources ---------------------------
+   * While the Bench is alive its push decides how she looks (worried when the
+   * fleet is blocked, pleased when the queue drained); otherwise the last hook
+   * event does, exactly as before. Computed once so the face effect below and
+   * the stage render cannot pick different answers. */
+  const expression = useMemo<Expression>(() => {
+    if (bench && (bench.notices > 0 || bench.counts.total > 0)) return bench.expression
+    return expressionForKind(lastKind, speaking)
+  }, [bench, lastKind, speaking])
+
   /* ---- her face follows the event -------------------------------------- */
   useEffect(() => {
     if (!avatar) return
     // A face picked from the stage tools wins for a few seconds; without this
     // the next `speaking` tick would wipe it before you saw it change.
     if (Date.now() < manualFaceUntil.current) return
-    const name = expressionForMood(avatar.character, expressionForKind(lastKind, speaking))
+    const name = expressionForMood(avatar.character, expression)
     if (!name) return
     try {
       avatar.host.setExpression(name)
     } catch {
       /* model released between the render and this effect */
     }
-  }, [avatar, lastKind, speaking])
+  }, [avatar, expression])
 
   /* ---- threads: refresh while the panel is open, and after any event ----
      The chat view reads this too — it is where the "live" dot and the fast
@@ -406,6 +478,52 @@ export function App(): ReactElement {
     const state = await api.mediaCommand(command)
     if (state) setMedia(state)
   }, [])
+
+  /* ---- the widget's half of the companion link (F7) --------------------
+   * A bubble is not a log: if the click cannot be honoured the widget has to
+   * say so out loud, otherwise the human believes they approved something that
+   * was approved (or gone) elsewhere. */
+  const reportPro = useCallback(
+    (result: ProResult | null) => {
+      if (result?.ok) return
+      notice(GONE_CODES.has(result?.code ?? '') ? t('bubbleGone') : t('bubbleFailed'))
+    },
+    [notice, t]
+  )
+
+  const onBubbleOpen = useCallback(
+    (route: BubbleRoute) => {
+      hideBubble()
+      const command: BenchCommand = route.taskId
+        ? { type: 'focusTask', taskId: route.taskId, paneId: route.paneId }
+        : { type: 'openBench' }
+      void api
+        .proCommand(command)
+        .then(reportPro)
+    },
+    [hideBubble, reportPro]
+  )
+
+  const onBubbleAct = useCallback(
+    (route: BubbleRoute, action: string) => {
+      // No item to settle (or a verb that needs words): land on the pane instead.
+      if (!route.itemId) {
+        onBubbleOpen(route)
+        return
+      }
+      hideBubble()
+      void api
+        .proCommand({
+          type: 'act',
+          action: action as AttentionAction,
+          itemId: route.itemId,
+          taskId: route.taskId,
+          paneId: route.paneId
+        })
+        .then(reportPro)
+    },
+    [hideBubble, onBubbleOpen, reportPro]
+  )
 
   /**
    * 「汇报一下现在的 coding 状态」 — one tap, two outputs. The bubble lists the
@@ -524,7 +642,6 @@ export function App(): ReactElement {
     )
   }
 
-  const expression = expressionForKind(lastKind, speaking)
   const relay = runtime.relay
   const relayState = relay.duplicateOf || relay.conflict ? 'warn' : speaking ? 'live' : relay.port ? 'ok' : 'warn'
   const muted = !config.speak || !config.enabled
@@ -559,7 +676,7 @@ export function App(): ReactElement {
             data-compact={chatThread ? '1' : undefined}
             style={{ height: stageHeight(config.avatar.mode, view) }}
           >
-            <Bubble message={bubble} />
+            <Bubble message={bubble} onOpen={onBubbleOpen} onAct={onBubbleAct} />
             {live2d ? (
               <Suspense fallback={<span className="l2d-slot" />}>
                 <Live2DAvatar

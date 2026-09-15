@@ -603,6 +603,73 @@ a {
   letter-spacing: var(--tracking-label);
 }
 
+/* ---- bubble routing (F7) ----------------------------------------------
+   When a bubble stands for a bench attention item its text is the click
+   target: one click brings the Bench forward on that task and that pane. It is
+   a real <button> rather than a div with a handler because the widget is
+   click-through outside `[data-solid]`, and the global `button` rule is what
+   lifts it out of the stage's drag region on mac and Windows. */
+
+.bubble-text {
+  white-space: pre-line;
+}
+
+button.bubble-text {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.bubble-text:hover {
+  color: var(--pink);
+}
+
+.bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.bubble-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-swift),
+    border-color var(--dur-1) var(--ease-swift);
+}
+
+.bubble-chip:hover {
+  background: var(--surface-3);
+}
+
+/* The one chip that costs a window switch, so it is the one that looks like her. */
+.bubble-chip.primary {
+  border-color: rgba(255, 125, 150, 0.42);
+  background: var(--pink-soft);
+  color: var(--pink);
+}
+
+.bubble-chip.primary:hover {
+  background: rgba(255, 125, 150, 0.22);
+}
+
 /* ---- media bar -------------------------------------------------------- */
 
 .media {

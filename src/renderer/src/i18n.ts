@@ -208,6 +208,9 @@ const STRINGS = {
     en: 'Codex gates third-party hooks: open Codex, run /hooks once, and trust the CodeWaifu entries.'
   },
   mediaUnavailable: { zh: '没有检测到正在播放的应用', en: 'No controllable player found' },
+  /** A bubble click that main could not honour because the item is gone (F7). */
+  bubbleGone: { zh: '那条已经不在了。', en: 'That one is already gone.' },
+  bubbleFailed: { zh: '没能送达工作台。', en: 'That did not reach the Bench.' },
   report: { zh: '汇报当前状态', en: 'Report status' },
   reportAria: { zh: '汇报当前 coding 状态', en: 'Read out the current coding status' },
   expression: { zh: '表情', en: 'Expression' },

@@ -1,7 +1,9 @@
 import type { ConfigPatch } from '@shared/config'
 import type { ChatTranscript } from '@shared/chat'
+import type { BenchCommand } from '@shared/companionLink'
 import type { RegionRect } from '@shared/linuxRuntime'
 import type { MediaCommand, MediaState } from '@shared/media'
+import type { ProResult } from '@shared/proIpc'
 import type {
   Agent,
   HooksReport,
@@ -71,6 +73,13 @@ export const api = {
     const result = await call<{ media?: MediaState }>(CH.mediaCommand, command)
     return result.media ?? null
   },
+
+  /**
+   * The widget's half of the companion link (F7): ask the Bench to focus a task
+   * or settle an attention item. Main resolves the command against live state
+   * and answers with a reason, so a stale bubble degrades instead of lying.
+   */
+  proCommand: (command: BenchCommand) => call<ProResult>(CH.proCommand, command),
 
   hooksInstall: () => call<{ ok: boolean; report: HooksReportWithWarnings }>(CH.hooksInstall),
   hooksUninstall: () => call<{ ok: boolean; report: HooksReportWithWarnings }>(CH.hooksUninstall),
