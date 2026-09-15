@@ -108,6 +108,23 @@ const STDERR_LIMIT = 4096
 /** herdr says this when another client already holds the control connection. */
 const BUSY = /already|attached|busy|in use|taken/i
 
+/** Ceiling on the doubling, so a bad minute cannot park a pane for minutes. */
+const MAX_BACKOFF_STEPS = 4
+
+/**
+ * How long to wait before replacing the control connection again.
+ *
+ * A resync costs a full repaint, so respawning on a fixed interval while the
+ * renderer is still behind makes the overload worse: every attempt adds the
+ * largest frame of all to a queue that is already overflowing. Doubling to a
+ * ceiling gives a slow consumer room to catch up without ever parking a pane
+ * that would have recovered by itself.
+ */
+export function respawnBackoff(streak: number, baseMs: number): number {
+  const steps = Math.max(0, Math.min(MAX_BACKOFF_STEPS, Math.trunc(streak)))
+  return Math.max(0, baseMs) * 2 ** steps
+}
+
 function defaultSpawn(binary: string, args: readonly string[], options: { env?: Record<string, string> }): BridgeChild {
   return nodeSpawn(binary, [...args], {
     env: { ...process.env, ...(options.env ?? {}) },
@@ -143,6 +160,9 @@ export class TerminalBridge {
   private lastSeq = 0
   private resync = false
   private respawnCount = 0
+  /** Consecutive resyncs that each found new drops: the backoff input. */
+  private respawnStreak = 0
+  private droppedAtRespawn = 0
   private errorText = ''
   private stderrTail = ''
 
@@ -315,6 +335,13 @@ export class TerminalBridge {
     this.child = child
     this.decoder = new LineDecoder()
     this.stderrTail = ''
+    // herdr numbers frames per connection, so this counter belongs to the
+    // connection and has to die with it. Left at the previous high value, every
+    // frame of the new connection reads as a backwards seq: the opening full
+    // repaint clears the flag once, the very next frame re-arms it, and the
+    // bridge respawns itself forever at four a second - for as long as the pane
+    // keeps printing, which is exactly when it was already falling behind.
+    this.lastSeq = 0
     this.setPhase('starting')
 
     child.stdout?.on('data', (chunk: unknown) => this.onStdout(chunk))
@@ -371,7 +398,9 @@ export class TerminalBridge {
       this.resync = true
     }
     if (this.phase !== 'live') this.setPhase('live')
-    if (this.resync && !this.respawnTimer && !this.closing) this.scheduleRespawn(this.respawnDelayMs)
+    if (this.resync && !this.respawnTimer && !this.closing) {
+      this.scheduleRespawn(respawnBackoff(this.respawnStreak, this.respawnDelayMs))
+    }
   }
 
   private scheduleRespawn(delayMs: number): void {
@@ -397,6 +426,13 @@ export class TerminalBridge {
       }
     }
     this.respawnCount += 1
+    // New drops since the last attempt are what make this a streak rather than
+    // a one-off hiccup, so it is measured against a watermark and not a clock: a
+    // pane that respawned once and then behaved has to get the short delay back
+    // immediately, and a pane still shedding frames has to be slowed down.
+    if (this.droppedCount === this.droppedAtRespawn) this.respawnStreak = 0
+    else this.respawnStreak += 1
+    this.droppedAtRespawn = this.droppedCount
     this.setPhase('respawning')
     // The queue is stale screen content by definition once we respawn; the next
     // connection opens with a full repaint, so dropping it is what makes the

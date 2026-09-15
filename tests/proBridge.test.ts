@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   TerminalBridge,
+  respawnBackoff,
   type BridgeOptions,
   type BridgeState
 } from '../src/main/pro/herdr/terminalBridge'
@@ -267,6 +268,58 @@ describe('dropping frames when the renderer falls behind', () => {
   })
 })
 
+describe('backing off while the renderer stays behind', () => {
+  it('doubles the resync delay, to a ceiling', () => {
+    // A resync costs a full repaint, so replacing the connection on a fixed
+    // interval while the consumer is still slow adds the largest frame of all
+    // to a queue that is already overflowing. The ceiling is what keeps one bad
+    // minute from parking a pane that would have recovered by itself.
+    expect(respawnBackoff(0, 250)).toBe(250)
+    expect(respawnBackoff(1, 250)).toBe(500)
+    expect(respawnBackoff(2, 250)).toBe(1000)
+    expect(respawnBackoff(4, 250)).toBe(4000)
+    expect(respawnBackoff(40, 250), 'capped').toBe(4000)
+    expect(respawnBackoff(-3, 250), 'a nonsense streak is not a longer wait').toBe(250)
+    expect(respawnBackoff(2, 0), 'no delay configured, no delay invented').toBe(0)
+  })
+
+  it('waits longer for the next resync while the pane is still shedding frames', () => {
+    const { bridge, spawner, clock } = harness({ maxFrames: 8 })
+    for (let seq = 1; seq <= 12; seq += 1) spawner.child().frame(seq)
+    bridge.take()
+    clock.advance(250)
+    expect(spawner.calls, 'the first resync is on the base delay').toHaveLength(2)
+
+    // The same overload on the fresh connection. This is the shape that used to
+    // run at four respawns a second for as long as the build kept printing,
+    // which is precisely the hour of busy output acceptance 6.5 asks about.
+    for (let seq = 1; seq <= 12; seq += 1) spawner.child(1).frame(seq)
+    expect(clock.pending(), 'still one respawn armed, not one per drop').toBe(1)
+    clock.advance(250)
+    expect(spawner.calls, 'not yet: the streak earned a 500ms delay').toHaveLength(2)
+    clock.advance(250)
+    expect(spawner.calls).toHaveLength(3)
+  })
+
+  it('gives the base delay back once a resync found nothing dropped', () => {
+    const { bridge, spawner, clock } = harness({ maxFrames: 8 })
+    for (let seq = 1; seq <= 12; seq += 1) spawner.child().frame(seq)
+    bridge.take()
+    clock.advance(250)
+    expect(spawner.calls).toHaveLength(2)
+    spawner.child(1).frame(1, { full: true })
+
+    // A resync with no drops behind it is a hiccup rather than a streak, so the
+    // penalty is served once and the next genuine drop gets the short delay.
+    bridge.requestResync()
+    clock.advance(250)
+    expect(spawner.calls).toHaveLength(3)
+    for (let seq = 1; seq <= 12; seq += 1) spawner.child(2).frame(seq)
+    clock.advance(250)
+    expect(spawner.calls, 'base delay again, not the backed-off one').toHaveLength(4)
+  })
+})
+
 describe('frame sequence gaps', () => {
   it('flags a backwards seq as needing a resync', () => {
     const { bridge, child } = harness()
@@ -286,16 +339,28 @@ describe('frame sequence gaps', () => {
 
   it('settles after a resync instead of respawning in a loop', () => {
     // herdr numbers frames per connection, so the connection we just respawned
-    // starts back at seq 1. If that first frame counted as a gap we would
-    // resync forever and the pane would flicker on a two-frame cycle.
+    // starts back at seq 1 and the counter has to go back to 0 with it. This
+    // used to stop at the opening full frame, which clears the resync flag
+    // whatever the numbers say: the storm started on the *second* frame of the
+    // new connection, when seq 2 met a counter still sitting at 5 and read as a
+    // gap. So the pane has to keep printing past the repaint to be proven calm.
     const { bridge, child, spawner, clock } = harness()
     child.frame(5)
     bridge.requestResync()
     clock.advance(250)
     expect(spawner.calls).toHaveLength(2)
-    spawner.child(1).frame(1, { full: true })
-    expect(bridge.status()).toMatchObject({ phase: 'live', respawns: 1, seq: 5 })
+    const next = spawner.child(1)
+    next.frame(1, { full: true })
+    // Per-connection, so this is 1 and not the 5 the dead connection reached.
+    expect(bridge.status()).toMatchObject({ phase: 'live', respawns: 1, seq: 1 })
     expect(clock.pending(), 'no second resync armed').toBe(0)
+
+    next.frame(2)
+    next.frame(3)
+    expect(bridge.status()).toMatchObject({ needsResync: false, respawns: 1, seq: 3 })
+    expect(clock.pending(), 'ascending frames on a fresh connection are not a gap').toBe(0)
+    clock.advance(10_000)
+    expect(spawner.calls, 'no respawn storm').toHaveLength(2)
   })
 
   it('requestResync tells the renderer at once and respawns on the delay', () => {
