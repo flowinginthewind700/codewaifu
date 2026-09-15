@@ -245,7 +245,7 @@ one.
  | 0 | herdr installed, fixtures recorded, docs, repo hygiene | yes |
  | 1 | `pro/herdr/*`: discovery, socket client, snapshot cache, event stream, terminal bridge | yes — CLI `pro state`, unit tests |
  | 2 | ledger + recovery planner + triage engine | yes — pure functions + tests |
- | 3 | Bench window: tree, attention bar, task card, xterm pane grid, IPC, config | manual + e2e smoke |
+ | 3 | Bench window: tree, attention bar, task card, xterm pane grid, IPC, config | manual + e2e smoke (`npm run test:e2e`) |
  | 4 | companion link (F7) + `/pro/*` HTTP API + agent skill | yes — the bridge is pure translation over `ProService`, unit-testable with a fake window handle |
 
  ## 8. Architecture map

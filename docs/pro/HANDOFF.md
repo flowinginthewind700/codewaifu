@@ -1,8 +1,9 @@
 # Pro handoff
 
-`main` @ `ab4ff51` - typecheck, 834 tests (plus the 12 Windows-only skips) and
-`electron-vite build` all green on Linux (Ubuntu, node 20+, herdr 0.9.0). Verified
-platform is Linux; macOS is built for but not yet run.
+`main` @ `97fd122` - typecheck, 834 tests (plus the 12 Windows-only skips),
+`electron-vite build` and the new `npm run test:e2e` (6 cases, needs a display)
+all green on Linux (Ubuntu, node 20+, herdr 0.9.0). Verified platform is Linux;
+macOS is built for but not yet run.
 
 The spec is [MVP.md](./MVP.md) and it is still the authority: F1-F7, the
 acceptance criteria in section 6, the phases in section 7. This file is the
@@ -50,13 +51,16 @@ so quit the installed app first when F6 is what you are verifying. Dev builds ta
 a `-dev` suffix on `userData` so they can sit next to the installed app; config and
 Pro state stay in `~/.codewaifu` unless `CODEWAIFU_HOME` points elsewhere.
 
-Pixels are not obtainable on this machine: GNOME's Screenshot D-Bus answers
-`AccessDenied` to us, and `import`/`xwd` return blank pixmaps for Electron windows
-under mutter. Verify the Bench over CDP instead: `npm run dev --
---remote-debugging-port=9229`, then `curl -s 127.0.0.1:9229/json/list` for the
-`CodeWaifu Pro` target and `Runtime.evaluate` against its DOM. That is how the two
-blank-frame renderer crashes in section 4 were found, and it is the cheapest way to
-see the pane grid after touching renderer code.
+Pixels are obtainable now, but only from the smoke test: `npm run test:e2e`
+leaves `tests/e2e/artifacts/bench.png`, a screenshot of the Bench it just launched
+against a faked herdr socket, and it is the only screenshot this machine will give
+anyone. GNOME's Screenshot D-Bus still answers `AccessDenied` to us and
+`import`/`xwd` still return blank pixmaps for Electron windows under mutter, so a
+*live* session is still CDP: `npm run dev -- --remote-debugging-port=9229`, then
+`curl -s 127.0.0.1:9229/json/list` for the `CodeWaifu Pro` target and
+`Runtime.evaluate` against its DOM. That is how the two blank-frame renderer
+crashes in section 4 were found; the smoke test is the same look with a harness
+around it, so it runs before a crash ships rather than after.
 
 ## 3. Gates
 
@@ -65,6 +69,21 @@ Run all three before every commit; there is no lint script.
 ```bash
 npm run typecheck && npx vitest run && npx electron-vite build
 ```
+
+A fourth gate is separate because it needs a display, a build and about twenty
+seconds:
+
+```bash
+npm run test:e2e
+```
+
+It launches `out/main/index.js` under Electron against a faked herdr socket
+(`tests/e2e/fakeHerdr.ts`, NDJSON over a unix socket) and asserts that the Bench
+window paints a tree row, shows no crash card, is not sitting on the install card
+and throws nothing while its bundle is evaluated; the screenshot lands in
+`tests/e2e/artifacts/bench.png`. It is deliberately not inside `npm test`: a box
+with no X display would fail it for a reason that has nothing to do with the code,
+and jsdom cannot load a bundle, which is the only thing this gate is for.
 
 `npm run typecheck` runs **both** tsconfigs. `tsconfig.node.json` has
 `noUnusedLocals` and `noUnusedParameters`, so an unused import fails the build
@@ -156,6 +175,10 @@ what React dev's guarded-callback replay does to a thrown value whose getters
 throw), and `renderFault.test.ts` pins the pure half with 20 more. The pane grid
 itself was verified live over CDP against a running herdr session (one pane, task
 list, attention queue and recovery panel all rendering).
+
+The smoke test in section 3 now catches both of those crashes at the layer they
+failed in: it loads the built bundle, which is the one artefact a green jsdom
+suite never sees.
 
 ## 5. Settled decisions
 
@@ -269,26 +292,19 @@ without reading those first.
 
 ## 6. Known gaps, in the order they should be taken
 
-1. **No e2e smoke for the Bench.** Phase 3 in MVP.md asks for "manual + e2e
-   smoke", and there is no Playwright in this repo yet - the widget has none
-   either. The boundary and the jsdom suite cover a renderer that throws, but both
-   crashes that shipped were failures of the *bundled document* (`process.env`
-   absent where the dev transform had it; a proposed-API flag that only exists at
-   runtime), and jsdom never loads a bundle. `_electron.launch` plus an assertion
-   that `pro.html` paints a tree row would have caught both; the CDP recipe in
-   section 2 is the manual version of the same check.
-2. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
+1. **The hour of busy output has not been run.** Acceptance 6.5. The WebGL
    renderer has a fallback path for a lost context and for no WebGL at all, but
    neither the memory claim nor the fallback has been observed on real hardware.
-3. **Pane-level spawn failures show raw errno.** Discovery explains a missing
+2. **Pane-level spawn failures show raw errno.** Discovery explains a missing
    herdr in prose, but a bridge whose `spawn` throws ENOENT surfaces
    `spawn ... ENOENT` in the pane header tooltip.
-4. **Timing flake.** One full-suite run in about six showed a single failure in
+3. **Timing flake.** One full-suite run in about six showed a single failure in
    `steer` or `matchaVoice`; both do real waiting and neither reproduced on
    rerun. Worth converting to a fake clock if it recurs.
-5. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
-   never mention Pro. No screenshot of the Bench.
-6. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
+4. **Docs.** `README.md` / `README.zh-CN.md` describe the 0.3.0 companion and
+   never mention Pro. The e2e artifact in section 3 is the only screenshot of the
+   Bench that exists, and it is a git-ignored test output.
+5. **macOS.** Nothing has been run there. The likely sharp edges are the menubar
    tray (a long `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench
    window, and voice-runtime packaging via `npm run dist:mac`. The Cmd/Ctrl chord
    table itself is pure and tested on both.
@@ -300,6 +316,8 @@ without reading those first.
   `true`。
 - 提交前三道闸：`npm run typecheck && npx vitest run && npx electron-vite build`。
   没有 lint 脚本；`tsconfig.node.json` 开了 `noUnusedLocals`，多余 import 会直接红。
+  第四道闸单独跑：`npm run test:e2e`——要显示器、要先构建、约二十秒，所以不在
+  `npm test` 里：没有 X 的机器会因为它红，而红的理由跟代码无关。
 - 前提：机器上要有 herdr（这里验证用的是 0.9.0）。没有 herdr 时 Bench 会退化成安装
   引导卡片，不会崩。
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
@@ -344,10 +362,19 @@ without reading those first.
 - 截图在这台机器拿不到：GNOME 的 Screenshot D-Bus 回 `AccessDenied`，`import`/`xwd`
   对 Electron 窗口只给空白像素。验 Bench 走 CDP：`npm run dev --
   --remote-debugging-port=9229`，对 `CodeWaifu Pro` 这个 target 做 `Runtime.evaluate`。
+  唯一的例外是 `npm run test:e2e` 留下的 `tests/e2e/artifacts/bench.png`：它截的是
+  测试自己起的那个 Bench，也是这台机器给得出的唯一一张像素。
   两个白屏 renderer 崩溃（shared/lang.ts 读 `process.env`、Pane 的 `allowProposedApi`）
   就是这么抓到的，现已修复；pane 网格对着真实 herdr 会话验过渲染。
   同类崩溃现在会在窗口里显示成一张卡片，CDP 回到它本来的用途：看渲染结果，而不是找
   崩溃的唯一手段。
-- 还没做：Bench 的 e2e（jsdom 渲染不了打包后的 document，而两次白屏都是 bundle 层的
-  失败）、连续一小时高输出的内存实测、pane spawn 失败时裸露的 errno、README 里的 Pro
-  章节、macOS 实机验证。
+- Bench 的 e2e 有了：`tests/e2e/proSmoke.e2e.ts` 用 playwright-core 的 `_electron`
+  真起 `out/main/index.js`，对端是 `tests/e2e/fakeHerdr.ts` 的假 herdr（unix socket
+  上的 NDJSON，只回 `ping` / `session.snapshot` / `events.subscribe`），断言窗口画出
+  任务行、没有崩溃卡片、不在安装引导卡片上、bundle 求值不抛异常。jsdom 渲染不了
+  打包后的 document，而两次白屏都是 bundle 层的失败，所以这道闸只能真起进程。
+  「不抛异常」靠一次 reload：`pageerror` 的监听器在 `electron.launch` 返回之后才绑得
+  上，第一次求值抛的异常已经是历史；reload 用同一个 module graph 再求值一遍，这次
+  有人听。把 `throw` 塞进打好的 bundle 里验过：6 例红 4 例，其中就有这一例。
+- 还没做：连续一小时高输出的内存实测、pane spawn 失败时裸露的 errno、README 里的
+  Pro 章节、macOS 实机验证。
