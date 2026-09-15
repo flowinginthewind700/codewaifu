@@ -27,12 +27,14 @@ import {
   configDirCandidates,
   describeDiscovery,
   discoverHerdr,
+  fsListDir,
   fsPathExists,
   normalizeSession,
   sessionDataDir,
   socketCandidates,
   type ExistsFn,
-  type HerdrTarget
+  type HerdrTarget,
+  type ListDirFn
 } from '../src/main/pro/herdr/discovery'
 
 /** Temp roots this file made, so cleanup never touches anything else. */
@@ -69,6 +71,11 @@ async function listen(file: string): Promise<string> {
 function probeFor(...present: string[]): ExistsFn {
   const set = new Set(present)
   return (candidate) => set.has(candidate)
+}
+
+/** A directory read that only knows the directories the test declared. */
+function dirsFor(entries: Record<string, string[]>): ListDirFn {
+  return (dir) => entries[dir] ?? []
 }
 
 const LINUX = { platform: 'linux' } as const
@@ -220,9 +227,16 @@ describe('reason, so the empty state can tell "not installed" from "not running"
   /** Resolve against paths that exist only inside the test. */
   function resolve(
     present: string[],
-    deps: { session?: string; socketPath?: string } = {}
+    deps: { session?: string; socketPath?: string; listDir?: ListDirFn } = {}
   ): HerdrTarget {
-    return discoverHerdr({ ...LINUX, home: '/home/u', env: {}, exists: probeFor(...present), ...deps })
+    return discoverHerdr({
+      ...LINUX,
+      home: '/home/u',
+      env: {},
+      exists: probeFor(...present),
+      listDir: () => [],
+      ...deps
+    })
   }
 
   it('names whichever half is missing, and ok only when both are there', () => {
@@ -284,6 +298,7 @@ describe('resolving a real herdr on a real disk', () => {
       home,
       env: { HOME: home, PATH: bin },
       exists: fsPathExists,
+      listDir: fsListDir,
       session: 'cwfix'
     })
 
@@ -297,7 +312,13 @@ describe('resolving a real herdr on a real disk', () => {
     const { home, bin, binary } = installedHome()
     await listen(path.join(home, '.config', 'herdr', 'sessions', 'cwfix', 'herdr.sock'))
 
-    const target = discoverHerdr({ ...LINUX, home, env: { HOME: home, PATH: bin }, exists: fsPathExists })
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      env: { HOME: home, PATH: bin },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
 
     expect(target.socketPath).toBeNull()
     expect(target.found).toBe(false)
@@ -309,7 +330,13 @@ describe('resolving a real herdr on a real disk', () => {
   it('finds the default session with no session named anywhere', async () => {
     const home = root()
     const sock = await listen(path.join(home, '.config', 'herdr', 'herdr.sock'))
-    const target = discoverHerdr({ ...LINUX, home, env: { HOME: home }, exists: fsPathExists })
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      env: { HOME: home },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
     expect(target.socketPath).toBe(sock)
     expect(target.session).toBe('')
   })
@@ -317,7 +344,13 @@ describe('resolving a real herdr on a real disk', () => {
   it('falls to the debug-build directory when that is where the socket lives', async () => {
     const home = root()
     const sock = await listen(path.join(home, '.config', 'herdr-dev', 'herdr.sock'))
-    const target = discoverHerdr({ ...LINUX, home, env: { HOME: home }, exists: fsPathExists })
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      env: { HOME: home },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
     expect(target.socketPath).toBe(sock)
   })
 
@@ -325,7 +358,13 @@ describe('resolving a real herdr on a real disk', () => {
     const { home, bin } = installedHome()
     fs.rmSync(path.join(bin, 'herdr'))
     fs.mkdirSync(path.join(bin, 'herdr'))
-    const target = discoverHerdr({ ...LINUX, home, env: { HOME: home, PATH: bin }, exists: fsPathExists })
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      env: { HOME: home, PATH: bin },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
     expect(target.triedBinaries[0]).toBe(path.join(bin, 'herdr'))
     expect(target.binaryPath).not.toBe(path.join(bin, 'herdr'))
   })
@@ -333,7 +372,13 @@ describe('resolving a real herdr on a real disk', () => {
   it('reports an empty machine as empty, with the paths it tried for the card', () => {
     const { home, bin } = installedHome()
     fs.rmSync(path.join(bin, 'herdr'))
-    const target = discoverHerdr({ ...LINUX, home, env: { HOME: home, PATH: bin }, exists: fsPathExists })
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      env: { HOME: home, PATH: bin },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
     expect(target.found).toBe(false)
     expect(target.socketPath).toBeNull()
     expect(target.triedSockets).toContain(path.join(home, '.config', 'herdr', 'herdr.sock'))
@@ -349,7 +394,8 @@ describe('the install card text', () => {
     found: false,
     reason,
     triedSockets: [],
-    triedBinaries: []
+    triedBinaries: [],
+    sessionsFound: []
   })
 
   it('says nothing when herdr was found', () => {
@@ -373,5 +419,159 @@ describe('the install card text', () => {
         expect(describeDiscovery(target(reason), lang)).toContain('herdr')
       }
     }
+  })
+})
+
+describe('sessions the bench is not pointed at', () => {
+  const BIN = '/home/u/.local/bin/herdr'
+  const SOCK = '/home/u/.config/herdr/herdr.sock'
+  const CW = '/home/u/.config/herdr/sessions/cwfix/herdr.sock'
+
+  /** Resolve with both verbs faked, the way the reason table above does. */
+  function resolveWith(
+    present: string[],
+    deps: { session?: string; socketPath?: string; listDir?: ListDirFn } = {}
+  ): HerdrTarget {
+    return discoverHerdr({
+      ...LINUX,
+      home: '/home/u',
+      env: {},
+      exists: probeFor(...present),
+      listDir: () => [],
+      ...deps
+    })
+  }
+
+  /** The two `sessions` dirs, one per app-dir spelling, holding `names`. */
+  function sessionsOnDisk(names: string[]): ListDirFn {
+    return dirsFor({
+      '/home/u/.config/herdr/sessions': names,
+      '/home/u/.config/herdr-dev/sessions': names
+    })
+  }
+
+  it('names a session that is running instead of leaving a dead end', () => {
+    const target = resolveWith([BIN, CW], { listDir: sessionsOnDisk(['cwfix']) })
+    expect(target.socketPath).toBeNull()
+    expect(target.sessionsFound).toEqual(['cwfix'])
+    // The binary is there, so this must not read as "install herdr".
+    expect(target.reason).toBe('no-socket')
+  })
+
+  it('puts the session name and the setting to change in the card text', () => {
+    const target = resolveWith([BIN, CW], { listDir: sessionsOnDisk(['cwfix']) })
+    for (const lang of ['zh', 'en'] as const) {
+      const text = describeDiscovery(target, lang)
+      expect(text).toContain('cwfix')
+      expect(text).toContain('pro.herdrSession')
+      expect(text).toContain('HERDR_SESSION=cwfix')
+    }
+  })
+
+  it('keeps the plain sentences when there is nothing to point at', () => {
+    const target = resolveWith([BIN], { listDir: sessionsOnDisk([]) })
+    expect(target.sessionsFound).toEqual([])
+    expect(describeDiscovery(target, 'en')).toBe('herdr is installed but no session is running')
+    expect(describeDiscovery(target, 'zh')).toBe('已安装 herdr，但没有正在运行的会话')
+  })
+
+  it('ignores a session directory whose socket is gone, which is a crash, not a session', () => {
+    const target = resolveWith([BIN], { listDir: sessionsOnDisk(['old']) })
+    expect(target.sessionsFound).toEqual([])
+  })
+
+  it('ignores a directory called default, since that name means no subdir at all', () => {
+    const target = resolveWith([BIN], { listDir: sessionsOnDisk(['default']) })
+    expect(target.sessionsFound).toEqual([])
+  })
+
+  it('dedupes a session both spellings report, and sorts what is left', () => {
+    const target = resolveWith(
+      [
+        BIN,
+        '/home/u/.config/herdr/sessions/cwfix/herdr.sock',
+        '/home/u/.config/herdr-dev/sessions/cwfix/herdr.sock',
+        '/home/u/.config/herdr-dev/sessions/alpha/herdr.sock'
+      ],
+      {
+        listDir: dirsFor({
+          '/home/u/.config/herdr/sessions': ['cwfix'],
+          '/home/u/.config/herdr-dev/sessions': ['cwfix', 'alpha']
+        })
+      }
+    )
+    // Sorted, so the sentence the card builds is the same on every boot.
+    expect(target.sessionsFound).toEqual(['alpha', 'cwfix'])
+  })
+
+  it('lists every live session, and suggests the first', () => {
+    const target = resolveWith(
+      [
+        BIN,
+        '/home/u/.config/herdr/sessions/zeta/herdr.sock',
+        '/home/u/.config/herdr/sessions/cwfix/herdr.sock'
+      ],
+      { listDir: sessionsOnDisk(['zeta', 'cwfix']) }
+    )
+    expect(target.sessionsFound).toEqual(['cwfix', 'zeta'])
+    expect(describeDiscovery(target, 'en')).toContain('cwfix, zeta')
+    expect(describeDiscovery(target, 'en')).toContain('pro.herdrSession to cwfix')
+  })
+
+  it('says nothing about sessions once one resolved, and reads no directory to find out', () => {
+    let reads = 0
+    const target = resolveWith([BIN, SOCK], {
+      listDir: (dir) => {
+        reads += 1
+        return sessionsOnDisk(['cwfix'])(dir)
+      }
+    })
+    expect(target.reason).toBe('ok')
+    expect(target.sessionsFound).toEqual([])
+    expect(reads).toBe(0)
+  })
+
+  it('still resolves the session the user did name, and does not go looking', () => {
+    let reads = 0
+    const target = resolveWith([BIN, CW], {
+      session: 'cwfix',
+      listDir: () => {
+        reads += 1
+        return []
+      }
+    })
+    expect(target.reason).toBe('ok')
+    expect(target.socketPath).toBe(CW)
+    expect(reads).toBe(0)
+  })
+})
+
+describe('the real directory read', () => {
+  it('lists what is there and treats everything else as empty', () => {
+    const dir = root()
+    fs.mkdirSync(path.join(dir, 'sessions', 'cwfix'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'stray.txt'), 'x', 'utf8')
+    expect(fsListDir(path.join(dir, 'sessions'))).toEqual(['cwfix'])
+    expect(fsListDir(path.join(dir, 'nope'))).toEqual([])
+    expect(fsListDir(path.join(dir, 'stray.txt'))).toEqual([])
+    expect(fsListDir('')).toEqual([])
+  })
+
+  it('names a real session on disk, which is the state this machine is in', async () => {
+    const home = root()
+    const sessions = path.join(home, '.config', 'herdr', 'sessions')
+    await listen(path.join(sessions, 'cwfix', 'herdr.sock'))
+
+    const target = discoverHerdr({
+      ...LINUX,
+      home,
+      env: { HOME: home },
+      exists: fsPathExists,
+      listDir: fsListDir
+    })
+
+    expect(target.socketPath).toBeNull()
+    expect(target.sessionsFound).toEqual(['cwfix'])
+    expect(describeDiscovery(target, 'en')).toContain('cwfix')
   })
 })

@@ -243,6 +243,15 @@ const STRINGS = {
   },
   installHint: { zh: '安装：', en: 'Install:' },
   installRun: { zh: '启动会话：', en: 'Start a session:' },
+  /**
+   * A named session is invisible to discovery on purpose - the bench will not
+   * attach itself to terminals nobody pointed it at - so the card has to say
+   * how, or a running herdr looks exactly like a missing one.
+   */
+  installNamed: {
+    zh: '命名会话（或写进配置 pro.herdrSession）：',
+    en: 'Named session (or set pro.herdrSession):'
+  },
   installError: { zh: '原因：{error}', en: 'Why: {error}' },
   installRetry: { zh: '重试', en: 'Retry' },
   proDisabledTitle: { zh: 'Pro 已关闭', en: 'Pro is switched off' },

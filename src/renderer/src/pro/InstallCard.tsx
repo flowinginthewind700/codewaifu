@@ -90,6 +90,10 @@ export function InstallCard({
           <pre className="install-cmd">herdr</pre>
         </div>
         <div className="install-step">
+          <span className="section-label">{t('installNamed')}</span>
+          <pre className="install-cmd">HERDR_SESSION=name herdr</pre>
+        </div>
+        <div className="install-step">
           <span className="section-label">{t('installHint')}</span>
           <pre className="install-cmd">{installCommand()}</pre>
         </div>

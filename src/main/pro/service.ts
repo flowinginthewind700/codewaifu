@@ -90,9 +90,11 @@ import type { HerdrClient, ReadFormat, ReadSource } from './herdr/client'
 import {
   describeDiscovery,
   discoverHerdr,
+  fsListDir,
   fsPathExists,
   type ExistsFn,
   type HerdrTarget,
+  type ListDirFn,
   type ResolveDeps
 } from './herdr/discovery'
 import { HerdrSession, type SessionChange, type SessionStatus } from './herdr/session'
@@ -297,6 +299,8 @@ export interface ProServiceDeps {
    * the filesystem" stays a testable state instead of an invisible one.
    */
   exists?: ExistsFn
+  /** The directory read discovery uses to name sessions it is not pointed at. */
+  listDir?: ListDirFn
   /** Injected into `HerdrSession` and `HerdrClient`; a test fakes the socket. */
   connect?: ConnectFn
   spawn?: SpawnFn
@@ -403,6 +407,7 @@ export class ProService implements CompanionApi {
   private readonly intervals: ServiceIntervals
   private readonly discoverFn: (deps: ResolveDeps) => HerdrTarget
   private readonly existsFn: ExistsFn
+  private readonly listDirFn: ListDirFn
   private readonly connect: ConnectFn | undefined
   private readonly spawn: SpawnFn | undefined
   private readonly env: () => Record<string, string | undefined>
@@ -455,6 +460,7 @@ export class ProService implements CompanionApi {
     this.timers = deps.timers ?? realServiceTimers
     this.intervals = { ...DEFAULT_INTERVALS, ...(deps.intervals ?? {}) }
     this.existsFn = deps.exists ?? fsPathExists
+    this.listDirFn = deps.listDir ?? fsListDir
     this.discoverFn = deps.discover ?? ((input) => discoverHerdr(input))
     this.connect = deps.connect
     this.spawn = deps.spawn
@@ -643,6 +649,7 @@ export class ProService implements CompanionApi {
       target = this.discoverFn({
         env: this.env(),
         exists: this.existsFn,
+        listDir: this.listDirFn,
         binaryPath: cfg.herdrPath,
         socketPath: cfg.socketPath,
         session: cfg.herdrSession
@@ -2148,7 +2155,8 @@ const EMPTY_TARGET: HerdrTarget = {
   found: false,
   reason: 'no-server',
   triedSockets: [],
-  triedBinaries: []
+  triedBinaries: [],
+  sessionsFound: []
 }
 
 const AGENT_START_FAILED = {

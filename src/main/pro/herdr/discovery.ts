@@ -40,9 +40,17 @@ export interface DiscoveryDeps {
 /** The filesystem probe discovery resolves its candidate lists with. */
 export type ExistsFn = (path: string) => boolean
 
-/** What resolving needs: the candidate deps plus a probe that really looks. */
+/** Reads one directory. Injected for the same reason `exists` is. */
+export type ListDirFn = (dir: string) => string[]
+
+/**
+ * What resolving needs: the candidate deps plus the two filesystem verbs. Both
+ * are required, so a caller that forgets one fails to compile instead of
+ * reporting an empty machine.
+ */
 export interface ResolveDeps extends DiscoveryDeps {
   exists: ExistsFn
+  listDir: ListDirFn
 }
 
 /** Both the release and the debug-build directory names, in probe order. */
@@ -181,6 +189,12 @@ export interface HerdrTarget {
   reason: 'ok' | 'no-binary' | 'no-socket' | 'no-server'
   triedSockets: string[]
   triedBinaries: string[]
+  /**
+   * Named sessions whose socket is on disk, looked up only when resolution came
+   * up empty. Never a candidate: the bench will not attach to a session nobody
+   * asked for, but it can say "cwfix is right there, point me at it".
+   */
+  sessionsFound: string[]
 }
 
 /**
@@ -204,6 +218,37 @@ export function fsPathExists(target: string): boolean {
 }
 
 /**
+ * The real directory read. Empty on any failure: a config dir that cannot be
+ * listed and a machine with no herdr on it want the same answer.
+ */
+export function fsListDir(dir: string): string[] {
+  const target = String(dir || '')
+  if (!target) return []
+  try {
+    return fs.readdirSync(target)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Named sessions that look live, meaning their socket file is on disk. Reading
+ * the directory is not attaching to it and never produces a candidate: guessing
+ * a session would put the bench on terminals nobody asked it to drive, which is
+ * worse than an empty state. This list only ever reaches that empty state's text.
+ */
+function liveSessions(deps: ResolveDeps): string[] {
+  const out: string[] = []
+  for (const configDir of configDirCandidates(deps)) {
+    for (const name of deps.listDir(join(configDir, 'sessions'))) {
+      if (!name || name === DEFAULT_SESSION_NAME || out.includes(name)) continue
+      if (deps.exists(join(sessionDataDir(configDir, name), 'herdr.sock'))) out.push(name)
+    }
+  }
+  return out.sort()
+}
+
+/**
  * Resolve both halves of "where is herdr". A missing binary is not fatal for
  * reading state (the socket is enough), and a missing socket is not fatal for
  * spawning bridges (the binary is enough), so each is resolved independently
@@ -217,6 +262,9 @@ export function discoverHerdr(deps: ResolveDeps): HerdrTarget {
   const socketPath = triedSockets.find((candidate) => exists(candidate)) ?? null
   const triedBinaries = binaryCandidates(deps)
   const binaryPath = triedBinaries.find((candidate) => exists(candidate)) ?? null
+  // A readdir only on the way to an empty state. On the happy path it could
+  // only repeat what resolution just found, and discovery runs on a timer.
+  const sessionsFound = socketPath ? [] : liveSessions(deps)
 
   const childEnv: Record<string, string> = {}
   if (socketPath) childEnv[SOCKET_ENV_VAR] = socketPath
@@ -238,7 +286,8 @@ export function discoverHerdr(deps: ResolveDeps): HerdrTarget {
     found: Boolean(socketPath),
     reason,
     triedSockets,
-    triedBinaries
+    triedBinaries,
+    sessionsFound
   }
 }
 
@@ -246,13 +295,23 @@ export function discoverHerdr(deps: ResolveDeps): HerdrTarget {
  * The text the install card shows when nothing was found. Deliberately specific:
  * "herdr is not running" and "herdr is not installed" have different fixes, and
  * a bench that cannot tell them apart sends the user to the wrong one.
+ * A named session sitting on disk is a third case with a third fix, and the one
+ * that reads most like a bug - herdr *is* running, the bench is simply pointed
+ * at the default session - so the sentence carries the setting to change.
  */
 export function describeDiscovery(target: HerdrTarget, lang: 'zh' | 'en'): string {
   if (target.reason === 'ok') return ''
+  const names = target.sessionsFound ?? []
   if (lang === 'zh') {
+    if (names.length) {
+      return `找到了 herdr 命名会话 ${names.join('、')}，但工作台指向的是默认会话：把 pro.herdrSession 设为 ${names[0]}，或用 HERDR_SESSION=${names[0]} 启动 herdr`
+    }
     if (target.reason === 'no-binary') return '找到了 herdr 会话，但没有找到 herdr 可执行文件'
     if (target.reason === 'no-socket') return '已安装 herdr，但没有正在运行的会话'
     return '没有找到 herdr：它托管终端，工作台只是它的控制面板'
+  }
+  if (names.length) {
+    return `found herdr session ${names.join(', ')} but the bench is pointed at the default one: set pro.herdrSession to ${names[0]}, or start herdr with HERDR_SESSION=${names[0]}`
   }
   if (target.reason === 'no-binary') return 'a herdr session is running but the herdr binary was not found'
   if (target.reason === 'no-socket') return 'herdr is installed but no session is running'
