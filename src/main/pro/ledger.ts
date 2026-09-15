@@ -225,8 +225,14 @@ export class LedgerStore {
   append(input: LedgerInput, now = Date.now()): LedgerEntry | null {
     const entry = newEntry(input, now)
     if (!entry) return null
+    // Read the tail *before* the write. `appendEntry` puts the line on disk
+    // first, so a cold-cache read afterwards already contains the entry we
+    // are about to concat, and the cache ends up holding it twice. The
+    // realistic case is a hook that appended while Pro was closed: the
+    // first GUI append would duplicate the newest line, and every digest
+    // built from it would be off by one.
+    const list = this.cache.get(entry.taskId) ?? readEntries(entry.taskId)
     if (!appendEntry(entry)) return null
-    const list = this.cache.get(entry.taskId) ?? this.entries(entry.taskId)
     const next = list.concat([entry])
     this.cache.set(entry.taskId, next)
     this.digests.set(entry.taskId, ledgerDigest(entry.taskId, next))
