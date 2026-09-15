@@ -94,6 +94,30 @@ export interface BubbleMessage {
   agent: string
   kind: string
   at: number
+  /**
+   * Set when the bubble stands for something the Bench can act on. Clicking it
+   * routes back to that task and pane instead of doing nothing, and `actions`
+   * are the verbs the bubble may offer without opening the Bench at all.
+   *
+   * Deliberately typed as plain strings (`kind`, `actions`) rather than
+   * importing `pro.ts`: the widget must not depend on the bench model to draw a
+   * bubble, and a hook bubble with no route stays exactly as cheap as before.
+   */
+  route?: BubbleRoute
+}
+
+/** Where a bubble came from, and what it lets the widget do about it. */
+export interface BubbleRoute {
+  taskId: string
+  paneId: string
+  /** Attention item id, '' for a notice that is not an attention item. */
+  itemId: string
+  /** AttentionKind as a string; '' for info/recovery notices. */
+  kind: string
+  /** AttentionAction names this bubble may offer as buttons. */
+  actions: string[]
+  /** What the button says, e.g. "Open in Bench". Already localized. */
+  benchLabel: string
 }
 
 export type Expression = 'idle' | 'talk' | 'happy' | 'alert' | 'sleepy'

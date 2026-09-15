@@ -10,3 +10,5 @@ coverage/
 .vite/
 *.tsbuildinfo
 .trash/
+thirdparty/
+/tmp/

@@ -1,0 +1,5 @@
+{"id":"capture:events.subscribe","result":{"type":"subscription_started"}}
+{"data":{"agent":"codex","agent_status":"working","pane_id":"wA:p1","workspace_id":"wA"},"event":"pane.agent_status_changed"}
+{"data":{"agent":"codex","agent_status":"blocked","pane_id":"wA:p1","workspace_id":"wA"},"event":"pane.agent_status_changed"}
+{"data":{"agent":"codex","agent_status":"idle","pane_id":"wA:p1","workspace_id":"wA"},"event":"pane.agent_status_changed"}
+{"data":{"agent":"codex","agent_status":"unknown","pane_id":"wA:p1","workspace_id":"wA"},"event":"pane.agent_status_changed"}

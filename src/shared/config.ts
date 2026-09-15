@@ -94,6 +94,39 @@ export interface AppConfig {
    * it can never yank the window out from under a draft. See shared/hotkey.ts.
    */
   hotkey: string
+  /** CodeWaifu Pro: the bench, its herdr runtime and the companion link. */
+  pro: ProConfig
+}
+
+/**
+ * Pro's knobs. Everything here is a preference, never a requirement: with
+ * `enabled` off the companion behaves exactly as it did before Pro existed, and
+ * with no herdr on the machine the bench degrades to an install card.
+ */
+export interface ProConfig {
+  enabled: boolean
+  /** Explicit herdr binary; '' means discover it on PATH and in common spots. */
+  herdrPath: string
+  /** `HERDR_SESSION` equivalent: which named herdr session to talk to. */
+  herdrSession: string
+  /** `HERDR_SOCKET_PATH` equivalent; wins over discovery when non-empty. */
+  socketPath: string
+  /** When an attention item may pull the widget onto the screen. */
+  summon: 'always' | 'blocking' | 'never'
+  /** Speak attention items aloud (the ambient channel's whole point). */
+  speakAttention: boolean
+  /** Show them as bubbles, which is what makes them clickable. */
+  bubbleAttention: boolean
+  /** Mirror the queue length onto the tray icon. */
+  badge: boolean
+  /** How long a `working` pane with no output counts as stalled. */
+  stalledAfterMs: number
+  /** Approve/deny keystrokes per agent: `codex.approve` -> `1`. */
+  keys: Record<string, string>
+  /** Bench window geometry; -1 means centred on first open. */
+  bench: { width: number; height: number; x: number; y: number }
+  /** Open the Bench window on launch instead of waiting to be summoned. */
+  openBenchOnLaunch: boolean
 }
 
 /**
@@ -101,6 +134,25 @@ export interface AppConfig {
  * becoming the default; see `migrateConfig`.
  */
 export const CONFIG_VERSION = 2 as const
+
+/**
+ * Declared before `DEFAULT_CONFIG` so the default config can point at the very
+ * same object instead of repeating fourteen fields that could drift.
+ */
+export const DEFAULT_PRO: ProConfig = {
+  enabled: true,
+  herdrPath: '',
+  herdrSession: '',
+  socketPath: '',
+  summon: 'blocking',
+  speakAttention: true,
+  bubbleAttention: true,
+  badge: true,
+  stalledAfterMs: 300000,
+  keys: {},
+  bench: { width: 1180, height: 760, x: -1, y: -1 },
+  openBenchOnLaunch: false
+}
 
 export const DEFAULT_CONFIG: AppConfig = {
   version: CONFIG_VERSION,
@@ -137,7 +189,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   appearance: { surface: 'glass', clearStage: true },
   window: { x: -1, y: -1 },
   autoInstallHooks: true,
-  hotkey: DEFAULT_HOTKEY
+  hotkey: DEFAULT_HOTKEY,
+  pro: DEFAULT_PRO
 }
 
 /**
@@ -191,6 +244,10 @@ export function parseConfig(input: unknown): AppConfig {
   const rawWindow = (raw.window && typeof raw.window === 'object' ? raw.window : {}) as Record<string, unknown>
   const rawAppearance = (raw.appearance && typeof raw.appearance === 'object'
     ? raw.appearance
+    : {}) as Record<string, unknown>
+  const rawPro = (raw.pro && typeof raw.pro === 'object' ? raw.pro : {}) as Record<string, unknown>
+  const rawBench = (rawPro.bench && typeof rawPro.bench === 'object'
+    ? rawPro.bench
     : {}) as Record<string, unknown>
   const langRaw = str(raw.lang, d.lang)
   const uiLangRaw = str(raw.uiLang, d.uiLang)
@@ -251,7 +308,60 @@ export function parseConfig(input: unknown): AppConfig {
     autoInstallHooks: bool(raw.autoInstallHooks, d.autoInstallHooks),
     // A hand-edited garbage string cannot crash anything: registration simply
     // fails and falls back to the default (see main/window.ts syncHotkey).
-    hotkey: str(raw.hotkey, d.hotkey).trim() || d.hotkey
+    hotkey: str(raw.hotkey, d.hotkey).trim() || d.hotkey,
+    pro: parsePro(rawPro, rawBench)
+  }
+}
+
+const SUMMON_VALUES = ['always', 'blocking', 'never'] as const
+
+/**
+ * Key recipes are the one setting that presses buttons on the user's behalf, so
+ * they are clamped hard: `agent.approve` / `agent.deny` only, a handful of
+ * entries, and each value a short list of herdr key names. Anything else is
+ * dropped, which leaves the built-in recipe in force.
+ */
+function parseKeyOverrides(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  const raw = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  for (const [key, rawKeys] of Object.entries(raw)) {
+    if (Object.keys(out).length >= 40) break
+    const match = /^([a-z0-9_.-]{1,40})\.(approve|deny)$/i.exec(key.trim())
+    if (!match) continue
+    const keys = String(rawKeys ?? '')
+      .split(/[\s,]+/)
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean)
+      .slice(0, 8)
+    if (!keys.length) continue
+    out[`${match[1].toLowerCase()}.${match[2].toLowerCase()}`] = keys.join(' ')
+  }
+  return out
+}
+
+function parsePro(rawPro: Record<string, unknown>, rawBench: Record<string, unknown>): ProConfig {
+  const d = DEFAULT_PRO
+  const summon = String(rawPro.summon ?? d.summon)
+    .trim()
+    .toLowerCase() as (typeof SUMMON_VALUES)[number]
+  return {
+    enabled: bool(rawPro.enabled, d.enabled),
+    herdrPath: str(rawPro.herdrPath, d.herdrPath).trim().slice(0, 400),
+    herdrSession: str(rawPro.herdrSession, d.herdrSession).trim().slice(0, 80),
+    socketPath: str(rawPro.socketPath, d.socketPath).trim().slice(0, 400),
+    summon: SUMMON_VALUES.includes(summon) ? summon : d.summon,
+    speakAttention: bool(rawPro.speakAttention, d.speakAttention),
+    bubbleAttention: bool(rawPro.bubbleAttention, d.bubbleAttention),
+    badge: bool(rawPro.badge, d.badge),
+    stalledAfterMs: Math.trunc(num(rawPro.stalledAfterMs, d.stalledAfterMs, 30000, 7200000)),
+    keys: parseKeyOverrides(rawPro.keys),
+    bench: {
+      width: Math.trunc(num(rawBench.width, d.bench.width, 480, 4000)),
+      height: Math.trunc(num(rawBench.height, d.bench.height, 360, 2400)),
+      x: Math.trunc(num(rawBench.x, d.bench.x, -1, 100000)),
+      y: Math.trunc(num(rawBench.y, d.bench.y, -1, 100000))
+    },
+    openBenchOnLaunch: bool(rawPro.openBenchOnLaunch, d.openBenchOnLaunch)
   }
 }
 
@@ -277,7 +387,8 @@ export const CONFIG_PATCH_KEYS: Array<keyof ConfigPatch> = [
   'autoInstallHooks',
   'port',
   'pinPort',
-  'hotkey'
+  'hotkey',
+  'pro'
 ]
 
 export function applyPatch(config: AppConfig, patch: unknown): AppConfig {

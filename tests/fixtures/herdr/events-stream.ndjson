@@ -1,0 +1,12 @@
+{"id":"capture:events.subscribe","result":{"type":"subscription_started"}}
+{"data":{"type":"workspace_focused","workspace_id":"wA"},"event":"workspace_focused"}
+{"data":{"tab_id":"wA:t1","type":"tab_focused","workspace_id":"wA"},"event":"tab_focused"}
+{"data":{"pane_id":"wA:p1","type":"pane_focused","workspace_id":"wA"},"event":"pane_focused"}
+{"data":{"type":"workspace_focused","workspace_id":"wA"},"event":"workspace_focused"}
+{"data":{"tab_id":"wA:t1","type":"tab_focused","workspace_id":"wA"},"event":"tab_focused"}
+{"data":{"pane":{"agent_status":"unknown","cwd":"/tmp/codewaifu-fixture/a","focused":true,"foreground_cwd":"/tmp/codewaifu-fixture/a","pane_id":"wA:p2","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":23},"tab_id":"wA:t1","terminal_id":"term_65b801915b60510","workspace_id":"wA"},"type":"pane_created"},"event":"pane_created"}
+{"data":{"pane_id":"wA:p2","type":"pane_focused","workspace_id":"wA"},"event":"pane_focused"}
+{"data":{"layout":{"area":{"height":23,"width":54,"x":0,"y":0},"focused_pane_id":"wA:p2","panes":[{"focused":false,"pane_id":"wA:p1","rect":{"height":12,"width":54,"x":0,"y":0}},{"focused":true,"pane_id":"wA:p2","rect":{"height":11,"width":54,"x":0,"y":12}}],"splits":[{"direction":"down","id":"split_0_root","ratio":0.5,"rect":{"height":23,"width":54,"x":0,"y":0}}],"tab_id":"wA:t1","workspace_id":"wA","zoomed":false},"type":"layout_updated"},"event":"layout_updated"}
+{"data":{"pane":{"agent_status":"unknown","cwd":"/tmp/codewaifu-fixture/a","focused":true,"foreground_cwd":"/tmp/codewaifu-fixture/a","pane_id":"wA:p2","revision":1,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":9},"tab_id":"wA:t1","terminal_id":"term_65b801915b60510","terminal_title":"wanlian@pico:/tmp/codewaifu-fixture/a","terminal_title_stripped":"wanlian@pico:/tmp/codewaifu-fixture/a","workspace_id":"wA"},"type":"pane_updated"},"event":"pane_updated"}
+{"data":{"pane_id":"wA:p2","type":"pane_closed","workspace_id":"wA"},"event":"pane_closed"}
+{"data":{"layout":{"area":{"height":23,"width":54,"x":0,"y":0},"focused_pane_id":"wA:p1","panes":[{"focused":true,"pane_id":"wA:p1","rect":{"height":23,"width":54,"x":0,"y":0}}],"splits":[],"tab_id":"wA:t1","workspace_id":"wA","zoomed":false},"type":"layout_updated"},"event":"layout_updated"}

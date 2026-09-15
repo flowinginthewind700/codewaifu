@@ -69,6 +69,8 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "koffi": "^3.2.1",
     "sherpa-onnx-node": "^1.13.8"
   }
