@@ -43,6 +43,7 @@ import { clipboardAction, searchAction } from '@shared/termKeys'
 import { platform, proApi } from './api'
 import { bridgeErrorText, fill, type Translate } from './i18n'
 import { bridgeOf, registerPane } from './paneBus'
+import { monoStack } from './terminalFont'
 import type { Tone } from './toast'
 
 /** The bench's terminal palette: the shared accents, mapped onto ANSI. */
@@ -326,7 +327,11 @@ export function Pane({
     if (!host || released) return
 
     const term = new Terminal({
-      fontFamily: 'var(--mono)',
+      // A literal family list, never `var(--mono)`: see terminalFont.ts. The
+      // declared value is read here because only the renderer has a document.
+      fontFamily: monoStack(
+        getComputedStyle(document.documentElement).getPropertyValue('--mono')
+      ),
       fontSize: 12.5,
       lineHeight: 1.22,
       cursorBlink: true,
