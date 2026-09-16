@@ -128,7 +128,13 @@ export class Triage {
 
   private readonly rows = new Map<string, Row>()
   private readonly blockedSince = new Map<string, number>()
-  private readonly revisions = new Map<string, { revision: number; sinceAt: number }>()
+  /**
+   * Per-pane proof of life: the last activity signature we saw and when we saw
+   * it. A stall is "this signature has not changed for `stalledAfterMs` while
+   * the pane is still `working`", so the signature has to move whenever the
+   * agent is genuinely doing something. See `progressSignature`.
+   */
+  private readonly progress = new Map<string, { sig: string; sinceAt: number }>()
   private readonly listeners = new Set<(event: TriageEvent) => void>()
   /** Needs the human already dealt with, by id: do not resurrect these. */
   private readonly suppressed = new Map<string, { fingerprint: string; until: number }>()
@@ -289,17 +295,25 @@ export class Triage {
       return this.raise('review', 'herdr', hint, { title: 'Finished, awaiting review', detail: '' }, at)
     }
     if (status === 'working' || status === 'idle') {
-      // Not `stalled`: a stalled pane is by definition still `working`. Only new
-      // output ends a stall, which detectStalls sees as a revision change.
+      // Not `stalled`: a stalled pane is by definition still `working`. Only a
+      // fresh activity signature ends a stall, which detectStalls watches for.
       this.clearKinds(hint, ['permission', 'question'], `agent is ${status}`)
     }
     return null
   }
 
   /**
-   * A `working` pane whose revision has not moved for `stalledAfterMs` is either
-   * running something very long or hung. From outside they look identical, which
-   * is why `stalled` ranks last and offers no destructive verb.
+   * A `working` pane whose activity signature has not moved for `stalledAfterMs`
+   * is either running something very long or hung. From outside they look
+   * identical, which is why `stalled` ranks last and offers no destructive verb.
+   *
+   * The signature is *not* `revision`. A live probe of a genuinely working codex
+   * pane showed `revision` frozen for the entire run while `terminal_title`
+   * repainted about once a second - the title is the spinner Ghostty draws, and
+   * it is the only field in the snapshot that reliably beats while an agent
+   * works. Keying the stall off `revision` therefore declared busy agents
+   * "stalled" minutes into real output; keying it off the signature below waits
+   * for actual quiet.
    */
   private detectStalls(snapshot: Snapshot | null, at: number): void {
     if (!snapshot) return
@@ -307,11 +321,12 @@ export class Triage {
     for (const pane of snapshot.panes) {
       seen.add(pane.paneId)
       const hint = hintOfPane(pane)
-      const prior = this.revisions.get(pane.paneId)
-      if (!prior || prior.revision !== pane.revision) {
-        // New output is the only thing that ends a stall.
+      const sig = progressSignature(pane)
+      const prior = this.progress.get(pane.paneId)
+      if (!prior || prior.sig !== sig) {
+        // A moved signature is the only thing that ends a stall.
         if (prior) this.clearKinds(hint, ['stalled'], 'new output')
-        this.revisions.set(pane.paneId, { revision: pane.revision, sinceAt: at })
+        this.progress.set(pane.paneId, { sig, sinceAt: at })
         continue
       }
       if (pane.agentStatus !== 'working') continue
@@ -328,9 +343,24 @@ export class Triage {
         prior.sinceAt
       )
     }
-    for (const paneId of [...this.revisions.keys()]) {
-      if (!seen.has(paneId)) this.revisions.delete(paneId)
+    for (const paneId of [...this.progress.keys()]) {
+      if (!seen.has(paneId)) this.progress.delete(paneId)
     }
+  }
+
+  /**
+   * Out-of-band proof of life for one pane: terminal frames arrived, or the
+   * human just typed into it. Either means the pane is not quiet, so the stall
+   * clock restarts and any `stalled` we raised clears immediately - without
+   * waiting for the next snapshot to notice the title move.
+   *
+   * The signature is bumped to a value `progressSignature` will not reproduce on
+   * its own, so the next snapshot always reads as "changed" and re-arms cleanly.
+   */
+  noteActivity(paneId: string, at = this.now()): void {
+    if (!paneId) return
+    this.progress.set(paneId, { sig: `activity:${at}`, sinceAt: at })
+    this.clearKinds({ ...emptyHint(), paneId }, ['stalled'], 'activity')
   }
 
   /* ---------------------------------------------------------------- *
@@ -690,7 +720,7 @@ export class Triage {
   clear(): void {
     for (const id of [...this.rows.keys()]) this.drop(id, 'cleared')
     this.blockedSince.clear()
-    this.revisions.clear()
+    this.progress.clear()
     this.suppressed.clear()
   }
 
@@ -791,6 +821,26 @@ function hintOfPane(pane: PaneInfo): TaskHint {
     cwd: pane.foregroundCwd || pane.cwd,
     sessionId: pane.agentSession?.kind === 'id' ? pane.agentSession.value : ''
   }
+}
+
+/**
+ * The fields that beat while an agent works, joined into one string.
+ *
+ * `revision` is here because it is the documented output counter and some panes
+ * do move it, but it is deliberately *not* alone: a live working codex pane held
+ * its revision constant for an entire run. `terminal_title` is the field that
+ * actually repaints during work - it carries the spinner and status line the
+ * agent draws, which is the same byte stream Ghostty shows as "still going".
+ * `title` and the scroll offset round it out, so any of the four moving counts
+ * as progress and only genuine quiet across all of them reads as a stall.
+ */
+function progressSignature(pane: PaneInfo): string {
+  return [
+    pane.revision,
+    pane.terminalTitle,
+    pane.title,
+    pane.scroll?.offsetFromBottom ?? 0
+  ].join('|')
 }
 
 /** `taskId:kind:origin` -> origin, so a reclassified item keeps its lineage. */

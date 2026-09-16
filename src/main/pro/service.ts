@@ -1714,6 +1714,12 @@ export class ProService implements CompanionApi {
    * is how a pane ends up with the same sentence typed into it twice.
    */
   private async sendToPane(client: HerdrClientLike, paneId: string, text: string): Promise<boolean> {
+    // A human just typed into this pane, so it is provably not stalled. Reset
+    // the clock here rather than relying on a `prompt` hook event: the user can
+    // (and does) run with hook events off, and without this the stall timer
+    // keeps running across the very keystroke that woke the agent up - which is
+    // how "I just typed and 5s later it said stuck" happens.
+    this.triage.noteActivity(paneId)
     const agent = this.agentForPane(paneId)
     if (agent) {
       try {
@@ -2410,7 +2416,9 @@ export class ProService implements CompanionApi {
       case 'input': {
         const bridge = this.bridges.get(request.paneId)
         if (!bridge) return this.noBridge(request.paneId)
-        return bridge.input(request.text)
+        const ok = bridge.input(request.text)
+        if (ok) this.triage.noteActivity(request.paneId)
+        return ok
           ? okResult(null, '', 'sent')
           : failResult('not-live', 'the terminal bridge is not live')
       }
@@ -2446,12 +2454,14 @@ export class ProService implements CompanionApi {
         const sent = await client.sendText(request.paneId, request.text).catch(() => false)
         if (!sent) return this.sendFailed(request.paneId, 'text')
         if (request.enter) await client.sendKeys(request.paneId, ['enter']).catch(() => false)
+        this.triage.noteActivity(request.paneId)
         return okResult({ paneId: request.paneId }, '', 'sent')
       }
       case 'keys': {
         const client = this.client()
         if (!client) return this.offline()
         const sent = await client.sendKeys(request.paneId, request.keys).catch(() => false)
+        if (sent) this.triage.noteActivity(request.paneId)
         return sent
           ? okResult({ paneId: request.paneId, keys: request.keys }, '', 'sent')
           : this.sendFailed(request.paneId, 'keystrokes')
@@ -2592,6 +2602,10 @@ export class ProService implements CompanionApi {
     for (const bridge of this.bridges.values()) {
       const taken = bridge.take()
       if (!taken.length) continue
+      // Frames are the strongest proof of life we have: the pane is repainting
+      // right now, so it cannot be stalled. Tell triage before any cap below
+      // short-circuits, because "too many frames" is the busiest a pane gets.
+      this.triage.noteActivity(bridge.paneId)
       if (taken.length > MAX_FRAMES_PER_PANE) {
         bridge.requestResync()
         continue
