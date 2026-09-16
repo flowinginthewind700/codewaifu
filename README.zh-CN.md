@@ -242,8 +242,10 @@ hook 都重新读它。这正是端口策略敢随便搬家而不改任何 agent
 ### 在终端里开工作台
 
 同一个二进制也能驱动 Pro,所以 shell alias、cron 任务和 agent 都能不开窗口读到
-工作台。Linux 上安装器会把 `codewaifu` 放进 `~/.local/bin`;其他平台用打包好的
-二进制,在下面每条命令前加 `--cli`。
+工作台。`codewaifu` 在 Linux 上已经在 PATH 里(安装器写 `~/.local/bin/codewaifu`),
+macOS 上由应用自己在每次启动时写同一个启动器到 `~/.local/bin`,应用搬家了就重新
+指过去 —— 不是我们写的文件一律不碰,所以 `npm i -g` 的 wrapper 或你自己的 alias
+都还在。Windows 用打包好的二进制,在下面每条命令前加 `--cli`。
 
 ```bash
 codewaifu pro                        # 动词表
@@ -258,6 +260,14 @@ codewaifu pro log <taskId> --digest  # 目标 / 计划 / 已做的决定 / 下�
 codewaifu pro park <taskId>          # 不再统计它;它的 pane 继续跑
 codewaifu pro rm <taskId>            # 只删这一行;加 --close 连它下面的终端一起关
 codewaifu pro purge                  # 关掉之前移除时留下来的那些终端
+codewaifu pro term                   # 就在这里开一个本地 shell
+
+codewaifu pro ssh                    # 名册:已 pin 的、~/.ssh/config 的、herdr 报的
+codewaifu pro ssh ls --hidden        # 被收起来的行,key 在前(key 就是 restore 的参数)
+codewaifu pro ssh <target>           # 开一个 pane 直接拨号
+codewaifu pro ssh add|edit|rm|restore <target>
+codewaifu pro ssh test <target>      # 免密能不能进:一句话回答,不是退出码
+codewaifu pro ssh setup <target>     # 把它变成免密(--plan 只打印不敲)
 ```
 
 每个动词都支持 `--json`。输出是 ASCII,按终端宽度收在 60-160 列之间;id 一律完整
@@ -272,7 +282,8 @@ ctrl-c 的退出码是 0,所以 shell 循环能分清「是我停的」和「它
 2 参数不对、3 工作台或 herdr 没在跑、4 没有这个任务或条目、5 听懂了但拒绝、
 6 应用不认我们的 token。
 
-有两件事它永远不做。没有 `send-keys`:CLI 回答的是待办队列,不去驱动终端。
+有两件事它永远不做。它不往 agent 的终端里敲键:ssh 那几个动词开的是自己的
+pane,敲的也只是它刚给你看过的那一行;回答 agent 一律走待办队列。
 `pro recovery` 也是只读的——执行一份恢复计划会建工作区、拉起 agent、往 pane 里
 打一段重启提示,而账本要记下是谁下的手,所以计划由 Bench 窗口执行,终端负责报告。
 

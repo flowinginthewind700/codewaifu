@@ -1,11 +1,13 @@
 import { app, dialog, globalShortcut, Notification, shell } from 'electron'
 import crypto from 'node:crypto'
+import os from 'node:os'
 import type { EventPlan, Lang } from '../shared/protocol'
 import type { BubbleMessage } from '../shared/ui'
 import { systemLangFromLocales } from '../shared/lang'
 import { LIVE2D_KEEP_URLS } from '../shared/live2dCatalog'
 import { prewarmAssets, registerAssetProtocol, registerAssetScheme } from './assets'
 import { cliArgsFrom, runCli } from './cli'
+import { binDirOnPath, ensureCliLauncher, pathHint } from './cliLauncher'
 import { Core } from './core'
 import { isLinux, isMac } from './env'
 import { IPC, registerIpc, send } from './ipc'
@@ -330,6 +332,43 @@ function proHost(instance: Core): ProHost {
   }
 }
 
+/**
+ * Put `codewaifu` on PATH, and keep it pointing at the app that is running.
+ *
+ * Called on every boot because the thing that changes is not our code but the
+ * app's address: a reinstall into ~/Applications, or a dmg mounted from
+ * somewhere else, leaves a launcher that dials a binary which is no longer
+ * there. Idempotent, ours-only, and never fatal - a missing launcher costs a
+ * convenience, not a companion.
+ */
+function installCliLauncher(): void {
+  const outcome = ensureCliLauncher({
+    packaged: app.isPackaged,
+    platform: process.platform,
+    appBinary: process.execPath,
+    home: os.homedir()
+  })
+  switch (outcome.action) {
+    case 'written':
+      log('info', 'cli launcher written', {
+        path: outcome.path,
+        // The GUI process inherits launchd's PATH, so this reads the shell's own
+        // idea of PATH back rather than guessing from process.env.
+        onPath: binDirOnPath(outcome.path, process.env.PATH),
+        hint: pathHint(outcome.path)
+      })
+      break
+    case 'skipped-foreign':
+      log('warn', 'cli launcher is not ours; left alone', { path: outcome.path })
+      break
+    case 'failed':
+      log('warn', 'cli launcher write failed', { path: outcome.path, error: outcome.error })
+      break
+    default:
+      break
+  }
+}
+
 async function boot(): Promise<void> {
   if (isMac) {
     // Background accessory: no Dock icon, the tray is the chrome.
@@ -351,6 +390,10 @@ async function boot(): Promise<void> {
 
   // Warm the repaired PATH before anything shells out to codex/claude/curl.
   void effectivePath().catch(() => undefined)
+
+  // The short path to the bench (`codewaifu pro ssh box`) only exists if
+  // something put `codewaifu` on PATH; a dmg install puts nothing there.
+  installCliLauncher()
 
   const relay = await instance.start()
   log('info', 'relay ready', { port: relay.port, reason: relay.reason, boot: relay.boot })

@@ -278,9 +278,12 @@ Every command accepts `--json` for scripting.
 ### The bench from a terminal
 
 The same binary drives Pro, so a shell alias, a cron job and an agent can read
-the bench without a window open. On Linux the installer puts `codewaifu` in
-`~/.local/bin`; on the other platforms, use the packaged binary with `--cli` in
-front of everything below.
+the bench without a window open. `codewaifu` is already on your PATH on Linux
+(the installer writes `~/.local/bin/codewaifu`) and on macOS, where the app
+writes the same launcher into `~/.local/bin` at every start and repoints it if
+the bundle moved - a file it did not write is left alone, so an `npm i -g`
+wrapper or your own alias survives. On Windows, use the packaged binary with
+`--cli` in front of everything below.
 
 ```bash
 codewaifu pro                        # the verb table
@@ -295,6 +298,14 @@ codewaifu pro log <taskId> --digest  # goal / plan / decisions / next
 codewaifu pro park <taskId>          # stop counting it; its panes keep running
 codewaifu pro rm <taskId>            # drop the row; add --close to take the shell with it
 codewaifu pro purge                  # close the shells earlier removals left running
+codewaifu pro term                   # a local shell, right here
+
+codewaifu pro ssh                    # the roster: pinned, ~/.ssh/config, herdr's
+codewaifu pro ssh ls --hidden        # dismissed rows, key first (the key restores)
+codewaifu pro ssh <target>           # open a pane and dial it
+codewaifu pro ssh add|edit|rm|restore <target>
+codewaifu pro ssh test <target>      # passwordless, in words, not an exit code
+codewaifu pro ssh setup <target>     # make it passwordless (--plan types nothing)
 ```
 
 Every verb takes `--json`. The text is ASCII and clamped to the width of the
@@ -312,8 +323,9 @@ me" from "nobody home": 0 ok, 2 bad arguments, 3 the bench or herdr is not
 running, 4 no such task or item, 5 understood and refused, 6 the app did not
 accept our token.
 
-Two things it will never do. There is no `send-keys`: the CLI answers the
-attention queue, it does not drive a terminal. And `pro recovery` is read-only -
+Two things it will never do. It never types into an agent's terminal: the ssh
+verbs open a pane of their own and type the one line they just showed you, while
+answering an agent goes through the attention queue. And `pro recovery` is read-only -
 applying a plan creates workspaces, launches an agent and types a re-prompt into
 a pane, and the ledger records who asked, so the Bench window applies plans and
 the terminal reports them.
