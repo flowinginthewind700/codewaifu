@@ -48,28 +48,33 @@ import type { Tone } from './toast'
 
 /** The bench's terminal palette: the shared accents, mapped onto ANSI. */
 const THEME = {
-  background: '#0f0d14',
-  foreground: '#e6e0ef',
-  cursor: '#ff7d96',
-  cursorAccent: '#14121a',
-  selectionBackground: 'rgba(255,125,150,0.3)',
+  /* `--bench-term` and RobotWorld's code block: one background for every
+     terminal in the product, so a pane never reads as a different app than
+     the bench around it. The ANSI slots come from the same syntax tokens the
+     site highlights with - comment grey, string amber, keyword violet, call
+     cyan - which is why output reads like code instead of like a rainbow. */
+  background: '#0d1117',
+  foreground: '#d1d5db',
+  cursor: '#00da5a',
+  cursorAccent: '#0d1117',
+  selectionBackground: 'rgba(0,218,90,0.26)',
   selectionInactiveBackground: 'rgba(255,255,255,0.12)',
-  black: '#241f2e',
-  red: '#ff6b81',
-  green: '#59d7b3',
-  yellow: '#f5b45c',
-  blue: '#82aaff',
-  magenta: '#ff7d96',
-  cyan: '#7fd4e8',
-  white: '#d9d2e3',
-  brightBlack: '#5b5268',
-  brightRed: '#ff8b9c',
-  brightGreen: '#7ce3c5',
-  brightYellow: '#f8c781',
-  brightBlue: '#9dbcff',
-  brightMagenta: '#ff9cae',
-  brightCyan: '#a0e2f0',
-  brightWhite: '#f4eff8'
+  black: '#2a2b2e',
+  red: '#f87171',
+  green: '#3ddc97',
+  yellow: '#fbbf24',
+  blue: '#6aa9ff',
+  magenta: '#c4b5fd',
+  cyan: '#5eead4',
+  white: '#d1d5db',
+  brightBlack: '#8b98a9',
+  brightRed: '#ff9d94',
+  brightGreen: '#4dff99',
+  brightYellow: '#fcd34d',
+  brightBlue: '#9cc7ff',
+  brightMagenta: '#d6c9ff',
+  brightCyan: '#7ff2dd',
+  brightWhite: '#e2e8f0'
 }
 
 /** base64 -> bytes. `atob` is Latin-1, so every char becomes exactly one byte. */
@@ -91,12 +96,12 @@ const BELL_MS = 2500
  * "no matches" is indistinguishable from "search is broken".
  */
 const SEARCH_DECORATIONS = {
-  matchBackground: '#4a3b18',
-  matchBorder: '#f5b45c',
-  matchOverviewRuler: '#f5b45c',
-  activeMatchBackground: '#6d2436',
-  activeMatchBorder: '#ff7d96',
-  activeMatchColorOverviewRuler: '#ff7d96'
+  matchBackground: '#4a3a12',
+  matchBorder: '#fbbf24',
+  matchOverviewRuler: '#fbbf24',
+  activeMatchBackground: '#0f3d24',
+  activeMatchBorder: '#00da5a',
+  activeMatchColorOverviewRuler: '#00da5a'
 }
 
 /**

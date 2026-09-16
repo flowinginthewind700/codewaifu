@@ -50,13 +50,13 @@ textarea {
 
 /* Keyboard access matters even in a 320px widget: one ring shape everywhere. */
 :focus-visible {
-  outline: 2px solid var(--pink);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
 }
 
 ::selection {
-  background: rgba(255, 125, 150, 0.32);
+  background: rgba(var(--accent-rgb), 0.32);
 }
 
 /* ---- window chrome ---------------------------------------------------- */
@@ -129,7 +129,7 @@ a {
    (`clearStage`), not to the surface you read a conversation on. */
 .app[data-view='panel'] .card,
 .app[data-view='chat'] .card {
-  background-color: rgba(19, 17, 25, 0.96);
+  background-color: rgba(20, 21, 24, 0.96);
 }
 
 /* The `solid` surface has to be restated here: `.app[data-view] .card` is one
@@ -138,7 +138,7 @@ a {
    is exactly the "I cannot read anything" report. */
 .app[data-view='panel'] .card[data-surface='solid'],
 .app[data-view='chat'] .card[data-surface='solid'] {
-  background-color: #17141f;
+  background-color: #17181a;
   background-image: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -147,7 +147,7 @@ a {
 /* Opaque surface for users who would rather not see the desktop through the
    widget (busy wallpapers, screen sharing, low-vision contrast). */
 .card[data-surface='solid'] {
-  background-color: #1a1722;
+  background-color: #1c1d1f;
   background-image: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -269,8 +269,8 @@ a {
 }
 
 .stage-tools .icon-btn[data-on='1'] {
-  background: var(--pink-soft);
-  color: var(--pink);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .stage[data-compact='1'] .stage-tools {
@@ -470,8 +470,8 @@ a {
   width: 15px;
   height: 15px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 125, 150, 0.22);
-  border-top-color: var(--pink);
+  border: 2px solid rgba(var(--accent-rgb), 0.22);
+  border-top-color: var(--accent);
   animation: spin 0.9s linear infinite;
 }
 
@@ -493,7 +493,7 @@ a {
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--pink), #ffb1c1);
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
   transition: width var(--dur-1) linear;
 }
 
@@ -529,9 +529,9 @@ a {
   margin-top: 2px;
   padding: 4px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 125, 150, 0.4);
-  background: var(--pink-soft);
-  color: #ffd3dc;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -539,7 +539,7 @@ a {
 }
 
 .l2d-retry:hover {
-  background: rgba(255, 125, 150, 0.24);
+  background: rgba(var(--accent-rgb), 0.24);
 }
 
 .l2d-retry:active {
@@ -554,7 +554,7 @@ a {
   right: 2px;
   max-width: 196px;
   padding: 7px 10px 8px;
-  background: linear-gradient(180deg, rgba(30, 27, 39, 0.96), rgba(17, 15, 23, 0.96));
+  background: linear-gradient(180deg, rgba(30, 32, 36, 0.96), rgba(17, 18, 20, 0.96));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   color: var(--text);
@@ -577,18 +577,18 @@ a {
   left: 26px;
   width: 8px;
   height: 8px;
-  background: rgba(17, 15, 23, 0.96);
+  background: rgba(17, 18, 20, 0.96);
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   transform: rotate(45deg);
 }
 
 .bubble[data-tone='alert'] {
-  border-color: rgba(245, 180, 92, 0.4);
+  border-color: rgba(var(--warn-rgb), 0.4);
 }
 
 .bubble[data-tone='greeting'] {
-  border-color: rgba(255, 125, 150, 0.34);
+  border-color: rgba(var(--accent-rgb), 0.34);
 }
 
 .bubble-meta {
@@ -628,7 +628,7 @@ button.bubble-text {
 }
 
 button.bubble-text:hover {
-  color: var(--pink);
+  color: var(--accent);
 }
 
 .bubble-actions {
@@ -661,13 +661,13 @@ button.bubble-text:hover {
 
 /* The one chip that costs a window switch, so it is the one that looks like her. */
 .bubble-chip.primary {
-  border-color: rgba(255, 125, 150, 0.42);
-  background: var(--pink-soft);
-  color: var(--pink);
+  border-color: rgba(var(--accent-rgb), 0.42);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .bubble-chip.primary:hover {
-  background: rgba(255, 125, 150, 0.22);
+  background: rgba(var(--accent-rgb), 0.22);
 }
 
 /* ---- bubble answer composer (F7) --------------------------------------
@@ -723,7 +723,7 @@ input.bubble-input::placeholder {
   margin: 4px 0 0;
   font-size: 9.5px;
   line-height: 1.4;
-  color: var(--amber);
+  color: var(--warn);
 }
 
 /* ---- media bar -------------------------------------------------------- */
@@ -805,21 +805,21 @@ input.bubble-input::placeholder {
 }
 
 .chip[data-state='ok'] {
-  color: var(--mint);
-  border-color: rgba(89, 215, 179, 0.28);
-  background: rgba(89, 215, 179, 0.08);
+  color: var(--ok);
+  border-color: rgba(var(--ok-rgb), 0.28);
+  background: rgba(var(--ok-rgb), 0.08);
 }
 
 .chip[data-state='warn'] {
-  color: var(--amber);
-  border-color: rgba(245, 180, 92, 0.3);
-  background: rgba(245, 180, 92, 0.08);
+  color: var(--warn);
+  border-color: rgba(var(--warn-rgb), 0.3);
+  background: rgba(var(--warn-rgb), 0.08);
 }
 
 .chip[data-state='live'] {
-  color: var(--pink);
-  border-color: rgba(255, 125, 150, 0.3);
-  background: var(--pink-soft);
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.3);
+  background: var(--accent-soft);
 }
 
 .dot {
@@ -870,14 +870,14 @@ input.bubble-input::placeholder {
 .icon-btn.primary {
   width: 32px;
   height: 32px;
-  background: linear-gradient(180deg, #ff8ea4, var(--pink));
-  color: #23141c;
-  box-shadow: 0 2px 10px rgba(255, 125, 150, 0.3), var(--highlight);
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+  color: #06170d;
+  box-shadow: 0 2px 10px rgba(var(--accent-rgb), 0.3), var(--highlight);
 }
 
 .icon-btn.primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ffa2b4, #ff8ea4);
-  color: #23141c;
+  background: linear-gradient(180deg, #86ffc4, var(--accent-bright));
+  color: #06170d;
 }
 
 .icon-btn.ghost {
@@ -923,26 +923,26 @@ input.bubble-input::placeholder {
 }
 
 .text-btn.danger:hover:not(:disabled) {
-  border-color: rgba(255, 107, 129, 0.5);
+  border-color: rgba(var(--danger-rgb), 0.5);
   color: var(--danger);
-  background: rgba(255, 107, 129, 0.08);
+  background: rgba(var(--danger-rgb), 0.08);
 }
 
 /* Hotkey recorder: armed state reads as "listening", not as a pressed button. */
 .text-btn.recording {
-  border-color: var(--pink);
-  color: var(--pink);
-  background: rgba(255, 125, 150, 0.1);
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
   animation: hotkey-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes hotkey-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(255, 125, 150, 0.35);
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.35);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(255, 125, 150, 0);
+    box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0);
   }
 }
 
@@ -1118,7 +1118,7 @@ input.bubble-input::placeholder {
 }
 
 .hint.warn {
-  color: var(--amber);
+  color: var(--warn);
 }
 
 .hint.danger {
@@ -1155,13 +1155,13 @@ input.bubble-input::placeholder {
 }
 
 .switch[aria-checked='true'] {
-  background: rgba(89, 215, 179, 0.26);
-  border-color: rgba(89, 215, 179, 0.5);
+  background: rgba(var(--ok-rgb), 0.26);
+  border-color: rgba(var(--ok-rgb), 0.5);
 }
 
 .switch[aria-checked='true']::after {
   transform: translateX(15px);
-  background: var(--mint);
+  background: var(--ok);
 }
 
 input[type='range'] {
@@ -1188,7 +1188,7 @@ input[type='range']::-webkit-slider-thumb {
   height: 12px;
   margin-top: -4px;
   border-radius: 50%;
-  background: var(--pink);
+  background: var(--accent);
   border: 0;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
   transition: transform var(--dur-1) var(--ease-spring);
@@ -1220,8 +1220,8 @@ input[type='text']:focus,
 input[type='number']:focus,
 select:focus {
   outline: none;
-  border-color: rgba(255, 125, 150, 0.6);
-  box-shadow: var(--highlight), 0 0 0 3px rgba(255, 125, 150, 0.12);
+  border-color: rgba(var(--accent-rgb), 0.6);
+  box-shadow: var(--highlight), 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 input[type='number'] {
@@ -1270,8 +1270,8 @@ input[type='number'] {
 }
 
 .item[aria-current='true'] {
-  border-color: rgba(255, 125, 150, 0.5);
-  background: var(--pink-soft);
+  border-color: rgba(var(--accent-rgb), 0.5);
+  background: var(--accent-soft);
 }
 
 .item-main {
@@ -1331,7 +1331,7 @@ input[type='number'] {
 }
 
 .tag.codex {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 .tag.claude {
@@ -1404,8 +1404,8 @@ input.filter-input {
 
 input.filter-input:focus {
   outline: none;
-  border-color: rgba(255, 125, 150, 0.6);
-  box-shadow: var(--highlight), 0 0 0 3px rgba(255, 125, 150, 0.12);
+  border-color: rgba(var(--accent-rgb), 0.6);
+  box-shadow: var(--highlight), 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 .filterbar .icon-btn.ghost {
@@ -1436,13 +1436,13 @@ input.filter-input:focus {
 
 .filter-chip:hover:not(:disabled) {
   color: var(--text);
-  border-color: rgba(89, 215, 179, 0.45);
+  border-color: rgba(var(--ok-rgb), 0.45);
 }
 
 .filter-chip[aria-pressed='true'] {
-  color: var(--mint);
-  border-color: rgba(89, 215, 179, 0.55);
-  background: rgba(89, 215, 179, 0.14);
+  color: var(--ok);
+  border-color: rgba(var(--ok-rgb), 0.55);
+  background: rgba(var(--ok-rgb), 0.14);
 }
 
 .filter-chip:disabled {
@@ -1495,8 +1495,8 @@ input.filter-input:focus {
 }
 
 .thread-rail[data-live] {
-  background: var(--mint);
-  box-shadow: 0 0 7px rgba(89, 215, 179, 0.55);
+  background: var(--ok);
+  box-shadow: 0 0 7px rgba(var(--ok-rgb), 0.55);
 }
 
 .item-caret {
@@ -1547,7 +1547,7 @@ input.filter-input:focus {
 .mini-btn:hover {
   color: var(--text);
   background: var(--surface-2);
-  border-color: rgba(255, 125, 150, 0.5);
+  border-color: rgba(var(--accent-rgb), 0.5);
 }
 
 /* ---- steer composer --------------------------------------------------- */
@@ -1579,8 +1579,8 @@ input.filter-input:focus {
 
 .composer textarea:focus {
   outline: none;
-  border-color: rgba(255, 125, 150, 0.6);
-  box-shadow: var(--highlight), 0 0 0 3px rgba(255, 125, 150, 0.12);
+  border-color: rgba(var(--accent-rgb), 0.6);
+  box-shadow: var(--highlight), 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 .composer textarea:disabled {
@@ -1658,8 +1658,8 @@ input.filter-input:focus {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--mint);
-  box-shadow: 0 0 7px rgba(89, 215, 179, 0.65);
+  background: var(--ok);
+  box-shadow: 0 0 7px rgba(var(--ok-rgb), 0.65);
   animation: pulse 2.2s ease-in-out infinite;
 }
 
@@ -1720,8 +1720,8 @@ input.filter-input:focus {
 
 .load-older:hover {
   color: var(--text);
-  background: var(--pink-soft);
-  border-color: rgba(255, 125, 150, 0.5);
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.5);
 }
 
 .chat-divider {
@@ -1774,8 +1774,8 @@ input.filter-input:focus {
 }
 
 .msg.user .msg-bubble {
-  background: linear-gradient(180deg, rgba(255, 125, 150, 0.2), rgba(255, 125, 150, 0.11));
-  border-color: rgba(255, 125, 150, 0.3);
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.2), rgba(var(--accent-rgb), 0.11));
+  border-color: rgba(var(--accent-rgb), 0.3);
   border-bottom-right-radius: 4px;
 }
 
@@ -1825,7 +1825,7 @@ input.filter-input:focus {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--pink);
+  color: var(--accent);
   font-size: 10px;
   cursor: pointer;
 }
@@ -1837,7 +1837,7 @@ input.filter-input:focus {
 .msg-truncated {
   display: inline-block;
   margin-top: 5px;
-  color: var(--amber);
+  color: var(--warn);
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
@@ -1906,7 +1906,7 @@ input.filter-input:focus {
 }
 
 .msg-fold > svg.rot {
-  color: var(--pink);
+  color: var(--accent);
   transform: rotate(90deg);
   transition: transform var(--dur-2) var(--ease-spring);
 }
@@ -1996,8 +1996,8 @@ input.filter-input:focus {
 }
 
 .chat-jump:hover {
-  border-color: rgba(255, 125, 150, 0.55);
-  color: var(--pink);
+  border-color: rgba(var(--accent-rgb), 0.55);
+  color: var(--accent);
 }
 
 .chat-typing {
@@ -2010,7 +2010,7 @@ input.filter-input:focus {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--pink);
+  background: var(--accent);
   opacity: 0.45;
   animation: dot-bounce 1.1s var(--ease-spring) infinite;
 }

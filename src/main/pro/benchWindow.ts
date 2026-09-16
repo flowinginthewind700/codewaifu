@@ -103,7 +103,7 @@ export function createBenchWindow(deps: BenchWindowDeps): BenchHandle {
     autoHideMenuBar: true,
     // Matches the renderer's own background so the first paint is not a white
     // flash over a dark workbench.
-    backgroundColor: '#14121a',
+    backgroundColor: '#111214',
     icon: isMac ? undefined : nativeImage.createFromBuffer(waifuIconPng(256)),
     webPreferences: {
       preload: preloadEntry(),

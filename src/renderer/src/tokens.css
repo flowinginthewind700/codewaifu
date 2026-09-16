@@ -5,36 +5,58 @@
    surfaces are visibly one product: same accents, same radii, same motion
    curves, same type stack. A token defined in only one of them is a drift bug
    waiting to happen, which is the whole reason this file exists.
+
+   The palette is RobotWorld's dark system, because that is the surface the
+   same human reads all day and it is the one that was tuned for comfort:
+   neutral near-black (no purple in the charcoal), slate text, and a single
+   green accent. Roles stay fixed so a colour always means the same thing:
+       accent = the companion / primary action   (energon green #00da5a)
+       ok     = healthy, connected, working
+       warn   = needs attention
+       review = finished, waiting for my eyes     (Bench only)
+       coral  = Claude Code, destructive hover
+       danger = destructive
+   Every one of them also ships as an `-rgb` triple: half the uses of an accent
+   here are a border or a glow at 8-30%, and a hardcoded rgba() sitting next to
+   a token is how one palette quietly becomes two.
    ========================================================================== */
 
 :root {
-  /* Warm charcoal. Four accents with fixed roles, so neither surface ever
-     reads as one hue and a colour always means the same thing:
-       pink  = the companion / primary action
-       mint  = healthy, connected, working
-       amber = needs attention
-       coral = Claude Code, destructive hover          */
   /* Liquid glass. A companion that hides the desktop behind an opaque slab is
      a window, not a pet: --bg keeps ~44% of what is underneath readable
      through it, and --glass-* is the single place to tune how much. Text stays
      legible because the blur is heavy and the sheen below lifts the top edge. */
-  --bg: rgba(24, 22, 31, 0.56);
-  --bg-strong: rgba(17, 15, 23, 0.86);
-  --surface: rgba(255, 255, 255, 0.045);
-  --surface-2: rgba(255, 255, 255, 0.085);
-  --surface-3: rgba(255, 255, 255, 0.13);
-  --line: rgba(255, 255, 255, 0.1);
-  --line-soft: rgba(255, 255, 255, 0.06);
-  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  --text: #f4eff8;
-  --muted: #ab9fba;
-  --faint: #7e7489;
-  --pink: #ff7d96;
-  --pink-soft: rgba(255, 125, 150, 0.14);
-  --mint: #59d7b3;
-  --amber: #f5b45c;
-  --coral: #f0916b;
-  --danger: #ff6b81;
+  /* RobotWorld `surface.dark` / `card.dark`, at the widget's translucency. */
+  --bg: rgba(17, 18, 20, 0.62);
+  --bg-strong: rgba(12, 13, 15, 0.9);
+  --surface: rgba(255, 255, 255, 0.035);
+  --surface-2: rgba(255, 255, 255, 0.062);
+  --surface-3: rgba(255, 255, 255, 0.095);
+  --line: rgba(255, 255, 255, 0.085);
+  --line-soft: rgba(255, 255, 255, 0.05);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* RobotWorld's dark text ramp: headings, body, meta. Neutral slate, so the
+     accent stays the only saturated thing on screen. */
+  --text: #e2e8f0;
+  --muted: #a1a8b0;
+  --faint: #7d848d;
+
+  --accent-rgb: 0, 218, 90;
+  --accent: rgb(var(--accent-rgb));
+  /* The accent as small text on near-black: RobotWorld uses brand-300 for links
+     and eyebrows because #00da5a goes muddy below ~12px. */
+  --accent-bright: #4dff99;
+  --accent-soft: rgba(var(--accent-rgb), 0.14);
+  --ok-rgb: 61, 220, 151;
+  --ok: rgb(var(--ok-rgb));
+  --warn-rgb: 251, 191, 36;
+  --warn: rgb(var(--warn-rgb));
+  --review-rgb: 106, 169, 255;
+  --review: rgb(var(--review-rgb));
+  --coral-rgb: 224, 138, 95;
+  --coral: rgb(var(--coral-rgb));
+  --danger-rgb: 248, 113, 113;
+  --danger: rgb(var(--danger-rgb));
 
   --glass-blur: 26px;
   --glass-sat: 180%;

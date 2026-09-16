@@ -430,8 +430,8 @@ export function windowSurface(
   return { transparent: true, backgroundColor: '#00000000', reason }
 }
 
-/** Same ink as the card's own sheet, so an opaque window still looks intentional. */
-export const OPAQUE_BACKGROUND = '#12121a'
+/** One shade under the card's own sheet, so an opaque window still looks intentional. */
+export const OPAQUE_BACKGROUND = '#111214'
 
 // ---------------------------------------------------------------------------
 // Tray

@@ -22,20 +22,21 @@
 @import '../tokens.css';
 
 :root {
-  /* Opaque warm charcoal, a shade darker than the widget so the bench reads as
-     "the room the widget lives in". Three surfaces, never more: a fourth is a
-     card-in-a-card. */
-  --bench-bg: #14121a;
-  --bench-panel: #191621;
-  --bench-panel-2: #1f1b29;
+  /* Opaque neutral charcoal (RobotWorld's `surface.dark`), a shade darker than
+     the widget so the bench reads as "the room the widget lives in". Three
+     surfaces, never more: a fourth is a card-in-a-card. */
+  --bench-bg: #111214;
+  --bench-panel: #17181a;
+  --bench-panel-2: #1c1d1f;
   --bench-line: rgba(255, 255, 255, 0.08);
   --bench-line-soft: rgba(255, 255, 255, 0.045);
-  --bench-term: #0f0d14;
+  --bench-term: #0d1117;
 
-  /* Awaiting review. Not one of the four shared accents: "finished, waiting for
-     my eyes" is a fifth state and it deserves its own colour rather than
-     borrowing mint (which means working) or amber (which means blocked). */
-  --bench-review: #82aaff;
+  /* Awaiting review. "Finished, waiting for my eyes" is a fifth state and it
+     deserves its own colour rather than borrowing ok (which means working) or
+     warn (which means blocked) - so it was promoted into tokens.css, where the
+     widget can reach it too, and this is now just an alias. */
+  --bench-review: var(--review);
 
   --rail-w: 264px;
   --right-w: 344px;
@@ -191,23 +192,23 @@ textarea {
 }
 
 .count[data-state='working'] {
-  color: var(--mint);
-  border-color: rgba(89, 215, 179, 0.3);
+  color: var(--ok);
+  border-color: rgba(var(--ok-rgb), 0.3);
 }
 
 .count[data-state='blocked'] {
-  color: var(--amber);
-  border-color: rgba(245, 180, 92, 0.32);
+  color: var(--warn);
+  border-color: rgba(var(--warn-rgb), 0.32);
 }
 
 .count[data-state='needsMe'] {
-  color: var(--pink);
-  border-color: rgba(255, 125, 150, 0.34);
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.34);
 }
 
 .count[data-state='done'] {
   color: var(--bench-review);
-  border-color: rgba(130, 170, 255, 0.28);
+  border-color: rgba(var(--review-rgb), 0.28);
 }
 
 .spacer {
@@ -267,7 +268,7 @@ textarea {
 }
 
 .toggle:has(input:focus-visible) {
-  outline: 2px solid var(--pink);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -336,7 +337,7 @@ textarea {
 }
 
 .btn:focus-visible {
-  outline: 2px solid var(--pink);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -353,14 +354,14 @@ textarea {
 
 /* Primary = the companion's colour. There is at most one per surface. */
 .btn.primary {
-  background: var(--pink);
+  background: var(--accent);
   border-color: transparent;
-  color: #2a1620;
+  color: #06170d;
   font-weight: 600;
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: #ff92a7;
+  background: var(--accent-bright);
   border-color: transparent;
 }
 
@@ -376,26 +377,26 @@ textarea {
 }
 
 .btn.danger:hover:not(:disabled) {
-  background: rgba(255, 107, 129, 0.16);
-  border-color: rgba(255, 107, 129, 0.4);
+  background: rgba(var(--danger-rgb), 0.16);
+  border-color: rgba(var(--danger-rgb), 0.4);
   color: var(--danger);
 }
 
 .btn.approve {
-  background: rgba(89, 215, 179, 0.14);
-  border-color: rgba(89, 215, 179, 0.34);
-  color: var(--mint);
+  background: rgba(var(--ok-rgb), 0.14);
+  border-color: rgba(var(--ok-rgb), 0.34);
+  color: var(--ok);
 }
 
 .btn.approve:hover:not(:disabled) {
-  background: rgba(89, 215, 179, 0.24);
-  border-color: rgba(89, 215, 179, 0.5);
-  color: var(--mint);
+  background: rgba(var(--ok-rgb), 0.24);
+  border-color: rgba(var(--ok-rgb), 0.5);
+  color: var(--ok);
 }
 
 .btn.deny:hover:not(:disabled) {
-  background: rgba(240, 145, 107, 0.16);
-  border-color: rgba(240, 145, 107, 0.42);
+  background: rgba(var(--coral-rgb), 0.16);
+  border-color: rgba(var(--coral-rgb), 0.42);
   color: var(--coral);
 }
 
@@ -415,9 +416,9 @@ textarea {
    is a sub-panel; `data-on` is the find bar's regex and case toggles. */
 .btn[data-open],
 .btn[data-on] {
-  background: var(--pink-soft);
-  border-color: rgba(255, 125, 150, 0.4);
-  color: var(--pink);
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  color: var(--accent);
 }
 
 .chip {
@@ -434,15 +435,15 @@ textarea {
 }
 
 .chip.online {
-  color: var(--mint);
-  border-color: rgba(89, 215, 179, 0.3);
-  background: rgba(89, 215, 179, 0.08);
+  color: var(--ok);
+  border-color: rgba(var(--ok-rgb), 0.3);
+  background: rgba(var(--ok-rgb), 0.08);
 }
 
 .chip.offline {
   color: var(--danger);
-  border-color: rgba(255, 107, 129, 0.32);
-  background: rgba(255, 107, 129, 0.08);
+  border-color: rgba(var(--danger-rgb), 0.32);
+  background: rgba(var(--danger-rgb), 0.08);
 }
 
 /* Truncation lives on the text, not the chip, so the border never clips. */
@@ -477,13 +478,13 @@ textarea {
 /* Agent colours match the widget's thread list: codex mint, claude coral. Two
    surfaces disagreeing about which agent is which colour is a real cost. */
 .tag.codex {
-  color: var(--mint);
-  background: rgba(89, 215, 179, 0.13);
+  color: var(--ok);
+  background: rgba(var(--ok-rgb), 0.13);
 }
 
 .tag.claude {
   color: var(--coral);
-  background: rgba(240, 145, 107, 0.13);
+  background: rgba(var(--coral-rgb), 0.13);
 }
 
 .field {
@@ -517,7 +518,7 @@ textarea {
 .input:focus,
 .textarea:focus,
 .select:focus {
-  border-color: rgba(255, 125, 150, 0.55);
+  border-color: rgba(var(--accent-rgb), 0.55);
 }
 
 .input::placeholder,
@@ -623,7 +624,7 @@ textarea {
 }
 
 .group-head:focus-visible {
-  outline: 2px solid var(--pink);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
@@ -675,13 +676,13 @@ textarea {
 }
 
 .task-row:focus-visible {
-  outline: 2px solid var(--pink);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
 .task-row[data-selected='true'] {
-  background: rgba(255, 125, 150, 0.11);
-  border-left-color: var(--pink);
+  background: rgba(var(--accent-rgb), 0.11);
+  border-left-color: var(--accent);
 }
 
 /* Keyboard cursor is drawn even when the row is not focused: you should be able
@@ -700,13 +701,13 @@ textarea {
 }
 
 .dot[data-state='working'] {
-  background: var(--mint);
-  box-shadow: 0 0 0 3px rgba(89, 215, 179, 0.14);
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(var(--ok-rgb), 0.14);
 }
 
 .dot[data-state='blocked'] {
-  background: var(--amber);
-  box-shadow: 0 0 0 3px rgba(245, 180, 92, 0.16);
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(var(--warn-rgb), 0.16);
 }
 
 .dot[data-state='done'] {
@@ -750,7 +751,7 @@ textarea {
 }
 
 .task-sub .warn {
-  color: var(--amber);
+  color: var(--warn);
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
@@ -770,8 +771,8 @@ textarea {
   border-radius: 99px;
   font-size: 9.5px;
   line-height: 14px;
-  background: rgba(255, 125, 150, 0.16);
-  color: var(--pink);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -930,14 +931,14 @@ textarea {
   gap: 6px;
   padding: 7px 9px;
   border-radius: var(--radius);
-  border: 1px solid rgba(245, 180, 92, 0.3);
-  background: rgba(245, 180, 92, 0.07);
+  border: 1px solid rgba(var(--warn-rgb), 0.3);
+  background: rgba(var(--warn-rgb), 0.07);
   min-width: 0;
 }
 
 .banner[data-tone='lost'] {
-  border-color: rgba(240, 145, 107, 0.34);
-  background: rgba(240, 145, 107, 0.08);
+  border-color: rgba(var(--coral-rgb), 0.34);
+  background: rgba(var(--coral-rgb), 0.08);
 }
 
 .banner-head {
@@ -951,7 +952,7 @@ textarea {
   width: 13px;
   height: 13px;
   flex: 0 0 auto;
-  color: var(--amber);
+  color: var(--warn);
 }
 
 .banner[data-tone='lost'] .banner-head svg {
@@ -961,7 +962,7 @@ textarea {
 .banner-title {
   font-size: var(--fs-small);
   font-weight: 620;
-  color: var(--amber);
+  color: var(--warn);
   white-space: nowrap;
 }
 
@@ -1074,7 +1075,7 @@ textarea {
 }
 
 .pane[data-active='true'] {
-  outline: 1px solid rgba(255, 125, 150, 0.5);
+  outline: 1px solid rgba(var(--accent-rgb), 0.5);
   outline-offset: -1px;
 }
 
@@ -1121,7 +1122,7 @@ textarea {
   flex: 0 0 auto;
   width: 14px;
   height: 14px;
-  color: var(--amber);
+  color: var(--warn);
   animation: pane-bell-in 160ms ease-out;
 }
 
@@ -1137,7 +1138,7 @@ textarea {
 }
 
 .pane-flag[data-live='true'] {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 .pane-flag[data-phase='error'] {
@@ -1146,7 +1147,7 @@ textarea {
 
 .pane-flag[data-phase='respawning'],
 .pane-flag[data-phase='starting'] {
-  color: var(--amber);
+  color: var(--warn);
 }
 
 /* Absolutely positioned so xterm's own viewport owns the scroll and the flex
@@ -1250,7 +1251,7 @@ textarea {
   display: grid;
   place-items: center;
   gap: 8px;
-  background: rgba(15, 13, 20, 0.82);
+  background: rgba(13, 14, 16, 0.86);
   color: var(--faint);
   font-size: var(--fs-small);
   text-align: center;
@@ -1263,7 +1264,7 @@ textarea {
   height: 14px;
   border-radius: 99px;
   border: 2px solid rgba(255, 255, 255, 0.14);
-  border-top-color: var(--pink);
+  border-top-color: var(--accent);
   animation: bench-spin 0.7s linear infinite;
 }
 
@@ -1325,13 +1326,13 @@ textarea {
 }
 
 .tab:focus-visible {
-  outline: 2px solid var(--pink);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
 .tab[data-active='true'] {
   color: var(--text);
-  border-bottom-color: var(--pink);
+  border-bottom-color: var(--accent);
 }
 
 .tab .tab-count {
@@ -1343,8 +1344,8 @@ textarea {
 }
 
 .tab[data-active='true'] .tab-count {
-  background: var(--pink-soft);
-  color: var(--pink);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .panel-scroll {
@@ -1382,7 +1383,7 @@ textarea {
 
 .qitem[data-cursor='true'] {
   background: rgba(255, 255, 255, 0.045);
-  border-left-color: var(--pink);
+  border-left-color: var(--accent);
 }
 
 .qitem[data-snoozed='true'] {
@@ -1413,22 +1414,22 @@ textarea {
 }
 
 .kind[data-kind='permission'] {
-  background: rgba(245, 180, 92, 0.16);
-  color: var(--amber);
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
 }
 
 .kind[data-kind='question'] {
-  background: rgba(255, 125, 150, 0.15);
-  color: var(--pink);
+  background: rgba(var(--accent-rgb), 0.15);
+  color: var(--accent);
 }
 
 .kind[data-kind='failed'] {
-  background: rgba(255, 107, 129, 0.16);
+  background: rgba(var(--danger-rgb), 0.16);
   color: var(--danger);
 }
 
 .kind[data-kind='review'] {
-  background: rgba(130, 170, 255, 0.16);
+  background: rgba(var(--review-rgb), 0.16);
   color: var(--bench-review);
 }
 
@@ -1449,7 +1450,7 @@ textarea {
 
 .qitem-wait {
   font-size: 10px;
-  color: var(--amber);
+  color: var(--warn);
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
   white-space: nowrap;
@@ -1531,7 +1532,7 @@ textarea {
 
 .no-recipe {
   font-size: 10.5px;
-  color: var(--amber);
+  color: var(--warn);
   line-height: 1.5;
 }
 
@@ -1576,7 +1577,7 @@ textarea {
 }
 
 .entry[data-kind='decision'] .entry-kind {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 .entry[data-kind='next'] .entry-kind {
@@ -1584,7 +1585,7 @@ textarea {
 }
 
 .entry[data-kind='goal'] .entry-kind {
-  color: var(--pink);
+  color: var(--accent);
 }
 
 .entry[data-kind='git'] .entry-kind {
@@ -1688,23 +1689,23 @@ textarea {
 }
 
 .verdict[data-verdict='resumable'] {
-  background: rgba(245, 180, 92, 0.16);
-  color: var(--amber);
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
 }
 
 .verdict[data-verdict='rebuild'] {
-  background: rgba(240, 145, 107, 0.16);
+  background: rgba(var(--coral-rgb), 0.16);
   color: var(--coral);
 }
 
 .verdict[data-verdict='lost'] {
-  background: rgba(255, 107, 129, 0.16);
+  background: rgba(var(--danger-rgb), 0.16);
   color: var(--danger);
 }
 
 .verdict[data-verdict='intact'] {
-  background: rgba(89, 215, 179, 0.14);
-  color: var(--mint);
+  background: rgba(var(--ok-rgb), 0.14);
+  color: var(--ok);
 }
 
 .plan-actions {
@@ -1743,11 +1744,11 @@ button.plan-title {
 }
 
 button.plan-title:hover {
-  color: var(--pink);
+  color: var(--accent);
 }
 
 button.plan-title:focus-visible {
-  outline: 1px solid var(--pink);
+  outline: 1px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
 }
@@ -1784,18 +1785,18 @@ button.plan-title:focus-visible {
 }
 
 .toast[data-tone='error'] {
-  border-color: rgba(255, 107, 129, 0.42);
+  border-color: rgba(var(--danger-rgb), 0.42);
   color: var(--danger);
 }
 
 .toast[data-tone='warn'] {
-  border-color: rgba(245, 180, 92, 0.4);
-  color: var(--amber);
+  border-color: rgba(var(--warn-rgb), 0.4);
+  color: var(--warn);
 }
 
 .toast[data-tone='ok'] {
-  border-color: rgba(89, 215, 179, 0.36);
-  color: var(--mint);
+  border-color: rgba(var(--ok-rgb), 0.36);
+  color: var(--ok);
 }
 
 @keyframes toast-in {
@@ -1808,7 +1809,7 @@ button.plan-title:focus-visible {
 .scrim {
   position: fixed;
   inset: 0;
-  background: rgba(8, 6, 12, 0.62);
+  background: rgba(8, 9, 10, 0.62);
   display: grid;
   place-items: center;
   z-index: 50;
@@ -1913,7 +1914,7 @@ button.plan-title:focus-visible {
 }
 
 .check input {
-  accent-color: var(--pink);
+  accent-color: var(--accent);
   width: 13px;
   height: 13px;
   cursor: pointer;
@@ -2036,9 +2037,9 @@ button.plan-title:focus-visible {
 
 .fault-kind {
   padding: 1px 6px;
-  border: 1px solid rgba(255, 107, 129, 0.4);
+  border: 1px solid rgba(var(--danger-rgb), 0.4);
   border-radius: var(--radius-xs);
-  background: rgba(255, 107, 129, 0.12);
+  background: rgba(var(--danger-rgb), 0.12);
   color: var(--danger);
   font-family: var(--mono);
   font-size: var(--fs-small);
@@ -2123,8 +2124,8 @@ button.plan-title:focus-visible {
     font-size: 9.5px;
     padding: 0 4px;
     border-radius: 99px;
-    background: var(--pink);
-    color: #2a1620;
+    background: var(--accent);
+    color: #06170d;
     font-weight: 650;
   }
 
