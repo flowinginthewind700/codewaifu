@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { portAttempts } from '../src/shared/portPolicy'
 import { failResult } from '../src/shared/proIpc'
+import { PRO_STREAM_HEARTBEAT_MS, PRO_STREAM_MAX } from '../src/main/server'
 import { createTestRelay, occupyPort, type TestRelay } from './helpers/relay'
 import { attentionItem, benchView, fakePro, type FakePro } from './helpers/pro'
 
@@ -15,6 +16,24 @@ async function startRelay(
   await relay.server.start(portAttempts({ pinned: 0, sticky: relay.config.port }))
   relays.push(relay)
   return relay
+}
+
+/** A relay with a bench behind it, plus the fake so a test can poke it. */
+async function startPro(
+  view: ReturnType<typeof benchView> | null = benchView()
+): Promise<{ relay: TestRelay; pro: FakePro }> {
+  const pro = fakePro({ view })
+  return { relay: await startRelay(undefined, () => pro.api), pro }
+}
+
+/** Poll the way a socket event would: often, briefly, and then fail loudly. */
+async function until(check: () => boolean, what: string, ms = 2000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    if (check()) return
+    await new Promise((settle) => setTimeout(settle, 5))
+  }
+  throw new Error(`${what} never became true within ${ms}ms`)
 }
 
 afterEach(async () => {
@@ -188,14 +207,6 @@ describe('port conflicts', () => {
 })
 
 describe('pro api (F6)', () => {
-  /** A relay with a bench behind it, plus the fake so a test can poke it. */
-  async function startPro(
-    view: ReturnType<typeof benchView> | null = benchView()
-  ): Promise<{ relay: TestRelay; pro: FakePro }> {
-    const pro = fakePro({ view })
-    return { relay: await startRelay(undefined, () => pro.api), pro }
-  }
-
   it('answers 503 on every route while the bench is off', async () => {
     const relay = await startRelay()
     for (const path of ['/pro/state', '/pro/attention']) {
@@ -427,5 +438,156 @@ describe('pro api (F6)', () => {
     // No pane route over HTTP: a script is not a second keyboard (MVP section 9).
     const pane = await relay.post('/pro/pane', { op: 'send', paneId: 'pane-1', text: 'ls' }, TOKEN)
     expect(pane.status).toBe(404)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * The push route
+ * ------------------------------------------------------------------ */
+
+describe('the push route (/pro/stream)', () => {
+  /**
+   * Why this route exists: `pro state` in a loop is a poll, and a poll is either
+   * too slow to feel live or too fast to leave the bench alone. So the assertion
+   * that matters is not "a frame arrived" but "the relay never asked the bench
+   * for the projection again".
+   */
+  it('pushes the tree once, then one frame per change, without asking again', async () => {
+    const { relay, pro } = await startPro(benchView())
+    const stream = await relay.stream('/pro/stream', TOKEN)
+    try {
+      expect(stream.status).toBe(200)
+      const first = await stream.next(0)
+      expect(first).toMatchObject({ kind: 'state', ok: true, online: true, running: true })
+      const asked = pro.viewCalls()
+
+      pro.setView(benchView({ attention: [attentionItem()] }))
+      const second = await stream.next(1)
+      expect((second.view as { attention: unknown[] }).attention).toHaveLength(1)
+      expect(pro.viewCalls()).toBe(asked)
+
+      // And herdr going away is pushed too: it is not part of the tree, so a
+      // watcher that only diffed tasks would sit on a bench that cannot move.
+      pro.setOnline(false)
+      expect(await stream.next(2)).toMatchObject({ online: false, running: true })
+    } finally {
+      await stream.close()
+    }
+  })
+
+  it('sends the body /pro/state answers, so there is no second projection free to drift', async () => {
+    const { relay } = await startPro(benchView({ attention: [attentionItem()] }))
+    const stream = await relay.stream('/pro/stream', TOKEN)
+    try {
+      const polled = (await relay.get('/pro/state', TOKEN)).json as Record<string, unknown>
+      const pushed = { ...(await stream.next(0)) }
+      delete pushed.kind
+      expect(pushed).toEqual(polled)
+    } finally {
+      await stream.close()
+    }
+  })
+
+  it('unsubscribes when the watcher goes away: a leaked listener is a leak the server cannot see', async () => {
+    const { relay, pro } = await startPro()
+    const stream = await relay.stream('/pro/stream', TOKEN)
+    await stream.next(0)
+    expect(pro.subscriberCount()).toBe(1)
+    await stream.close()
+    await until(() => pro.subscriberCount() === 0, 'the closed watcher was never unsubscribed')
+  })
+
+  it('keeps the stream behind the token, and subscribes to nothing without it', async () => {
+    const { relay, pro } = await startPro()
+    expect((await relay.get('/pro/stream')).status).toBe(401)
+    expect((await relay.get('/pro/stream', 'wrong')).status).toBe(401)
+    expect(pro.subscriberCount()).toBe(0)
+  })
+
+  it('answers 503 while the bench is off, because there is nothing to watch', async () => {
+    const relay = await startRelay()
+    const refused = await relay.get('/pro/stream', TOKEN)
+    expect(refused.status).toBe(503)
+    expect(refused.json).toMatchObject({ ok: false, code: 'not-running' })
+  })
+
+  it('refuses the watcher past the cap, and frees the slot when one leaves', async () => {
+    const { relay, pro } = await startPro()
+    const open: Awaited<ReturnType<TestRelay['stream']>>[] = []
+    try {
+      for (let index = 0; index < PRO_STREAM_MAX; index += 1) {
+        open.push(await relay.stream('/pro/stream', TOKEN))
+      }
+      await until(() => pro.subscriberCount() === PRO_STREAM_MAX, 'the cap was never reached')
+
+      const refused = await relay.stream('/pro/stream', TOKEN)
+      expect(refused.status).toBe(429)
+      // Refused means refused: the body is already over and carries no frames, so
+      // a watcher cannot mistake the cap for a stream that is attached but quiet.
+      await refused.done
+      expect(refused.ended).toBe(true)
+      expect(refused.frames).toHaveLength(0)
+      expect(pro.subscriberCount()).toBe(PRO_STREAM_MAX)
+      await refused.close()
+
+      // The cap is a leak guard, not a wall: one watcher leaving has to make room
+      // for the next, or a busy bench would refuse a terminal forever.
+      await open.pop()!.close()
+      let again = await relay.stream('/pro/stream', TOKEN)
+      for (let attempt = 0; attempt < 100 && again.status === 429; attempt += 1) {
+        await again.close()
+        await new Promise((settle) => setTimeout(settle, 10))
+        again = await relay.stream('/pro/stream', TOKEN)
+      }
+      expect(again.status).toBe(200)
+      open.push(again)
+    } finally {
+      await Promise.all(open.map((stream) => stream.close()))
+    }
+  })
+
+  it('pushes a stopped bench as view:null instead of dropping the connection', async () => {
+    const { relay, pro } = await startPro(benchView({ attention: [attentionItem()] }))
+    const stream = await relay.stream('/pro/stream', TOKEN)
+    try {
+      await stream.next(0)
+      pro.setView(null)
+      // The watcher is told the bench is gone rather than left holding a tree
+      // that still looks live; and it stays attached, because Pro can come back.
+      expect(await stream.next(1)).toMatchObject({ kind: 'state', running: false, view: null })
+      expect(stream.ended).toBe(false)
+    } finally {
+      await stream.close()
+    }
+  })
+
+  it('ends every stream when the app goes, so no watcher is left on a dead socket', async () => {
+    const { relay } = await startPro()
+    const first = await relay.stream('/pro/stream', TOKEN)
+    const second = await relay.stream('/pro/stream', TOKEN)
+    await first.next(0)
+    await second.next(0)
+    await relay.server.stopAsync(500)
+    await Promise.all([first.done, second.done])
+    expect(first.ended).toBe(true)
+    expect(second.ended).toBe(true)
+  })
+
+  it('pings, so an hour of nothing and a dead app are not the same silence', async () => {
+    // Only the interval is faked: the frames still travel over a real socket, so
+    // this asserts that the relay writes a heartbeat, not that a timer fires.
+    vi.useFakeTimers({ toFake: ['setInterval'] })
+    const { relay } = await startPro()
+    const stream = await relay.stream('/pro/stream', TOKEN)
+    try {
+      await stream.next(0)
+      vi.advanceTimersByTime(PRO_STREAM_HEARTBEAT_MS)
+      const ping = await stream.next(1)
+      expect(ping.kind).toBe('ping')
+      expect(typeof ping.at).toBe('number')
+    } finally {
+      await stream.close()
+      vi.useRealTimers()
+    }
   })
 })

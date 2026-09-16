@@ -236,6 +236,7 @@ hook 都重新读它。这正是端口策略敢随便搬家而不改任何 agent
 ```bash
 codewaifu pro                        # 动词表
 codewaifu pro state                  # 树:分组、任务、实时状态、谁在等你
+codewaifu pro watch                  # 树先打一遍,之后每个变化一行,ctrl-c 退出
 codewaifu pro attention              # 排好序的队列,带着回答所需的 id
 codewaifu pro answer <id> "可以,继续"
 codewaifu pro approve <id>           # 或 deny <id>、snooze <id> --minutes 30
@@ -247,6 +248,11 @@ codewaifu pro park <taskId>          # 不再统计它;它的 pane 继续跑
 
 每个动词都支持 `--json`。输出是 ASCII,按终端宽度收在 60-160 列之间;id 一律完整
 打印——抄不下来的 id,就是打不出来的命令。
+
+`watch` 是同一套轨道的推送端:先把树打一遍,之后每个变化一行,直到 ctrl-c——而
+ctrl-c 的退出码是 0,所以 shell 循环能分清「是我停的」和「它坏了」。`watch --json`
+改吐原始 NDJSON 帧,给宁愿自己 diff 的脚本用。工作台最多同时供 16 个 watcher,
+超了会明说(退出码 5),而不是悄悄把所有人的流降级。
 
 退出码是契约而不是心情,所以轮询能分清「没人等我」和「没人在家」:0 成功、
 2 参数不对、3 工作台或 herdr 没在跑、4 没有这个任务或条目、5 听懂了但拒绝、
@@ -268,7 +274,7 @@ CodeWaifu 写的所有东西都在 `~/.codewaifu`(Windows:`%USERPROFILE%\.codewa
 ```bash
 npm install
 npm run dev          # electron-vite 热重载
-npm test             # vitest,984 个测试:relay 测试台、Pro 桥接、真实 TTS
+npm test             # vitest,1022 个测试:relay 测试台、Pro 桥接、真实 TTS
 npm run test:e2e     # 需要显示器;先构建,约二十秒
 npm run typecheck
 npm run dist:mac     # 或 dist:win;产物在 release/

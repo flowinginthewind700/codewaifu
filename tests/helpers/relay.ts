@@ -14,6 +14,24 @@ export interface Recorded {
   mediaCommands: string[]
 }
 
+/** One live NDJSON response, as a test sees it. */
+export interface TestStream {
+  status: number
+  /** Frames parsed so far, in arrival order. */
+  frames: Array<Record<string, unknown>>
+  /** True once the relay ended the response or the socket went away. */
+  ended: boolean
+  /**
+   * The next frame after `after` (default: the ones already in). Rejects rather
+   * than hangs, because "no frame arrived" *is* the failure, and a test that
+   * times out cannot say which frame it was waiting for.
+   */
+  next(after?: number, timeoutMs?: number): Promise<Record<string, unknown>>
+  /** Settles when the response is over, however it ended. */
+  done: Promise<void>
+  close(): Promise<void>
+}
+
 export interface TestRelay {
   server: HookServer
   config: AppConfig
@@ -23,6 +41,15 @@ export interface TestRelay {
   get(path: string, token?: string): Promise<{ status: number; body: string; json: unknown }>
   post(path: string, payload: unknown, token?: string): Promise<{ status: number; body: string; json: unknown }>
   request(method: string, path: string, headers: Record<string, string>, body?: string): Promise<{ status: number; body: string }>
+  /**
+   * Open a push route and hand back its frames as they land.
+   *
+   * Deliberately not built on `streamNdjson` in main/probe: the client and the
+   * route are two halves of one contract, and a test that reads the stream with
+   * the production client cannot say which half broke. The CLI round trip in
+   * `tests/proCli.test.ts` is where the two meet.
+   */
+  stream(path: string, token?: string): Promise<TestStream>
   shutdown(): Promise<void>
 }
 
@@ -128,6 +155,100 @@ export function createTestRelay(
     return { ...raw, json }
   }
 
+  const stream = (path: string, token?: string): Promise<TestStream> =>
+    new Promise((resolve, reject) => {
+      const headers: Record<string, string> = token ? { 'x-codewaifu-token': token } : {}
+      const req = http.request(
+        { host: '127.0.0.1', port: server.listeningPort, path, method: 'GET', headers },
+        (res) => {
+          const frames: Array<Record<string, unknown>> = []
+          /** A waiter returns true once it has settled, and is then dropped. */
+          const waiters: Array<{ wake: () => boolean }> = []
+          let buffer = ''
+          let ended = false
+          let finishDone!: () => void
+          const done = new Promise<void>((settle) => {
+            finishDone = settle
+          })
+
+          const wake = (): void => {
+            for (const waiter of [...waiters]) {
+              if (waiter.wake()) waiters.splice(waiters.indexOf(waiter), 1)
+            }
+          }
+          const finish = (): void => {
+            if (ended) return
+            ended = true
+            wake()
+            finishDone()
+          }
+
+          res.setEncoding('utf8')
+          res.on('data', (chunk: string) => {
+            buffer += chunk
+            let newline = buffer.indexOf('\n')
+            while (newline >= 0) {
+              const line = buffer.slice(0, newline).trim()
+              buffer = buffer.slice(newline + 1)
+              newline = buffer.indexOf('\n')
+              if (!line) continue
+              try {
+                frames.push(JSON.parse(line) as Record<string, unknown>)
+              } catch {
+                /* a frame torn by the close; the route is not on trial for it */
+              }
+            }
+            wake()
+          })
+          res.on('end', finish)
+          res.on('error', finish)
+          res.on('close', finish)
+
+          resolve({
+            get status(): number {
+              return res.statusCode || 0
+            },
+            frames,
+            get ended(): boolean {
+              return ended
+            },
+            next: (after = frames.length, timeoutMs = 2000) =>
+              new Promise<Record<string, unknown>>((got, fail) => {
+                const waiter = {
+                  wake: (): boolean => {
+                    if (frames.length > after) {
+                      clearTimeout(timer)
+                      got(frames[after])
+                      return true
+                    }
+                    if (ended) {
+                      clearTimeout(timer)
+                      fail(new Error(`the stream ended before frame ${after + 1}`))
+                      return true
+                    }
+                    return false
+                  }
+                }
+                const timer = setTimeout(() => {
+                  waiters.splice(waiters.indexOf(waiter), 1)
+                  fail(new Error(`no frame ${after + 1} within ${timeoutMs}ms (have ${frames.length})`))
+                }, timeoutMs)
+                timer.unref?.()
+                if (waiter.wake()) return
+                waiters.push(waiter)
+              }),
+            done,
+            close: async () => {
+              req.destroy()
+              await done
+            }
+          })
+        }
+      )
+      req.on('error', reject)
+      req.end()
+    })
+
   return {
     server,
     config,
@@ -147,6 +268,7 @@ export function createTestRelay(
         JSON.stringify(payload)
       ),
     request,
+    stream,
     shutdown: async () => {
       await server.stopAsync(500)
     }

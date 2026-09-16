@@ -168,6 +168,14 @@
  mirror the relay's status classes; there is no `send-keys`, and `pro recovery` is
  read-only because applying a plan is recorded with `source: 'gui'` provenance.
 
+ Those rails now push, too (F9). `GET /pro/stream` is NDJSON of the `/pro/state` payload
+ plus a `kind`, fed by `ProService.onChange` and capped at 16 watchers; `codewaifu pro watch`
+ is the terminal that reads it - the tree once, then one line per change until ctrl-c
+ (exit 0, so a shell loop can tell "I stopped it" from "it broke"), with `--json` streaming
+ the raw frames. It is criterion 6.1's "updates arrive as events" extended past the window:
+ a poll loop in a shell is the same waste as one in the renderer, and until now the only way
+ to watch the bench from a terminal was to write that loop.
+
 ### F7 — Companion link: the widget and the bench are one product
  Two-way, by design, and the only feature here that no multiplexer can grow into.
 
@@ -249,7 +257,7 @@ one.
  | Phase | Deliverable | Verifiable without a GUI |
  |-------|-------------|--------------------------|
  | 0 | herdr installed, fixtures recorded, docs, repo hygiene | yes |
-| 1 | `pro/herdr/*`: discovery, socket client, snapshot cache, event stream, terminal bridge | yes — the `codewaifu pro` verb family, unit tests, and three e2e cases that spawn the built CLI |
+| 1 | `pro/herdr/*`: discovery, socket client, snapshot cache, event stream, terminal bridge | yes — the `codewaifu pro` verb family (through `watch`), unit tests, and four e2e cases that spawn the built CLI |
  | 2 | ledger + recovery planner + triage engine | yes — pure functions + tests |
  | 3 | Bench window: tree, attention bar, task card, xterm pane grid, IPC, config | manual + e2e smoke (`npm run test:e2e`) |
  | 4 | companion link (F7) + `/pro/*` HTTP API + agent skill | yes — the bridge is pure translation over `ProService`, unit-testable with a fake window handle |

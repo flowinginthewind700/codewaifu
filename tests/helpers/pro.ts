@@ -78,6 +78,12 @@ export interface FakePro {
   setOnline(online: boolean): void
   /** How often the relay asked for the projection. */
   viewCalls(): number
+  /**
+   * How many `/pro/stream` watchers are still subscribed. A relay that leaks
+   * one after the socket closes passes every status-code test and still holds
+   * a listener on the bench forever, so the count is the assertion.
+   */
+  subscriberCount(): number
 }
 
 /**
@@ -90,6 +96,10 @@ export function fakePro(initial: { view?: BenchView | null; online?: boolean } =
   let online = initial.online ?? true
   let result: ProResult = okResult(null, '', '')
   let views = 0
+  const listeners = new Set<(view: BenchView | null) => void>()
+  const notify = (): void => {
+    for (const listener of [...listeners]) listener(view)
+  }
 
   const api: ProApi = {
     online: () => online,
@@ -108,6 +118,12 @@ export function fakePro(initial: { view?: BenchView | null; online?: boolean } =
     ledgerOp: (request) => {
       recorded.ledger.push(request)
       return result
+    },
+    onChange: (listener) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
     }
   }
 
@@ -119,10 +135,15 @@ export function fakePro(initial: { view?: BenchView | null; online?: boolean } =
     },
     setView: (next) => {
       view = next
+      // The real service pushes on change; a fake that only answers polls
+      // would let a dead stream route look alive.
+      notify()
     },
     setOnline: (next) => {
       online = next
+      notify()
     },
-    viewCalls: () => views
+    viewCalls: () => views,
+    subscriberCount: () => listeners.size
   }
 }

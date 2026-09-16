@@ -1,15 +1,18 @@
 # Pro handoff
 
-`main` @ `c4155c9` plus the terminal control surface (F8) - typecheck, 984 tests
-(plus the 12 Windows-only skips), `electron-vite build` and `npm run test:e2e`
-(9 cases, needs a display) all green on Linux (Ubuntu, node 20+, herdr 0.9.0).
-Verified platform is Linux; macOS is built for but not yet run.
+`main` @ `363d6a7` plus the push route and `pro watch` (F9) - typecheck, 1022
+tests (plus the 12 Windows-only skips), `electron-vite build` and
+`npm run test:e2e` (10 cases, needs a display) all green on Linux (Ubuntu,
+node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built for but not
+yet run.
 
 The spec is [MVP.md](./MVP.md) and it is still the authority: F1-F7, the
 acceptance criteria in section 6, the phases in section 7. This file is the
 other half - how to run what exists, which decisions are settled, and what is
-known to be missing. F8 in the table below is not in the spec: it is what F6's
-"scripts and agents can drive the bench" became once somebody typed it.
+known to be missing. F8 and F9 in the table below are not in the spec: F8 is
+what F6's "scripts and agents can drive the bench" became once somebody typed
+it, and F9 is what the same feature's "push, never poll" became once a terminal
+wanted to sit and watch.
 
 ## 1. What Pro is
 
@@ -82,13 +85,22 @@ It launches `out/main/index.js` under Electron against a faked herdr socket
 (`tests/e2e/fakeHerdr.ts`, NDJSON over a unix socket) and asserts that the Bench
 window paints a tree row, shows no crash card, is not sitting on the install card
 and throws nothing while its bundle is evaluated; the screenshot lands in
-`tests/e2e/artifacts/bench.png`. Three of its nine cases drive the *built CLI*
+`tests/e2e/artifacts/bench.png`. Four of its ten cases drive the *built CLI*
 instead of the window: they spawn `electron <repo> pro state` the way
 `~/.local/bin/codewaifu` does after `install.sh`, against the same faked herdr
 and their own `CODEWAIFU_HOME`, and then read what a terminal would read - the
 tree, the recovery tab, and exit 3 with "not running" on stderr when that home
-is empty. It is the only place argv routing, the endpoint handshake and the
-renderers exist as one artefact rather than as three green unit suites.
+is empty. The fourth runs `pro watch` and sends it a real SIGINT once the tree
+is on the pipe, because "a person stopped it" has to leave 0 and the only way to
+learn that is to signal a child process rather than emit one in-process. It is
+the only place argv routing, the endpoint handshake and the renderers exist as
+one artefact rather than as three green unit suites.
+
+All four share one `beforeAll` that waits for `pro state --json` to report
+`view.herdr.online`. The Bench window paints from the registry on disk, so a
+painted tree row says nothing about whether the bridge has finished connecting,
+and the wait reads the same verb and the same projection the cases assert
+through - a window locator would only prove the renderer believes it.
 
 The gate is deliberately not inside `npm test`: a box with no X display would
 fail it for a reason that has nothing to do with the code, and jsdom cannot load
@@ -124,6 +136,7 @@ now that both the widget and the bench import it.
 | F6 HTTP API | `main/server.ts` (`/pro/*`) | `server` | done |
 | F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand`, `companionLink`, `bubbleAnswer` | done |
 | F8 terminal control surface | `shared/proCli.ts`, `main/pro/cli.ts`, `main/cliIo.ts` | `proCli`, `topBarCounts`, the built-CLI cases in gate four | done |
+| F9 push route + `pro watch` | `main/server.ts` (`/pro/stream`), `main/probe.ts` (`streamNdjson`), `shared/proCli.ts` (`diffProViews` + the change renderers), `main/pro/cli.ts` (`runProWatch`), `main/pro/service.ts` (`onChange`) | `server`, `proCli`, `proService`, the ctrl-c case in gate four | done |
 
 Acceptance criteria 6.1-6.4 and 6.7 are exercised by unit tests against recorded
 fixtures (`tests/fixtures/herdr/`, captured with
@@ -195,6 +208,30 @@ kept, so the row still reads as two things), since a fixed width either
 truncates a herdr workspace id or pads every row by fourteen spaces. Ids come
 out whole because an id you cannot copy is a command you cannot type.
 
+The terminal can also sit and watch (F9). `codewaifu pro watch` (aliases `tail`
+and `follow`) prints the tree once and then one line per change, and it is the
+one verb that does not finish: it reads `GET /pro/stream`, the only route that
+pushes, whose frames are the *same* payload `/pro/state` answers with plus a
+`kind`, so there is no second projection free to drift and a script that
+understands one understands the other. Frames come from `ProService.onChange`,
+notified inside `emitState` where the signature dedupe already lives, so a pane
+repainting several times a second is one frame rather than a firehose; `null`
+arrives once on shutdown, because a watcher still printing the last tree after
+the bench is gone is describing a world that no longer exists. The diff
+(`diffProViews`) and its words (`renderProChange`) are in `shared/proCli.ts`
+with the rest of the rendering, which leaves `runProWatch` the three impure
+things a pure module may not be: a socket, two signals, one file descriptor. A
+change line is clock, tag, subject, whole id - the id is what the next command
+takes, so the title is what gives way. A bench that comes back reprints the tree
+instead of announcing every task as an arrival, which is the honest reading of a
+set difference and useless to the person watching. Pings are swallowed unless
+`--json` is on, since one every twenty seconds is liveness for the socket and
+printing it would fill the screen with lines saying nothing happened - the noise
+a watcher exists to remove. Ctrl-c exits 0 and a stream that ends exits 3, so
+`while codewaifu pro watch; do ...; done` can be written; `pro watch | head -40`
+is handled too, because an EPIPE on stdout is otherwise an uncaught exception
+thrown over the last line we printed.
+
 The renderer is wrapped in `FaultBoundary` (`pro/main.tsx`), so a throw in a render
 or a mount effect is a card carrying the kind, the message, four frames and two
 buttons instead of an empty window next to a clean main log. Every decision the
@@ -227,6 +264,17 @@ without reading those first.
 - **One authority.** `ProService` backs the GUI, `/pro/*` and the companion.
   `view()` is the single projection and the single "is Pro on" predicate - the
   tray, the HTTP 503 and the widget all read it.
+- **A cache is keyed on its inputs, not only on the clock.** `recoveryPlans`
+  memoizes for 2s because a plan costs a statSync per task, and for most of the
+  projection a TTL is the whole key. Recovery is the exception: herdr's
+  availability is an input to every verdict, so the memo also records the
+  availability it was computed under and misses when that flips. A TTL alone let
+  the plans computed while the bridge was down answer the rebuild the reconnect
+  triggered, and on a quiet bench nothing asks again - so one frame carried both
+  "herdr is online" and a plan saying herdr is not running, in the projection
+  whose job is to be read right after a restart. `tests/proService.test.ts` pins
+  both halves: the miss on a reconnect inside the window, and the hit that keeps
+  a memo a memo.
 - **Pure decisions live in `src/shared/*.ts`** with no DOM and no electron
   import, and are tested in `tests/*.test.ts`. `hotkey.ts`, `termKeys.ts`,
   `companionLink.ts`, `proIpc.ts` are the precedents. A rule that cannot be
@@ -269,6 +317,36 @@ without reading those first.
   is the same `GET /pro/state` route as `state`, sliced differently, so the
   count in the `state` footer and the count in `recovery` cannot drift apart;
   the e2e case asserts both strings off one seeded task.
+- **The stream carries that same payload, not a change event.** A `/pro/stream`
+  frame is `/pro/state`'s body plus `kind`, which is why the terminal cannot be
+  told something the window was not. The smaller design - a frame per change,
+  shaped like the change - would have been a second projection with its own idea
+  of what a task is called, and the diff is exactly the kind of thing two
+  implementations of it disagree about at 2am.
+- **The watcher asks for nothing.** `pro watch` never calls `/pro/state`: the
+  route writes the first frame before it subscribes and every later frame
+  arrives because the bench moved. The round trip asserts the fake's
+  `viewCalls()` does not change, since a watcher that quietly polls between
+  pushes would pass every rendering test and still be a poll.
+- **No timeout on the stream, and no reconnect either.** `requestJson`'s 5s read
+  budget would cut a quiet watcher off and report a fault where nothing went
+  wrong, so `streamNdjson` arms no timer at all: liveness is the relay's ping
+  and the socket's own close. What it deliberately does not do is reattach - a
+  stream that ends is exit 3 with the reason on stderr and the restart is the
+  shell's job. That is gap 4, not a decision anybody should defend.
+- **The watcher cap is a leak guard, not a product limit.** `PRO_STREAM_MAX` is
+  16 subscribers, each a socket written to on every change; the 429 says "close
+  one" and the CLI turns it into exit 5, the code for "understood and refused"
+  rather than the one for "broken".
+- **A burst is capped at twelve lines and then points at the tree.** herdr
+  reconnecting marks every task at once, and forty identical transitions scroll
+  the one you wanted off the screen. The cap is not a lie about the bench,
+  because all of it is one keystroke away.
+- **An attention change names the task, not the ask.** One line has one subject
+  slot, and every other one-line surface leads with the task title too (the
+  queue head, the companion bubble); the ask is what `pro attention` prints. The
+  item's own title is the fallback, because a line naming nothing is the one a
+  watcher cannot act on.
 - **An answer is a verb, not an exception to that rule.** The bubble sends
   `act`/`answer` with text and lets `planAttentionAction` decide what reaches the
   pane; it never sends keystrokes. `routeCanAnswer` reads the action list main
@@ -352,6 +430,26 @@ without reading those first.
    exactly and says the same way on a loaded box. `matchaVoice` still does real
    synthesis (2.5s a render), so it remains the candidate for an occasional red
    run that does not reproduce.
+
+   Gate four looked like it had one of its own, and it did not: the recovery
+   case that failed one run in three with `offline` where it expected `lost` was
+   a real bug wearing a flake's clothes. `recoveryPlans` memoized on a 2s TTL
+   and on nothing else, while herdr's availability is an input to every verdict
+   (`planRecovery` answers `offline` whenever the bridge is down). So the plans
+   computed while the bridge was still connecting were still "fresh" for the
+   rebuild the reconnect triggered, and on a quiet bench nothing invalidates
+   again: the recovery tab then says "herdr is not running" over a task that is
+   merely lost, and keeps saying it. A trace harness is what settled the
+   question - it printed `online=true verdict=offline` and held that for 33s,
+   and a race does not settle into a state. Fixed by keying the memo on the
+   availability it was computed under as well as on the clock (section 5), and
+   pinned by `tests/proService.test.ts`, the first direct test of the service:
+   the reconnect case goes red on the old condition, and the case beside it goes
+   red on the lazy fix, which is recomputing every time. The `beforeAll` wait
+   from section 3 stays, because the built-CLI cases should not depend on when
+   the bridge finishes connecting, but it was never the fix: the failure
+   reproduced once with the wait in place, and that is what turned a suspected
+   race into a bug hunt.
 2. **macOS.** Nothing has been run there. What has been checked from this side
    of it: the darwin voice runtimes resolve at the pinned versions
    (`sherpa-onnx-darwin-arm64@1.13.8`, and the `x64` build), and so does the FFI
@@ -372,6 +470,14 @@ without reading those first.
    reorders two states arrives as a diff in somebody else's expectation. A
    `proTree.test.ts` pinning the group key (repo root, else workdir), the label,
    the ordering and the counts is the cheapest gap on this list.
+4. **`pro watch` does not reattach.** A stream that ends or breaks exits 3 with
+   the reason on stderr, which is the right exit code and thin ergonomics for a
+   terminal left open across a laptop suspend or an app restart: CodeWaifu comes
+   back and the watcher is still gone, silently. `streamNdjson` already hands
+   back a `closed` reason, so reconnecting with a backoff and reprinting the
+   tree is a small change in `runProWatch` - it needs a retry ceiling and a line
+   saying "the bench went away, retrying", because a watcher that reconnects
+   without telling you hides the restart it just survived.
 
 ## 7. 中文速览
 
@@ -387,7 +493,7 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F8 都已实现并有单测（984 passed / 12 skipped，skipped 是 Windows 专用）。
+- 状态：F1-F9 都已实现并有单测（1022 passed / 12 skipped，skipped 是 Windows 专用）。
 - 面板桥接起不来时不再吐裸 errno：ENOENT 变成「装上 herdr，或把 pro.herdrPath
   指到可执行文件」，EACCES/EPERM 变成「chmod +x」，认不出的消息原文照抄；重试
   退避 1s→8s，一帧到达就把错误文案和连续计数一起清零。
@@ -469,9 +575,34 @@ without reading those first.
   事上只能撒谎。e2e 里三个新用例直接跑**打好的 CLI**（`electron <repo> pro state`，
   自己的 `CODEWAIFU_HOME`，对着同一个假 herdr），这是 argv 路由、endpoint 握手和渲染
   第一次作为一个产物被验，而不是三个各自绿的单测。
+- 终端还能挂着看（F9）：`codewaifu pro watch`（别名 `tail` / `follow`）先打一遍树，之后
+  **每个变化一行**，ctrl-c 退出且退出码是 0——「人停的」和「它坏了」（3）必须分得开，否则
+  `while codewaifu pro watch; do ...; done` 没法写。它读的是唯一一条推送路由 `GET /pro/stream`，
+  帧就是 `/pro/state` 的 body 再加一个 `kind`，所以没有第二份投影可以漂；变化由
+  `ProService.onChange` 推，通知点在 `emitState` 里（签名去重已经在那儿，pane 每秒重绘也只是
+  一帧），关机时推一次 `null`——bench 都没了还在打最后一棵树，是在描述一个不存在的世界。
+  心跳 ping 只在 `--json` 下打出来：它是给 socket 的活性证明，不是给人的新闻，二十秒一行
+  「什么也没发生」正是 watcher 要消掉的噪音。一帧最多 12 行，超了就指向 `pro state`（herdr
+  重连会一次标记所有任务，四十行相同的迁移会把你要的那行冲走）；bench 回来时**重打整棵树**，
+  而不是把每个任务报成「新增」。变化行是「时钟 + 标签 + 主体 + 完整 id」，标题让位、id 不让位，
+  因为 id 是下一条命令的参数；注意力那行报的是**任务名**而不是问题原文（一行只有一个主体位，
+  队列头和浮窗气泡也都以任务名开头，问题原文是 `pro attention` 的活）。429（超过 16 个
+  watcher）走退出码 5，文案是「先关一个」。`pro watch | head -40` 也不会炸：stdout 的 EPIPE
+  被接住了，否则它是一条压在最后一行输出上的未捕获异常。e2e 第四例给真子进程发 SIGINT，
+  量的就是这个 0。
+- 服务层终于有了自己的测试（`tests/proService.test.ts`，第一个直测 `ProService` 的文件；
+  此前它只被第四道闸当成一个整体产物验）。钉的是一个真 bug：recovery 计划那份 2 秒 memo
+  过去只按**时钟**判新鲜，而「herdr 在不在线」是每个 verdict 的输入，于是重连触发的那次
+  重建拿到的还是离线时算出来的计划——同一帧里既写着 herdr 已连接、又写着「herdr 没在跑」，
+  而安静的 bench 上不会再有人来问第二次。修法是把 memo 也按「算它时的在线状态」做键，
+  两个用例分别钉住「窗口内重连必须重算」和「重算不能变成每次都算」。
+  第四道闸里那个「偶发 `offline` 而不是 `lost`」因此**不是 race**：trace 打出
+  `online=true verdict=offline` 并稳定保持 33 秒——race 不会稳定成一个状态。
 - 还没做：macOS 实机验证——darwin 侧能从这边核实的都核实了（语音运行时与 koffi 在
   registry 上按 pin 版本可解、`build/` 只有 `icon.png` 没有 `icon.icns`、并且**没有**
   macOS 自启动：`install.sh --autostart` 只写 `~/.config/autostart`，没有 LoginItems
   这条路）；以及给树的投影（`buildBench` / `deriveGroups` / `groupKeyFor` /
   `compareTasks`）补一个自己的 `proTree.test.ts`，现在它们只被 `proCli.test.ts` 当
   fixture 工厂间接覆盖。
+  还有一条是 `pro watch` **不重连**：流断了就是退出码 3 加原因，重开是 shell 的事，所以
+  笔记本合盖再打开、或者 app 重启之后，那个终端窗口会安静地停在过去（第 6 节缺口 4）。

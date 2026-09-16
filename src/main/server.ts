@@ -34,6 +34,16 @@ const MAX_BODY = 256 * 1024
 const MEDIA_COMMANDS = new Set<MediaCommand>(['toggle', 'play', 'pause', 'next', 'previous'])
 
 /**
+ * How many `GET /pro/stream` watchers one app serves, and how often each gets a
+ * ping. The cap is a leak guard rather than a limit anybody should hit: a
+ * watcher is a subscriber on the bench's own projection, so an unbounded count
+ * would be an unbounded set of sockets notified on every change. Exported
+ * because a test that waits for a real 20s ping is not a test.
+ */
+export const PRO_STREAM_MAX = 16
+export const PRO_STREAM_HEARTBEAT_MS = 20_000
+
+/**
  * The slice of the bench the relay needs (F6), declared here instead of imported
  * from `main/pro/service`: `ProService` satisfies it structurally, so the server
  * can be tested against a fake and never learns how the bench works.
@@ -48,6 +58,11 @@ export interface ProApi {
   act(request: ProActionRequest): Promise<ProResult>
   taskOp(request: ProTaskRequest): Promise<ProResult>
   ledgerOp(request: ProLedgerRequest): ProResult
+  /**
+   * Subscribe to the projection; `/pro/stream` hands one listener per watcher
+   * to the bench and unsubscribes when that watcher's socket closes.
+   */
+  onChange(listener: (view: BenchView | null) => void): () => void
 }
 
 export interface ServerDeps {
@@ -103,6 +118,7 @@ export class HookServer {
   private identity: ServerIdentity = { boot: '', pid: 0, version: '0.0.0' }
   private reason: BindReason = 'none'
   private failures: BindFailure[] = []
+  private readonly streams = new Set<http.ServerResponse>()
 
   constructor(private readonly deps: ServerDeps) {}
 
@@ -209,6 +225,7 @@ export class HookServer {
     this.server = null
     this.port = 0
     this.reason = 'none'
+    this.endStreams()
     if (server) {
       try {
         server.removeAllListeners()
@@ -237,6 +254,9 @@ export class HookServer {
       timer.unref?.()
     })
     try {
+      // Ended rather than reset, so a watcher prints "the app went away"
+      // instead of a socket error that reads like our bug.
+      this.endStreams()
       server.closeAllConnections?.()
       server.close()
     } catch {
@@ -430,6 +450,11 @@ export class HookServer {
       return
     }
 
+    if (method === 'GET' && sub === 'stream') {
+      this.streamPro(req, res, pro)
+      return
+    }
+
     if (method !== 'POST') {
       sendJson(res, 404, { ok: false, error: `no route for ${method} ${pathname}` })
       return
@@ -481,6 +506,89 @@ export class HookServer {
     }
 
     sendJson(res, 404, { ok: false, error: `no route for ${method} ${pathname}` })
+  }
+
+  /**
+   * `GET /pro/stream`: the projection, pushed instead of polled.
+   *
+   * One NDJSON frame per change, and a frame body is the one `/pro/state`
+   * answers with plus a `kind`, so a consumer that understands one understands
+   * the other and there is no second projection free to drift. The first frame
+   * is written here rather than by the subscription, because a watcher that
+   * must wait for something to change before it prints anything looks broken
+   * during the quiet parts of a session.
+   *
+   * The ping is liveness, not data: on loopback a dead app is caught by the
+   * socket anyway, but "quiet for an hour" and "gone" should not be the same
+   * silence to whatever is printing them.
+   */
+  private streamPro(req: http.IncomingMessage, res: http.ServerResponse, pro: ProApi): void {
+    if (this.streams.size >= PRO_STREAM_MAX) {
+      sendJson(res, 429, {
+        ok: false,
+        code: 'too-many-watchers',
+        error: `${PRO_STREAM_MAX} watchers are already attached to this bench`
+      })
+      return
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive'
+    })
+    this.streams.add(res)
+
+    const write = (frame: Record<string, unknown>): void => {
+      if (res.writableEnded || res.destroyed) return
+      try {
+        res.write(`${JSON.stringify(frame)}\n`)
+      } catch {
+        // A write that throws is a socket that is already gone; `close` does the
+        // cleanup, and rethrowing here would take the request handler with it.
+      }
+    }
+
+    const frameFor = (view: BenchView | null): Record<string, unknown> => ({
+      kind: 'state',
+      ok: true,
+      online: pro.online(),
+      running: view !== null,
+      view
+    })
+
+    write(frameFor(pro.view()))
+
+    const unsubscribe = pro.onChange((view) => write(frameFor(view)))
+    const heartbeat = setInterval(
+      () => write({ kind: 'ping', at: Date.now() }),
+      PRO_STREAM_HEARTBEAT_MS
+    )
+    // Neither the heartbeat nor the subscription may outlive the process that
+    // asked for them: a leaked interval keeps the event loop alive, and a
+    // leaked subscriber is a bench notifying a socket nobody reads.
+    heartbeat.unref?.()
+
+    const cleanup = (): void => {
+      clearInterval(heartbeat)
+      unsubscribe()
+      this.streams.delete(res)
+    }
+    req.on('close', cleanup)
+    req.on('error', cleanup)
+    res.on('close', cleanup)
+  }
+
+  /** Close every watcher, so `stop()` is not left waiting on sockets it owns. */
+  private endStreams(): void {
+    for (const res of [...this.streams]) {
+      this.streams.delete(res)
+      try {
+        if (!res.writableEnded) res.end()
+      } catch {
+        /* the socket is already gone */
+      }
+    }
   }
 }
 

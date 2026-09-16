@@ -435,6 +435,9 @@ export class ProService implements CompanionApi {
   private lastCompanionKey = ''
   private recoveryCache: RecoveryPlan[] | null = null
   private recoveryAt = 0
+  /** The herdr availability the memo was computed under; see `recoveryPlans`. */
+  private recoveryOnline = false
+  private readonly viewers = new Set<(view: BenchView | null) => void>()
 
   private running = false
   private armingAt = 0
@@ -567,6 +570,9 @@ export class ProService implements CompanionApi {
     if (wasRunning) this.registry.save()
     this.cached = null
     this.lastSignature = ''
+    // Last frame, so a terminal watching the bench prints "it went away"
+    // instead of holding a stale tree that still looks live.
+    if (wasRunning) this.notifyView(null)
   }
 
   get isRunning(): boolean {
@@ -957,6 +963,36 @@ export class ProService implements CompanionApi {
     return this.cached ?? this.rebuild()
   }
 
+  /**
+   * Subscribe to the projection, for the callers that are not the window: the
+   * relay hands one of these to every `GET /pro/stream` watcher.
+   *
+   * Notified from `emitState`, which is where the signature dedupe already
+   * lives, so a pane repainting several times a second does not become a
+   * firehose down a socket. `null` arrives once, on shutdown, because a watcher
+   * that keeps printing the last view after the bench is gone is reporting a
+   * world that no longer exists. The return value is its own unsubscribe: a
+   * subscriber that outlives its connection is a leak the server cannot see.
+   */
+  onChange(listener: (view: BenchView | null) => void): () => void {
+    this.viewers.add(listener)
+    return () => {
+      this.viewers.delete(listener)
+    }
+  }
+
+  private notifyView(view: BenchView | null): void {
+    for (const listener of [...this.viewers]) {
+      try {
+        listener(view)
+      } catch (error) {
+        // A watcher's socket is not the bench's business, and one broken
+        // consumer must not stop the projection reaching the window.
+        this.host.log('error', 'pro: a view subscriber threw', { error: String(error) })
+      }
+    }
+  }
+
   private rebuild(): BenchView {
     const now = this.timers.now()
     const tasks = this.registry.tasks()
@@ -1004,13 +1040,26 @@ export class ProService implements CompanionApi {
     }
   }
 
-  /** Recovery plans cost a statSync per task, so they are memoized briefly. */
+  /**
+   * Recovery plans cost a statSync per task, so they are memoized briefly.
+   *
+   * The memo is keyed on herdr's availability as well as on the clock, because
+   * availability is an input to every verdict: `planRecovery` answers `offline`
+   * while the bridge is down and a real verdict once it is up. A TTL alone lets
+   * the two straddle a reconnect - the plans computed while herdr was down are
+   * still fresh when herdr coming back triggers the rebuild, and on a quiet
+   * bench nothing invalidates again, so the recovery tab keeps saying "herdr is
+   * not running" over a task that is merely lost. Indefinitely, in the one
+   * projection whose whole job is to be read right after a restart.
+   */
   private recoveryPlans(force = false): RecoveryPlan[] {
     const now = this.timers.now()
+    const online = this.online()
     if (
       !force &&
       this.recoveryCache &&
       this.recoveryAt &&
+      this.recoveryOnline === online &&
       now - this.recoveryAt < this.intervals.recoveryTtlMs
     ) {
       return this.recoveryCache
@@ -1019,6 +1068,7 @@ export class ProService implements CompanionApi {
     const plans = this.recovery.planAll(tasks, this.ledger.allDigests(tasks.map((task) => task.id)))
     this.recoveryCache = plans
     this.recoveryAt = now
+    this.recoveryOnline = online
     return plans
   }
 
@@ -1047,6 +1097,7 @@ export class ProService implements CompanionApi {
     if (signature !== this.lastSignature) {
       this.lastSignature = signature
       this.host.emit(IPC.pushProState, view)
+      this.notifyView(view)
     }
     // Always sync the widget: the badge is the one number that answers "do I
     // have to go back?", and it must not lag because the tree did not change.

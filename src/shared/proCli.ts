@@ -24,6 +24,7 @@
 import { attentionActions, needsRecovery, recoveryStepText, waitedMs } from './pro'
 import type {
   AttentionItem,
+  AttentionKind,
   BenchView,
   GroupView,
   LedgerDigest,
@@ -39,6 +40,7 @@ export type ProCliVerb =
   | 'state'
   | 'attention'
   | 'recovery'
+  | 'watch'
   | 'answer'
   | 'new'
   | 'log'
@@ -102,6 +104,10 @@ export function exitForStatus(status: number): number {
   if (status === 401 || status === 403) return PRO_EXIT.token
   if (status === 404) return PRO_EXIT.missing
   if (status === 409) return PRO_EXIT.refused
+  // 429 is only ever `too-many-watchers`: the relay understood the request and
+  // declined it, which is what exit 5 means, and a script that reads 1 here
+  // would go looking for a bug instead of for a watcher to close.
+  if (status === 429) return PRO_EXIT.refused
   if (status === 503) return PRO_EXIT.offline
   return PRO_EXIT.fault
 }
@@ -161,6 +167,8 @@ See the bench:
   attention                   the ranked queue, with the ids an answer needs
   recovery                    what survived the last interruption, and what it takes
                               (read-only: the Bench window applies a plan)
+  watch                       the tree, then one line per change until ctrl-c
+                              (--json streams the raw frames, for a script)
 
 Act on it:
   answer <id> <text...>       answer an agent; <id> is an item id or a task id
@@ -317,6 +325,14 @@ export function parseProCli(args: readonly string[]): ProCliParse {
       // route `state` reads: no new surface, and no way for the terminal to be
       // told something the window was not.
       return call('recovery', 'GET', '/pro/state', null, json)
+
+    case 'watch':
+    case 'tail':
+    case 'follow':
+      // The one route that pushes. Same payload as `state`, delivered per change
+      // instead of per poll, so the runner treats it as its own verb: a request
+      // that never finishes cannot go through the read path's timeout.
+      return call('watch', 'GET', '/pro/stream', null, json)
 
     case 'answer':
     case 'approve':
@@ -538,9 +554,20 @@ function markFor(task: TaskView): string {
   return MARK[task.liveStatus] ?? '?'
 }
 
+/**
+ * The state a row is in, as one word.
+ *
+ * Extracted from the row renderer because `watch` has to compare two frames and
+ * say what changed: a parked task and a lost one are both "not what herdr
+ * reports", and if the transition vocabulary lived in two places the tree and
+ * the stream would name the same moment differently.
+ */
+function taskState(task: TaskView): string {
+  return task.status === 'lost' || task.status === 'parked' ? task.status : task.liveStatus
+}
+
 function stateWord(task: TaskView): string {
-  const base =
-    task.status === 'lost' || task.status === 'parked' ? task.status : task.liveStatus
+  const base = taskState(task)
   return task.blockedMs > 0 ? `${base} ${durShort(task.blockedMs)}` : base
 }
 
@@ -918,6 +945,9 @@ export function failureFor(status: number, json: unknown): { text: string; exit:
   if (status === 404 && error.startsWith('no route')) {
     return { text: offlineText('old-app', error), exit: PRO_EXIT.offline }
   }
+  if (status === 429) {
+    return { text: watchersText(error), exit: PRO_EXIT.refused }
+  }
   if (status === 503) {
     const detail = field(json, 'detail') || error
     const reason = field(json, 'code') === 'not-running' ? 'pro-off' : 'no-herdr'
@@ -943,4 +973,250 @@ export function tokenText(): string {
     '',
     'restart CodeWaifu (it rewrites ~/.codewaifu/endpoint.env), then try again.'
   ].join('\n')
+}
+
+/** The bench is already being watched by as many terminals as it will serve. */
+export function watchersText(detail = ''): string {
+  const lines = [detail || 'this bench already has the most watchers it will serve.']
+  lines.push('', 'close one (ctrl-c in the terminal running it), then try again.')
+  return lines.join('\n')
+}
+
+/* ------------------------------------------------------------------ *
+ * Watching: the projection, pushed
+ * ------------------------------------------------------------------ */
+
+/**
+ * One thing that changed between two frames.
+ *
+ * A watcher that reprints the tree on every change is unreadable within a
+ * minute, and one that prints "something changed" is useless, so the diff is a
+ * named list. Six categories, and each is a fact the projection already
+ * carries: nothing here infers a state the bench did not report.
+ *
+ * `change` is the discriminant rather than `kind` because `kind` already means
+ * one of the five things an agent can need, and a union where both senses of the
+ * word appear in one object is a bug waiting for a rename.
+ */
+export type ProChange =
+  | { change: 'bench'; running: boolean }
+  | { change: 'herdr'; online: boolean; version: string; error: string }
+  | { change: 'task'; added: boolean; id: string; title: string }
+  | { change: 'status'; id: string; title: string; from: string; to: string; needsMe: number }
+  | {
+      change: 'attention'
+      arrived: boolean
+      id: string
+      kind: AttentionKind
+      title: string
+      taskId: string
+    }
+  | { change: 'recovery'; id: string; title: string; from: string; to: string }
+
+/**
+ * How many change lines one frame may print before it points at `pro state`.
+ *
+ * A burst is real - herdr reconnecting marks every task at once - and a wall of
+ * forty identical transitions scrolls the one line you wanted off the screen.
+ * The cap is not a lie about the bench, because the tree is one keystroke away
+ * and says all of it.
+ */
+export const PRO_WATCH_MAX = 12
+
+/** The line under the tree that says what this command is doing. */
+export const PRO_WATCH_HINT =
+  'watching: one line per change, until ctrl-c. codewaifu pro state redraws the tree.'
+
+const CLOCK_W = 8
+const TAG_W = 10
+/** The head every change line starts with, so the tags line up down the page. */
+const CHANGE_HEAD_W = CLOCK_W + 2 + TAG_W + 2
+
+/**
+ * What two frames differ in, in the order a person wants to read it.
+ *
+ * Infrastructure first, then what needs a decision, then what merely moved, and
+ * the clears last: the last line on the screen should be the good news. `null`
+ * on either side means there is no tree to compare, so the only honest report is
+ * that the bench went away or came back.
+ */
+export function diffProViews(
+  prev: ProStatePayload | null | undefined,
+  next: ProStatePayload | null | undefined
+): ProChange[] {
+  const changes: ProChange[] = []
+  const before = prev?.view ?? null
+  const after = next?.view ?? null
+  if ((before !== null) !== (after !== null)) changes.push({ change: 'bench', running: after !== null })
+  if (!before || !after) return changes
+
+  const herdr: ProChange[] = []
+  if (Boolean(before.herdr?.online) !== Boolean(after.herdr?.online)) {
+    herdr.push({
+      change: 'herdr',
+      online: Boolean(after.herdr?.online),
+      version: after.herdr?.version ?? '',
+      error: after.herdr?.error ?? ''
+    })
+  }
+
+  const wasThere = new Map(before.tasks.map((task) => [task.id, task]))
+  const isThere = new Set(after.tasks.map((task) => task.id))
+  const added: ProChange[] = []
+  const removed: ProChange[] = []
+  const status: ProChange[] = []
+  const recovery: ProChange[] = []
+  for (const task of after.tasks) {
+    const was = wasThere.get(task.id)
+    if (!was) {
+      added.push({ change: 'task', added: true, id: task.id, title: task.title })
+      continue
+    }
+    const from = taskState(was)
+    const to = taskState(task)
+    if (from !== to) {
+      status.push({
+        change: 'status',
+        id: task.id,
+        title: task.title,
+        from,
+        to,
+        needsMe: num(task.needsMe)
+      })
+    }
+    const verdictFrom = was.recovery || ''
+    const verdictTo = task.recovery || ''
+    if (verdictFrom !== verdictTo) {
+      recovery.push({
+        change: 'recovery',
+        id: task.id,
+        title: task.title,
+        from: verdictFrom,
+        to: verdictTo
+      })
+    }
+  }
+  for (const task of before.tasks) {
+    if (!isThere.has(task.id)) {
+      removed.push({ change: 'task', added: false, id: task.id, title: task.title })
+    }
+  }
+
+  // An attention id is stable across re-renders (`taskId:kind:origin`), which is
+  // what makes "arrived" and "left" a set difference rather than a guess.
+  const arrived: ProChange[] = []
+  const left: ProChange[] = []
+  const openBefore = new Map(before.attention.map((item) => [item.id, item]))
+  const openAfter = new Set(after.attention.map((item) => item.id))
+  for (const item of after.attention) {
+    if (openBefore.has(item.id)) continue
+    arrived.push({
+      change: 'attention',
+      arrived: true,
+      id: item.id,
+      kind: item.kind,
+      title: item.taskTitle || item.title,
+      taskId: item.taskId
+    })
+  }
+  for (const item of before.attention) {
+    if (openAfter.has(item.id)) continue
+    left.push({
+      change: 'attention',
+      arrived: false,
+      id: item.id,
+      kind: item.kind,
+      title: item.taskTitle || item.title,
+      taskId: item.taskId
+    })
+  }
+
+  return [...changes, ...herdr, ...arrived, ...status, ...recovery, ...added, ...removed, ...left]
+}
+
+/** The first frame: the whole tree, plus what the command will do next. */
+export function renderProWatchStart(
+  payload: ProStatePayload | null | undefined,
+  width = 100
+): string {
+  return `${renderProState(payload, width)}\n\n${PRO_WATCH_HINT}`
+}
+
+/**
+ * One change, one line: clock, tag, then the subject.
+ *
+ * Ids are printed whole and the title gives way, the rule the recovery list
+ * already follows - a clipped id is a command nobody can type, and the whole
+ * reason to watch from a terminal is to answer from the same terminal.
+ */
+export function renderProChange(change: ProChange, at: number, width = 100): string {
+  const head = `${clock(at)}  ${pad(tagFor(change), TAG_W)}  `
+  const body = bodyFor(change)
+  const id = idFor(change)
+  if (!id) return `${head}${clip(body, Math.max(8, width - head.length))}`.trimEnd()
+  const room = Math.max(8, width - head.length - id.length - 2)
+  return `${head}${clip(body, room)}  ${id}`.trimEnd()
+}
+
+/** A frame's worth of changes, capped, with the way to see the rest. */
+export function renderProChanges(
+  changes: readonly ProChange[],
+  at: number,
+  width = 100
+): string {
+  const shown = changes.slice(0, PRO_WATCH_MAX)
+  const lines = shown.map((change) => renderProChange(change, at, width))
+  const rest = changes.length - shown.length
+  if (rest > 0) {
+    lines.push(
+      `${' '.repeat(CHANGE_HEAD_W)}+ ${rest} more ${rest === 1 ? 'change' : 'changes'}: codewaifu pro state`
+    )
+  }
+  return lines.join('\n')
+}
+
+function tagFor(change: ProChange): string {
+  switch (change.change) {
+    case 'bench':
+      return 'bench'
+    case 'herdr':
+      return 'herdr'
+    case 'task':
+      return change.added ? '+ task' : '- task'
+    case 'status':
+      return 'status'
+    case 'recovery':
+      return 'recovery'
+    default:
+      return change.arrived ? 'needs you' : 'cleared'
+  }
+}
+
+function bodyFor(change: ProChange): string {
+  switch (change.change) {
+    case 'bench':
+      return change.running ? 'the bench is back' : 'the bench stopped'
+    case 'herdr':
+      if (!change.online) return `offline${change.error ? `: ${change.error}` : ''}`
+      return `online ${change.version || ''}`.trim()
+    case 'task':
+      return change.title || '(untitled)'
+    case 'status':
+      // The count rides along because it is the number the tray shows, and a
+      // transition to `blocked` without it does not say how much is waiting.
+      return `${change.from} -> ${change.to}${change.needsMe > 1 ? ` (${change.needsMe} need you)` : ''}  ${change.title || '(untitled)'}`
+    case 'recovery':
+      return `${change.from || 'intact'} -> ${change.to || 'intact'}  ${change.title || '(untitled)'}`
+    default:
+      return `${change.kind}  ${change.title || change.taskId || '(untitled)'}`
+  }
+}
+
+/**
+ * The id worth printing whole, or '' when the line is about the bench itself.
+ * Every other category names a task or an item, and both are what the command
+ * you type next takes as an argument.
+ */
+function idFor(change: ProChange): string {
+  return change.change === 'bench' || change.change === 'herdr' ? '' : change.id
 }

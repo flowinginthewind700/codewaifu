@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron, type ElectronApplication, type Page } from 'playwright-core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../../src/shared/pro'
+import { PRO_WATCH_HINT, type ProStatePayload } from '../../src/shared/proCli'
 import { startFakeHerdr, type FakeHerdr } from './fakeHerdr'
 
 const require = createRequire(import.meta.url)
@@ -253,6 +254,18 @@ describe('the built CLI', () => {
    * This spawns the packaged entry point the way `~/.local/bin/codewaifu` does
    * after `install.sh`, and reads what a terminal would read.
    */
+
+  /*
+   * The window paints from the registry on disk, so "the Bench is up" is not
+   * yet "herdr is online", and the bridge is a real socket on a real backoff.
+   * Every case below reads a projection that says `offline` until it is - and
+   * `pro recovery` then reports "herdr is not running" over its verdict about
+   * the task, which is a late answer that reads as a wrong one.
+   */
+  beforeAll(async () => {
+    await waitHerdrOnline()
+  }, BOOT_TIMEOUT_MS + 5_000)
+
   it('prints the tree the window is showing', async () => {
     const run = await builtCli(['pro', 'state'])
     expect(run.code, run.diag).toBe(0)
@@ -285,6 +298,21 @@ describe('the built CLI', () => {
     } finally {
       fs.rmSync(empty, { recursive: true, force: true })
     }
+  })
+
+  it('watches until ctrl-c, and exits 0 because a person stopped it', async () => {
+    /*
+     * The one verb that does not finish, so the signal is part of its contract:
+     * `while codewaifu pro watch; do ...; done` needs "I stopped it" (0) to be
+     * distinguishable from "it broke" (3). Only a real child process can prove
+     * the handler ran - in-process, `process.emit('SIGINT')` would be testing
+     * vitest's own signal handling - which is why this case lives here.
+     */
+    const run = await builtCliWatch(['pro', 'watch'], PRO_WATCH_HINT)
+    expect(run.painted, run.diag).toBe(true)
+    expect(run.out, run.diag).toContain(TASK_TITLE)
+    expect(run.code, run.diag).toBe(0)
+    expect(run.err, run.diag).not.toContain('the stream broke')
   })
 })
 
@@ -325,17 +353,9 @@ interface CliRun {
  * home" case can point at a directory with no endpoint file in it.
  */
 function builtCli(args: string[], homeOverride?: string): Promise<CliRun> {
-  const env: Record<string, string> = {}
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) env[key] = value
-  }
-  env.CODEWAIFU_HOME = homeOverride ?? home
-  env.ELECTRON_DISABLE_SANDBOX = '1'
-  env.CODEWAIFU_E2E = '1'
-  delete env.ELECTRON_RENDERER_URL
   return new Promise((resolve, reject) => {
     const child = spawn(require('electron') as string, [root, ...args], {
-      env,
+      env: cliEnv(homeOverride),
       stdio: ['ignore', 'pipe', 'pipe']
     })
     const out: string[] = []
@@ -354,6 +374,118 @@ function builtCli(args: string[], homeOverride?: string): Promise<CliRun> {
         err: stderr,
         diag: [
           `exit=${code}`,
+          `stdout=${JSON.stringify(stdout.slice(0, 700))}`,
+          `stderr=${JSON.stringify(stderr.slice(-400))}`
+        ].join(' ')
+      })
+    })
+  })
+}
+
+/**
+ * Poll `pro state --json` until main's herdr bridge reports itself online.
+ *
+ * Waiting on the verb the cases assert through is deliberate: a window locator
+ * would prove the *renderer* believes it, which is one more projection free to
+ * disagree with the one under test. A bridge that never comes up fails here,
+ * with the CLI's own diagnostics attached, instead of as a confusing verdict
+ * two cases later.
+ */
+async function waitHerdrOnline(timeoutMs = BOOT_TIMEOUT_MS): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let last = 'no attempt'
+  for (;;) {
+    const run = await builtCli(['pro', 'state', '--json'])
+    last = run.diag
+    if (run.code === 0 && herdrOnlineIn(run.out)) return
+    if (Date.now() >= deadline) {
+      throw new Error(`herdr never came online for the CLI; last attempt: ${last}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+}
+
+/** `--json` prints the relay's payload verbatim, so it is read as one. */
+function herdrOnlineIn(stdout: string): boolean {
+  try {
+    return (JSON.parse(stdout) as ProStatePayload).view?.herdr?.online === true
+  } catch {
+    return false
+  }
+}
+
+/** The environment a terminal hands the installed launcher. */
+function cliEnv(homeOverride?: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value
+  }
+  env.CODEWAIFU_HOME = homeOverride ?? home
+  env.ELECTRON_DISABLE_SANDBOX = '1'
+  env.CODEWAIFU_E2E = '1'
+  // `npm run dev` exports this, and a shell that still has it would point the
+  // CLI at a dev server that is not running.
+  delete env.ELECTRON_RENDERER_URL
+  return env
+}
+
+interface WatchRun {
+  code: number
+  out: string
+  err: string
+  /** True once `marker` reached the terminal, which is when ctrl-c was sent. */
+  painted: boolean
+  diag: string
+}
+
+/**
+ * Run a verb that does not finish, and stop it the way a person does.
+ *
+ * `builtCli` resolves on exit, so it cannot serve `watch`: something has to end
+ * the child, and what ends it *is* the assertion. SIGINT goes to the child once
+ * `marker` has been printed, and the code that comes back is the one the CLI
+ * chose for "a human stopped me". A child that never prints gets SIGKILL at the
+ * deadline, so a hung bundle fails as `painted: false` with its own output
+ * attached rather than holding the suite open.
+ */
+function builtCliWatch(args: string[], marker: string, timeoutMs = 30_000): Promise<WatchRun> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(require('electron') as string, [root, ...args], {
+      env: cliEnv(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    const out: string[] = []
+    const err: string[] = []
+    let painted = false
+    let gaveUp = false
+    const deadline = setTimeout(() => {
+      gaveUp = true
+      child.kill('SIGKILL')
+    }, timeoutMs)
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      out.push(chunk)
+      if (painted || !out.join('').includes(marker)) return
+      painted = true
+      child.kill('SIGINT')
+    })
+    child.stderr.on('data', (chunk: string) => err.push(chunk))
+    child.on('error', (error) => {
+      clearTimeout(deadline)
+      reject(error)
+    })
+    child.on('close', (code, signal) => {
+      clearTimeout(deadline)
+      const stdout = out.join('')
+      const stderr = err.join('')
+      resolve({
+        code: code ?? -1,
+        out: stdout,
+        err: stderr,
+        painted,
+        diag: [
+          `exit=${code} signal=${signal ?? '-'}${gaveUp ? ' (the marker never arrived)' : ''}`,
           `stdout=${JSON.stringify(stdout.slice(0, 700))}`,
           `stderr=${JSON.stringify(stderr.slice(-400))}`
         ].join(' ')

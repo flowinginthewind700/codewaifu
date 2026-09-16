@@ -260,6 +260,7 @@ front of everything below.
 ```bash
 codewaifu pro                        # the verb table
 codewaifu pro state                  # the tree: groups, tasks, live states, what needs you
+codewaifu pro watch                  # the tree, then one line per change until ctrl-c
 codewaifu pro attention              # the ranked queue, with the ids an answer needs
 codewaifu pro answer <id> "yes, go ahead"
 codewaifu pro approve <id>           # or deny <id>, or snooze <id> --minutes 30
@@ -272,6 +273,12 @@ codewaifu pro park <taskId>          # stop counting it; its panes keep running
 Every verb takes `--json`. The text is ASCII and clamped to the width of the
 terminal it is printed into (60-160 columns), and ids come out whole, because an
 id you cannot copy is a command you cannot type.
+
+`watch` is the push end of the same rails. It prints the tree once, then one line
+per change until ctrl-c, and ctrl-c exits 0 so a shell loop can tell "I stopped
+it" from "it broke". `watch --json` streams the raw NDJSON frames instead, for a
+script that would rather diff them itself. The bench serves at most 16 watchers
+and says so (exit 5) instead of quietly degrading the stream for everyone.
 
 Exit codes are a contract rather than a mood, so a poll can tell "nothing needs
 me" from "nobody home": 0 ok, 2 bad arguments, 3 the bench or herdr is not
@@ -298,7 +305,7 @@ own entries.
 ```bash
 npm install
 npm run dev          # electron-vite dev with hot reload
-npm test             # vitest, 984 tests: relay harness, Pro bridge, live TTS
+npm test             # vitest, 1022 tests: relay harness, Pro bridge, live TTS
 npm run test:e2e     # needs a display; builds first, about 20s
 npm run typecheck
 npm run dist:mac     # or dist:win; artifacts land in release/

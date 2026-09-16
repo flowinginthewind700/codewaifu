@@ -9,8 +9,10 @@
  */
 import { cliStderr, cliStdout, readEndpoint } from '../cliIo'
 import { log } from '../log'
-import { isCodeWaifuPort, requestJson } from '../probe'
+import { isCodeWaifuPort, requestJson, streamNdjson } from '../probe'
+import type { Endpoint } from '../../shared/endpoint'
 import {
+  diffProViews,
   exitForStatus,
   failureFor,
   offlineText,
@@ -18,10 +20,12 @@ import {
   PRO_CLI_USAGE,
   PRO_EXIT,
   renderProAttention,
+  renderProChanges,
   renderProLedger,
   renderProRecovery,
   renderProResult,
   renderProState,
+  renderProWatchStart,
   type ProAttentionPayload,
   type ProCliCall,
   type ProStatePayload
@@ -34,6 +38,9 @@ import {
  */
 const READ_TIMEOUT_MS = 5000
 const WRITE_TIMEOUT_MS = 25000
+
+/** What the relay ending the stream means, in the words that lead to the fix. */
+const WATCH_ENDED = 'the bench closed the stream: CodeWaifu quit, or Pro was switched off.'
 
 export async function runProCli(args: readonly string[]): Promise<number> {
   const parsed = parseProCli(args)
@@ -56,6 +63,12 @@ export async function runProCli(args: readonly string[]): Promise<number> {
     cliStderr(`${offlineText('no-app')}\n`)
     return PRO_EXIT.offline
   }
+
+  // `watch` is the one verb that does not finish, so it leaves the request path
+  // here: the read timeout that protects `pro state` from a hung relay would cut
+  // a quiet watcher off after five seconds and report a fault where nothing went
+  // wrong.
+  if (parsed.verb === 'watch') return await runProWatch(point, parsed.path, parsed.json)
 
   try {
     const { status, json } = await requestJson(parsed.method, point.port, parsed.path, {
@@ -120,4 +133,130 @@ function render(parsed: ProCliCall, json: unknown, width: number): string {
 function terminalWidth(): number {
   const columns = Number(process.stdout.columns) || 0
   return Math.max(60, Math.min(160, columns || 100))
+}
+
+/**
+ * `codewaifu pro watch`: the tree once, then one line per change.
+ *
+ * Everything decided here is about *printing*, never about the bench: the diff
+ * and its words live in `shared/proCli.ts` with the rest of the rendering, so
+ * this stays the three impure things a pure module may not be (a socket, two
+ * signals, one file descriptor).
+ *
+ * `--json` prints the frames verbatim, pings included. A script that wants the
+ * push route should not have to reverse-engineer which parts of the stream we
+ * decided humans do not need.
+ */
+async function runProWatch(point: Endpoint, path: string, raw: boolean): Promise<number> {
+  const width = terminalWidth()
+  let previous: ProStatePayload | null = null
+  let shown = false
+  let interrupted = false
+  /**
+   * Frames that land before `ready` has been awaited. The relay writes its first
+   * frame before it subscribes, so this is normally empty; holding them anyway
+   * means a reordering inside the client cannot silently drop the tree.
+   */
+  const early: unknown[] = []
+  let live = false
+
+  const print = (text: string): void => cliStdout(`${text}\n`)
+
+  const onState = (payload: ProStatePayload): void => {
+    const before = previous
+    previous = payload
+    if (!shown) {
+      shown = true
+      print(renderProWatchStart(payload, width))
+      return
+    }
+    const changes = diffProViews(before, payload)
+    if (!changes.length) return
+    // A bench that came back is a new world, and the diff would report it as
+    // every task arriving at once. The tree says the same thing usefully.
+    if (changes.some((change) => change.change === 'bench' && change.running)) {
+      print(renderProWatchStart(payload, width))
+      return
+    }
+    print(renderProChanges(changes, Date.now(), width))
+  }
+
+  const consume = (frame: unknown): void => {
+    if (raw) {
+      print(JSON.stringify(frame))
+      return
+    }
+    // A ping is liveness for the socket, not news for the human: one every
+    // twenty seconds would fill the screen with lines saying nothing happened,
+    // which is the noise a watcher exists to remove.
+    if ((frame as { kind?: unknown } | null)?.kind !== 'state') return
+    onState(frame as ProStatePayload)
+  }
+
+  const handle = streamNdjson(point.port, path, {
+    token: point.token,
+    onFrame: (frame) => {
+      if (live) consume(frame)
+      else early.push(frame)
+    }
+  })
+
+  let ready
+  try {
+    ready = await handle.ready
+  } catch (error) {
+    // The socket died before the headers: the same "nobody home" the probe above
+    // can miss when the app quits in between.
+    log('error', 'pro watch could not connect', String(error))
+    cliStderr(`${offlineText('no-app')}\n`)
+    return PRO_EXIT.offline
+  }
+  if (ready.status !== 200) {
+    const failure = failureFor(ready.status, ready.json)
+    if (failure) {
+      cliStderr(`${failure.text}\n`)
+      return failure.exit
+    }
+    cliStderr(`the bench refused the stream (${ready.status})\n`)
+    return exitForStatus(ready.status)
+  }
+
+  live = true
+  for (const frame of early.splice(0)) consume(frame)
+
+  /**
+   * Ctrl-c is the documented way out, so it ends as an exit 0 rather than as a
+   * signal death: a watcher a human stopped has to be distinguishable from one
+   * that broke, or `while codewaifu pro watch; do ...` cannot be written.
+   */
+  const stop = (): void => {
+    interrupted = true
+    handle.close()
+  }
+  process.once('SIGINT', stop)
+  process.once('SIGTERM', stop)
+  /**
+   * `pro watch | head -40` is a normal thing to type. Without this, the reader
+   * leaving surfaces as an EPIPE on stdout, which Node turns into an uncaught
+   * exception and a stack trace over the last line we printed.
+   */
+  process.stdout.once('error', stop)
+
+  const closed = await handle.closed
+  process.removeListener('SIGINT', stop)
+  process.removeListener('SIGTERM', stop)
+  process.stdout.removeListener('error', stop)
+
+  if (interrupted) {
+    // A newline, so the shell prompt does not land on the last change line.
+    cliStdout('\n')
+    return PRO_EXIT.ok
+  }
+  if (closed.reason === 'error') {
+    log('error', 'pro watch stream broke', closed.detail)
+    cliStderr(`the stream broke: ${closed.detail}\n`)
+    return PRO_EXIT.offline
+  }
+  cliStderr(`${WATCH_ENDED}\n`)
+  return PRO_EXIT.offline
 }

@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { endpointFile, stateDir } from '../src/main/env'
 import { cliArgsFrom, runCli } from '../src/main/cli'
 import { runProCli } from '../src/main/pro/cli'
+import { PRO_STREAM_MAX } from '../src/main/server'
 import { renderEndpointEnv } from '../src/shared/endpoint'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
 import { portAttempts } from '../src/shared/portPolicy'
@@ -38,6 +39,7 @@ import {
   parseTaskRecord,
   planRecovery,
   recoveryStepText,
+  type AttentionItem,
   type BenchView,
   type LedgerEntry,
   type RecoveryFacts,
@@ -48,6 +50,7 @@ import { failResult, okResult } from '../src/shared/proIpc'
 import {
   clip,
   clipLeft,
+  diffProViews,
   durShort,
   exitForStatus,
   failureFor,
@@ -57,18 +60,25 @@ import {
   parseProCli,
   PRO_CLI_USAGE,
   PRO_EXIT,
+  PRO_WATCH_HINT,
+  PRO_WATCH_MAX,
   renderProAttention,
+  renderProChange,
+  renderProChanges,
   renderProLedger,
   renderProRecovery,
   renderProResult,
   renderProState,
+  renderProWatchStart,
   tokenText,
+  watchersText,
+  type ProChange,
   type ProCliCall,
   type ProCliVerb,
   type ProStatePayload
 } from '../src/shared/proCli'
 import { attentionItem, benchView, fakePro } from './helpers/pro'
-import { createTestRelay, occupyPort, type TestRelay } from './helpers/relay'
+import { createTestRelay, occupyPort, type TestRelay, type TestStream } from './helpers/relay'
 
 const NOW = 1_700_000_000_000
 const TOKEN = 'test-token-0123456789abcdef'
@@ -93,6 +103,28 @@ function outText(): string {
 
 function errText(): string {
   return written[2].join('')
+}
+
+/**
+ * Poll the way a socket event would: often, briefly, and then fail loudly.
+ *
+ * Only `watch` needs this, because it is the one verb that does not finish;
+ * every other call is awaited to its exit code. The failure carries both
+ * streams, since "the line never arrived" on its own sends the reader looking
+ * at the renderer instead of at the connection.
+ */
+async function until(check: () => boolean, what: string, ms = 2000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    if (check()) return
+    await new Promise((settle) => setTimeout(settle, 5))
+  }
+  throw new Error(`${what} within ${ms}ms\nstdout:\n${outText()}\nstderr:\n${errText()}`)
+}
+
+/** What the CLI has printed, as lines, ignoring the trailing newline. */
+function outLines(): string[] {
+  return outText().split('\n').filter((line) => line.trim())
 }
 
 beforeEach(() => {
@@ -213,14 +245,20 @@ function herdrSnapshot(rows: readonly PaneRow[]): Snapshot {
   return parsed
 }
 
-/**
- * Two tasks in two directories; the first is blocked and holds *two* open
- * decisions. That shape is the whole reason the counts below differ: the badge
- * counts items (2) and `counts.needsMe` counts tasks (1), and the CLI has to say
- * which one it is saying.
- */
-function twoTaskBench(): BenchView {
-  const tasks = [
+/** The two panes the default bench is built from, wire-shaped. */
+const PANES: readonly PaneRow[] = [
+  { paneId: 'p1', workspaceId: 'ws-1', cwd: REPO, status: 'blocked', tokens: { total: '12400' } },
+  { paneId: 'p2', workspaceId: 'ws-2', cwd: OTHER, status: 'working' }
+]
+
+/** The same two panes with the second task in a different live state. */
+function panesWith(second: string): readonly PaneRow[] {
+  return [PANES[0], { paneId: 'p2', workspaceId: 'ws-2', cwd: OTHER, status: second }]
+}
+
+/** The two task records, as records: a diff fixture adds to and removes from these. */
+function taskRecords(): TaskRecord[] {
+  return [
     taskRecord({
       id: 't1',
       title: 'ship the bench',
@@ -246,15 +284,36 @@ function twoTaskBench(): BenchView {
       updatedAt: NOW
     })
   ]
+}
+
+/** What a second frame may differ in; everything else stays the default bench. */
+interface BenchPatch {
+  tasks?: readonly TaskRecord[]
+  panes?: readonly PaneRow[]
+  attention?: readonly AttentionItem[]
+  herdr?: BenchView['herdr']
+  recovery?: readonly RecoveryPlan[]
+  blockedSince?: Record<string, number>
+}
+
+/**
+ * Two tasks in two directories; the first is blocked and holds *two* open
+ * decisions. That shape is the whole reason the counts below differ: the badge
+ * counts items (2) and `counts.needsMe` counts tasks (1), and the CLI has to say
+ * which one it is saying.
+ *
+ * The patch argument is for `watch`: a diff needs two frames that differ in one
+ * known way, and the honest way to get the second frame is to rebuild the same
+ * bench with that one thing changed, not to hand-write a view `buildBench` could
+ * never have produced.
+ */
+function twoTaskBench(patch: BenchPatch = {}): BenchView {
   return buildBench({
     now: NOW,
-    herdr: benchView().herdr,
-    snapshot: herdrSnapshot([
-      { paneId: 'p1', workspaceId: 'ws-1', cwd: REPO, status: 'blocked', tokens: { total: '12400' } },
-      { paneId: 'p2', workspaceId: 'ws-2', cwd: OTHER, status: 'working' }
-    ]),
-    tasks,
-    attention: [
+    herdr: patch.herdr ?? benchView().herdr,
+    snapshot: herdrSnapshot(patch.panes ?? PANES),
+    tasks: patch.tasks ?? taskRecords(),
+    attention: patch.attention ?? [
       attentionItem({ taskId: 't1', kind: 'permission', paneId: 'p1' }),
       attentionItem({
         taskId: 't1',
@@ -265,7 +324,8 @@ function twoTaskBench(): BenchView {
         command: ''
       })
     ],
-    blockedSince: { t1: NOW - 5 * 60_000 }
+    ...(patch.recovery ? { recovery: patch.recovery } : {}),
+    blockedSince: patch.blockedSince ?? { t1: NOW - 5 * 60_000 }
   })
 }
 
@@ -397,6 +457,16 @@ const READS: Array<[string, string[], ProCliCall]> = [
     '--json before the verb',
     ['pro', '--json', 'state'],
     call('state', 'GET', '/pro/state', null, true)
+  ],
+  // The push route is a read with no end, so it gets its own verb rather than a
+  // flag on `state`: the runner has to leave the request path to skip the timeout.
+  ['watch', ['pro', 'watch'], call('watch', 'GET', '/pro/stream', null)],
+  ['tail', ['pro', 'tail'], call('watch', 'GET', '/pro/stream', null)],
+  ['follow', ['pro', 'follow'], call('watch', 'GET', '/pro/stream', null)],
+  [
+    'watch --json',
+    ['pro', 'watch', '--json'],
+    call('watch', 'GET', '/pro/stream', null, true)
   ]
 ]
 
@@ -608,6 +678,9 @@ describe('exitForStatus', () => {
     [404, PRO_EXIT.missing],
     [409, PRO_EXIT.refused],
     [418, PRO_EXIT.fault],
+    // Only ever `too-many-watchers`: the relay understood us and said no, which
+    // is a refusal a script should wait out, not a fault to page anybody for.
+    [429, PRO_EXIT.refused],
     [500, PRO_EXIT.fault],
     [503, PRO_EXIT.offline]
   ]
@@ -993,6 +1066,312 @@ describe('renderProResult', () => {
   })
 })
 
+/* ------------------------------------------------------------------ *
+ * Watching: two frames in, one line out
+ * ------------------------------------------------------------------ */
+
+/**
+ * The diff, pinned frame by frame.
+ *
+ * Every fixture is `twoTaskBench` with one thing changed and rebuilt by the real
+ * `buildBench`, so a change the projection cannot express cannot be tested into
+ * existence. The order of the returned list is part of the contract: it is the
+ * order the lines land on the screen, and "the last line is the good news" is
+ * why a clear sorts after everything else.
+ */
+describe('diffProViews', () => {
+  const frame = (patch: BenchPatch = {}): ProStatePayload => ({
+    ok: true,
+    online: true,
+    running: true,
+    view: twoTaskBench(patch)
+  })
+  const stopped: ProStatePayload = { ok: true, online: true, running: false, view: null }
+  /** A third task in the second directory, with no pane of its own. */
+  const thirdTask = (): TaskRecord =>
+    taskRecord({
+      id: 't3',
+      title: 'fix the flaky test',
+      workdir: OTHER,
+      repoRoot: OTHER,
+      workspaceId: 'ws-3',
+      status: 'active',
+      createdAt: NOW,
+      updatedAt: NOW
+    })
+
+  it('says nothing about two frames of the same bench', () => {
+    expect(diffProViews(frame(), frame())).toEqual([])
+    expect(diffProViews(null, null)).toEqual([])
+    expect(diffProViews(undefined, undefined)).toEqual([])
+  })
+
+  it('names both ends of a status transition, and the count that rides along', () => {
+    expect(diffProViews(frame(), frame({ panes: panesWith('blocked') }))).toEqual([
+      {
+        change: 'status',
+        id: 't2',
+        title: 'write the handoff',
+        from: 'working',
+        to: 'blocked',
+        needsMe: 0
+      }
+    ])
+    // Both directions, because a diff that only reports trouble would leave a
+    // watcher silent about the moment work resumed.
+    expect(diffProViews(frame({ panes: panesWith('blocked') }), frame())).toEqual([
+      expect.objectContaining({ change: 'status', id: 't2', from: 'blocked', to: 'working' })
+    ])
+  })
+
+  it('tells an arrival from a clear by item id, not by counting the queue', () => {
+    expect(
+      diffProViews(
+        frame(),
+        frame({
+          attention: [
+            attentionItem({ taskId: 't1', kind: 'permission', paneId: 'p1' }),
+            attentionItem({
+              taskId: 't2',
+              kind: 'question',
+              paneId: 'p2',
+              taskTitle: 'write the handoff'
+            })
+          ]
+        })
+      )
+    ).toEqual([
+      {
+        change: 'attention',
+        arrived: true,
+        id: 't2:question:hook',
+        kind: 'question',
+        title: 'write the handoff',
+        taskId: 't2'
+      },
+      {
+        change: 'attention',
+        arrived: false,
+        id: 't1:question:hook',
+        kind: 'question',
+        // The task, not the ask. A watch line has one subject slot, and every
+        // other one-line surface leads with the task too (the queue head, the
+        // companion bubble); the ask is what `pro attention` prints. The fixture
+        // gives this item both, which is what makes the choice visible.
+        title: 'ship the bench',
+        taskId: 't1'
+      }
+    ])
+
+    // With no task title to lead with, the ask becomes the subject: a line that
+    // names nothing is the one a watcher cannot act on.
+    const unnamed = frame({
+      attention: [attentionItem({ taskTitle: '', title: 'Which box do we ship to?' })]
+    })
+    expect(diffProViews(unnamed, frame({ attention: [] }))).toEqual([
+      {
+        change: 'attention',
+        arrived: false,
+        id: 't1:permission:hook',
+        kind: 'permission',
+        title: 'Which box do we ship to?',
+        taskId: 't1'
+      }
+    ])
+  })
+
+  it('reports herdr leaving, which is not in the tree but is why the tree stopped moving', () => {
+    const herdr = benchView().herdr
+    expect(
+      diffProViews(frame(), frame({ herdr: { ...herdr, online: false, error: 'socket refused' } }))
+    ).toEqual([{ change: 'herdr', online: false, version: '0.0.0-test', error: 'socket refused' }])
+    expect(diffProViews(frame({ herdr: { ...herdr, online: false } }), frame())).toEqual([
+      { change: 'herdr', online: true, version: '0.0.0-test', error: '' }
+    ])
+  })
+
+  it('reports a bench that went away as one fact, because there is no tree left to compare', () => {
+    expect(diffProViews(frame(), stopped)).toEqual([{ change: 'bench', running: false }])
+    expect(diffProViews(stopped, frame())).toEqual([{ change: 'bench', running: true }])
+  })
+
+  it('names a task that appeared and one that was filed away', () => {
+    const grown = frame({ tasks: [...taskRecords(), thirdTask()] })
+    expect(diffProViews(frame(), grown)).toEqual([
+      { change: 'task', added: true, id: 't3', title: 'fix the flaky test' }
+    ])
+    expect(diffProViews(grown, frame())).toEqual([
+      { change: 'task', added: false, id: 't3', title: 'fix the flaky test' }
+    ])
+  })
+
+  it('reports a recovery verdict, the one change the tree shows only as a mark', () => {
+    expect(diffProViews(frame(), frame({ recovery: [lostPlan({ id: 't1' })] }))).toEqual([
+      { change: 'recovery', id: 't1', title: 'ship the bench', from: '', to: 'lost' }
+    ])
+  })
+
+  it('orders a busy frame the way a person reads it: news, then movement, then the clears', () => {
+    const after = frame({
+      panes: panesWith('blocked'),
+      tasks: [...taskRecords(), thirdTask()],
+      attention: [
+        attentionItem({ taskId: 't1', kind: 'permission', paneId: 'p1' }),
+        attentionItem({ taskId: 't3', kind: 'review', paneId: 'p3', taskTitle: 'fix the flaky test' })
+      ]
+    })
+    const changes = diffProViews(frame(), after)
+    expect(changes.map((change) => change.change)).toEqual([
+      'attention',
+      'status',
+      'task',
+      'attention'
+    ])
+    const first = changes[0]
+    const last = changes[changes.length - 1]
+    expect(first.change === 'attention' && first.arrived).toBe(true)
+    expect(last.change === 'attention' && !last.arrived).toBe(true)
+  })
+})
+
+/**
+ * The lines a watcher prints.
+ *
+ * Pinned for the two things that keep output readable inside a wall of it: the
+ * tag column lines up (a measured head, not a per-line guess), and the id is
+ * printed whole while the title gives way. The second is the rule the recovery
+ * tab already follows, and the reason is practical: the id on the line is the
+ * argument to the command you type next, and a clipped one cannot be typed.
+ */
+describe('the watch renderers', () => {
+  const status: ProChange = {
+    change: 'status',
+    id: 't2',
+    title: 'write the handoff',
+    from: 'working',
+    to: 'blocked',
+    needsMe: 0
+  }
+  /** That many transitions at once, which is what herdr reconnecting looks like. */
+  const statuses = (count: number): ProChange[] =>
+    Array.from({ length: count }, (_unused, index): ProChange => ({
+      change: 'status',
+      id: 't' + String(index),
+      title: 'task ' + String(index),
+      from: 'working',
+      to: 'blocked',
+      needsMe: 0
+    }))
+
+  it('starts with the whole tree, then the one line that says what happens next', () => {
+    const text = renderProWatchStart(
+      { ok: true, online: true, running: true, view: twoTaskBench() },
+      100
+    )
+    expect(text).toContain('2 tasks')
+    expect(text.endsWith(PRO_WATCH_HINT)).toBe(true)
+    expect(PRO_WATCH_HINT).toContain('ctrl-c')
+    expect(PRO_WATCH_HINT).toContain('codewaifu pro state')
+  })
+
+  it('prints a clock and a tag in fixed columns, so the subjects line up down the page', () => {
+    const line = renderProChange(status, NOW, 100)
+    expect(line.startsWith(new Date(NOW).toTimeString().slice(0, 8) + '  status  ')).toBe(true)
+    expect(line).toContain('working -> blocked  write the handoff  t2')
+  })
+
+  it('carries the count past one, because that is the number the tray shows', () => {
+    expect(renderProChange({ ...status, needsMe: 2 }, NOW, 100)).toContain('(2 need you)')
+    expect(renderProChange({ ...status, needsMe: 1 }, NOW, 100)).not.toContain('need you')
+  })
+
+  it('clips the title and never the id', () => {
+    const line = renderProChange({ ...status, id: LOST_ID, title: 'x'.repeat(120) }, NOW, 60)
+    expect(line.length).toBeLessThanOrEqual(60)
+    expect(line.endsWith(LOST_ID)).toBe(true)
+    expect(line).toContain('...')
+    expect(line).not.toContain('x'.repeat(120))
+  })
+
+  it('gives every category a tag you can find without reading the sentence', () => {
+    const arrived: ProChange = {
+      change: 'attention',
+      arrived: true,
+      id: 't1:question:hook',
+      kind: 'question',
+      title: 'Which box?',
+      taskId: 't1'
+    }
+    const tags: Array<[ProChange, string]> = [
+      [{ change: 'bench', running: true }, 'bench'],
+      [{ change: 'herdr', online: false, version: '', error: 'socket refused' }, 'herdr'],
+      [{ change: 'task', added: true, id: 't3', title: 'x' }, '+ task'],
+      [{ change: 'task', added: false, id: 't3', title: 'x' }, '- task'],
+      [status, 'status'],
+      [{ change: 'recovery', id: 't1', title: 'x', from: '', to: 'lost' }, 'recovery'],
+      [arrived, 'needs you'],
+      [{ ...arrived, arrived: false }, 'cleared']
+    ]
+    for (const [change, tag] of tags) {
+      expect(renderProChange(change, NOW, 100), tag).toContain(tag)
+    }
+  })
+
+  it('puts infrastructure in words, because it has no id to point at', () => {
+    expect(renderProChange({ change: 'bench', running: false }, NOW, 100)).toContain(
+      'the bench stopped'
+    )
+    expect(renderProChange({ change: 'bench', running: true }, NOW, 100)).toContain(
+      'the bench is back'
+    )
+    expect(
+      renderProChange({ change: 'herdr', online: true, version: '1.2.3', error: '' }, NOW, 100)
+    ).toContain('online 1.2.3')
+    expect(
+      renderProChange(
+        { change: 'herdr', online: false, version: '', error: 'socket refused' },
+        NOW,
+        100
+      )
+    ).toContain('offline: socket refused')
+    expect(
+      renderProChange({ change: 'recovery', id: 't1', title: 'x', from: '', to: 'lost' }, NOW, 100)
+    ).toContain('intact -> lost')
+  })
+
+  it('caps a burst and points at the tree, because forty transitions scroll the one you wanted off', () => {
+    const lines = renderProChanges(statuses(PRO_WATCH_MAX + 3), NOW, 100).split('\n')
+    expect(lines).toHaveLength(PRO_WATCH_MAX + 1)
+    expect(lines[PRO_WATCH_MAX]).toContain('+ 3 more changes: codewaifu pro state')
+    expect(lines.join('\n')).not.toContain('task 12')
+    // One over the cap still reads as one, and a frame inside it says nothing.
+    expect(renderProChanges(statuses(PRO_WATCH_MAX + 1), NOW, 100)).toContain('+ 1 more change:')
+    expect(renderProChanges(statuses(2), NOW, 100)).not.toContain('more change')
+  })
+
+  it('keeps every line inside the width it was given', () => {
+    const changes: ProChange[] = [
+      { change: 'bench', running: false },
+      { change: 'herdr', online: false, version: '', error: 'socket refused' },
+      { ...status, id: LOST_ID, title: 'y'.repeat(120) },
+      {
+        change: 'attention',
+        arrived: true,
+        id: LOST_ID + ':question:hook',
+        kind: 'question',
+        title: 'Which box do we ship to?',
+        taskId: LOST_ID
+      },
+      { change: 'recovery', id: LOST_ID, title: 'y'.repeat(60), from: 'intact', to: 'rebuild' }
+    ]
+    for (const width of [60, 66, 80, 100, 160]) {
+      for (const line of renderProChanges(changes, NOW, width).split('\n')) {
+        expect(line.length, JSON.stringify(line)).toBeLessThanOrEqual(width)
+      }
+    }
+  })
+})
+
 describe('the words for "there is nothing to talk to"', () => {
   it('leads with the fix in all three cases', () => {
     expect(offlineText('no-app')).toContain('not running')
@@ -1046,6 +1425,19 @@ describe('failureFor', () => {
     expect(herdr?.text).toContain('herdr.dev/install.sh')
     expect(herdr?.text).toContain('herdr socket refused')
     expect(herdr?.exit).toBe(PRO_EXIT.offline)
+  })
+
+  it('reads a full bench as "close a watcher", not as a bug in the app', () => {
+    const failure = failureFor(429, {
+      ok: false,
+      code: 'too-many-watchers',
+      error: `${PRO_STREAM_MAX} watchers are already attached to this bench`
+    })
+    expect(failure?.exit).toBe(PRO_EXIT.refused)
+    expect(failure?.text).toContain(`${PRO_STREAM_MAX} watchers`)
+    expect(failure?.text).toContain('close one')
+    // The words are a function, so the round trip and this table cannot drift.
+    expect(watchersText('x')).toContain('close one')
   })
 
   it('stays out of the way of a status the renderer can handle', () => {
@@ -1318,6 +1710,95 @@ describe('runProCli against the real relay', () => {
     // port would otherwise receive our token and our task titles.
     expect(errText()).toContain('CodeWaifu is not running')
   })
+
+  /* The push route, end to end: these four are the reason `watch` exists. */
+
+  it('watches: the tree once, then one line per change, without asking the bench again', async () => {
+    const pro = fakePro({ view: twoTaskBench() })
+    const relay = await startRelay(() => pro.api)
+    publish(relay.port, TOKEN)
+    // Not awaited until the end: this verb returns when the stream does, and the
+    // stream returns when the relay goes away.
+    const watching = runProCli(['pro', 'watch'])
+    await until(() => outText().includes(PRO_WATCH_HINT), 'the first tree')
+    expect(outText()).toContain('2 tasks')
+    const asked = pro.viewCalls()
+
+    pro.setView(twoTaskBench({ panes: panesWith('blocked') }))
+    await until(() => outText().includes('working -> blocked'), 'the change line')
+
+    // One change, one line. A second tree here would be the polling behaviour
+    // the push route exists to replace.
+    expect(outLines().filter((line) => line.includes('working -> blocked'))).toHaveLength(1)
+    expect(outText().split(PRO_WATCH_HINT)).toHaveLength(2)
+    // The frame arrived because the relay sent it. A watcher that also asked
+    // would pass every rendering assertion below and still hammer the bench.
+    expect(pro.viewCalls()).toBe(asked)
+
+    await relay.server.stopAsync(200)
+    expect(await watching).toBe(PRO_EXIT.offline)
+    expect(errText()).toContain('closed the stream')
+  })
+
+  it('redraws the tree when the bench comes back, instead of announcing every task', async () => {
+    const pro = fakePro({ view: null })
+    const relay = await startRelay(() => pro.api)
+    publish(relay.port, TOKEN)
+    const watching = runProCli(['pro', 'watch'])
+    await until(() => outText().includes(PRO_WATCH_HINT), 'the first frame')
+    expect(outText()).not.toContain('2 tasks')
+
+    pro.setView(twoTaskBench())
+    await until(() => outText().includes('2 tasks'), 'the redraw')
+
+    // The whole tree again, not a diff: "+ task" twice is the honest reading of
+    // a set difference and useless to the person watching.
+    expect(outText().split(PRO_WATCH_HINT)).toHaveLength(3)
+    expect(outText()).not.toContain('+ task')
+
+    await relay.server.stopAsync(200)
+    expect(await watching).toBe(PRO_EXIT.offline)
+  })
+
+  it('--json streams the frames a script can parse, and prints no rendering beside them', async () => {
+    const pro = fakePro({ view: twoTaskBench() })
+    const relay = await startRelay(() => pro.api)
+    publish(relay.port, TOKEN)
+    const watching = runProCli(['pro', 'watch', '--json'])
+    await until(() => outLines().length >= 1, 'the first frame')
+    const first = JSON.parse(outLines()[0]) as ProStatePayload & { kind: string }
+    expect(first).toMatchObject({ kind: 'state', ok: true, online: true, running: true })
+    expect(first.view?.tasks.map((task) => task.id)).toEqual(['t1', 't2'])
+    expect(outText()).not.toContain('2 tasks')
+
+    pro.setView(twoTaskBench({ panes: panesWith('blocked') }))
+    await until(() => outLines().length >= 2, 'the second frame')
+    const second = JSON.parse(outLines()[1]) as ProStatePayload
+    expect(second.view?.tasks.map((task) => task.liveStatus)).toEqual(['blocked', 'blocked'])
+
+    await relay.server.stopAsync(200)
+    expect(await watching).toBe(PRO_EXIT.offline)
+  })
+
+  it('exits 5 when the bench is already serving every watcher it will take', async () => {
+    const pro = fakePro({ view: twoTaskBench() })
+    const relay = await startRelay(() => pro.api)
+    publish(relay.port, TOKEN)
+    const held: TestStream[] = []
+    try {
+      for (let index = 0; index < PRO_STREAM_MAX; index += 1) {
+        held.push(await relay.stream('/pro/stream', TOKEN))
+      }
+      expect(pro.subscriberCount()).toBe(PRO_STREAM_MAX)
+      expect(await runProCli(['pro', 'watch'])).toBe(PRO_EXIT.refused)
+      // The refusal says what to do about it, and the watcher prints no tree it
+      // was never given.
+      expect(errText()).toContain('close one')
+      expect(outText()).toBe('')
+    } finally {
+      for (const stream of held) await stream.close()
+    }
+  })
 })
 
 describe('the usage text', () => {
@@ -1328,6 +1809,7 @@ describe('the usage text', () => {
       'state',
       'attention',
       'recovery',
+      'watch',
       'answer',
       'approve',
       'deny',
