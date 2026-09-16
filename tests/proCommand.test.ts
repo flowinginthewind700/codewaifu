@@ -307,6 +307,47 @@ describe('the import verb', () => {
   })
 })
 
+describe('the remove and purge verbs', () => {
+  it('keeps a shell by default, because a caller that did not ask is a script', () => {
+    // The bench sends an explicit answer from a checkbox the human just read.
+    // Everything else - the HTTP API, an older widget, a hand-rolled curl -
+    // gets the non-destructive half, and the shell it leaves behind is reported
+    // on the declined chip rather than closed behind their back.
+    expect(task({ op: 'remove', taskId: 't1' })).toEqual({
+      op: 'remove',
+      taskId: 't1',
+      closeShell: false
+    })
+    expect(task({ op: 'remove', taskId: 't1', closeShell: false })).toEqual({
+      op: 'remove',
+      taskId: 't1',
+      closeShell: false
+    })
+  })
+
+  it('closes one when asked, folded and spelled either way', () => {
+    expect(task({ op: ' REMOVE ', taskId: 't1', closeShell: true })).toEqual({
+      op: 'remove',
+      taskId: 't1',
+      closeShell: true
+    })
+    expect(task({ op: 'remove', id: 't1', close: true })).toEqual({
+      op: 'remove',
+      taskId: 't1',
+      closeShell: true
+    })
+  })
+
+  it('still refuses a remove with no task in it', () => {
+    expect(refusedTask({ op: 'remove', closeShell: true })).toBe('bad-task')
+  })
+
+  it('accepts the purge the declined chip sends, and nothing else in it', () => {
+    expect(task({ op: 'purge' })).toEqual({ op: 'purge' })
+    expect(task({ op: ' PURGE ' })).toEqual({ op: 'purge' })
+  })
+})
+
 describe('threadKeysOf', () => {
   it('keeps agent:id and nothing else', () => {
     expect(threadKeysOf(['codex:0190f', 'claude:9c1e', 'codex', 'a b:c', '../x:y'])).toEqual([

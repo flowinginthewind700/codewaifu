@@ -59,6 +59,7 @@ export function benchView(patch: Partial<BenchView> = {}): BenchView {
     tasks: [],
     attention: [],
     recovery: [],
+    declined: [],
     companion: { visible: false, notices: 0 },
     ...patch
   }

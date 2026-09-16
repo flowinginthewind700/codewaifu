@@ -599,7 +599,15 @@ const WORK: Array<[string, string[], ProCliVerb, string, Record<string, unknown>
     '/pro/tasks',
     { op: 'remove', taskId: 't1' }
   ],
+  [
+    'rm --close takes the shell with it',
+    ['pro', 'rm', 't1', '--close'],
+    'remove',
+    '/pro/tasks',
+    { op: 'remove', taskId: 't1', closeShell: true }
+  ],
   ['adopt', ['pro', 'adopt'], 'adopt', '/pro/tasks', { op: 'adopt' }],
+  ['purge', ['pro', 'purge'], 'purge', '/pro/tasks', { op: 'purge' }],
   [
     'log reads the trail',
     ['pro', 'log', 't1'],
@@ -1050,11 +1058,28 @@ describe('renderProResult', () => {
     expect(
       renderProResult(okResult({ itemId: 't1:permission:hook' }, '', 'answered'), 'answer')
     ).toContain('answered')
-    expect(renderProResult(okResult({ taskId: 't1' }, '', 'removed'), 'remove')).toContain(
-      'removed t1 (its ledger stays on disk)'
+    // Which half happened is the thing worth printing: a row can be gone while
+    // the shell under it is not.
+    expect(renderProResult(okResult({ taskId: 't1', closed: false }, '', 'removed'), 'remove')).toBe(
+      'removed t1 (its ledger stays on disk; its shell keeps running)'
     )
+    expect(
+      renderProResult(okResult({ taskId: 't1', closed: true }, '', 'removed-closed'), 'remove')
+    ).toBe('removed t1 and closed its shell (its ledger stays on disk)')
     expect(renderProResult(okResult({ created: 2, bindings: 1 }, '', 'adopted'), 'adopt')).toBe(
       'adopted 2 tasks, rebound 1'
+    )
+  })
+
+  it('reports a purge by what it closed, and says so when herdr refused some', () => {
+    expect(renderProResult(okResult({ closed: 0, remaining: 0 }, '', 'purged'), 'purge')).toBe(
+      'nothing was left running'
+    )
+    expect(renderProResult(okResult({ closed: 3, remaining: 0 }, '', 'purged'), 'purge')).toBe(
+      'closed 3 removed workspaces'
+    )
+    expect(renderProResult(okResult({ closed: 1, remaining: 2 }, '', 'purged'), 'purge')).toBe(
+      'closed 1 removed workspace, 2 still running (herdr refused)'
     )
   })
 

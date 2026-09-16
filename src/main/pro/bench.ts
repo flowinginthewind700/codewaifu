@@ -286,9 +286,17 @@ export class TaskRegistry {
    * because the id is about to be free for a genuinely new session. Entries
    * past the TTL go too: an id blocked forever is worse than one row that comes
    * back once.
+   *
+   * An empty report changes nothing. "herdr has no workspaces" arrives on the
+   * reconnect while the server is still restoring its session, and treating it
+   * as evidence would clear every removal a moment before the real snapshot
+   * re-adopts all of them - the resurrection this list exists to prevent, now
+   * on a timer nobody can see. The TTL still bounds an entry herdr never
+   * reports again, so nothing is blocked forever.
    */
   reconcileForgotten(live: readonly string[]): void {
     this.load()
+    if (!live.length) return
     const present = new Set(live.filter(Boolean))
     const now = this.now()
     const before = this.forgottenRecords.length

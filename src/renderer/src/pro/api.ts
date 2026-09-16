@@ -124,8 +124,26 @@ export const proApi = {
       call<TaskRecord>(CH.proTask, { op: 'patch', taskId, ...patch }),
     setStatus: (taskId: string, status: TaskStatus): Promise<ProResult<TaskRecord>> =>
       call<TaskRecord>(CH.proTask, { op: 'status', taskId, status }),
-    remove: (taskId: string): Promise<ProResult> => call(CH.proTask, { op: 'remove', taskId }),
+    /**
+     * Drop the row, and - when `closeShell` is set - the terminal underneath it.
+     *
+     * The bench always sends an explicit answer because a human just read a
+     * checkbox; the default stays false so a caller that means "hide this"
+     * cannot kill a shell by accident.
+     */
+    remove: (
+      taskId: string,
+      closeShell = false
+    ): Promise<ProResult<{ taskId: string; closed: boolean }>> =>
+      call<{ taskId: string; closed: boolean }>(CH.proTask, { op: 'remove', taskId, closeShell }),
     adopt: (): Promise<ProResult> => call(CH.proTask, { op: 'adopt' }),
+    /**
+     * Close every terminal a removal left running in herdr. This is the verb
+     * behind the topbar chip, and the only way to reach those shells from here
+     * once their rows are gone.
+     */
+    purgeDeclined: (): Promise<ProResult<{ closed: number; remaining: number }>> =>
+      call<{ closed: number; remaining: number }>(CH.proTask, { op: 'purge' }),
     /**
      * Turn sessions the companion already sees into bench tasks.
      *

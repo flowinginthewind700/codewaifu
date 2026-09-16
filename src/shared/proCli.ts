@@ -49,6 +49,7 @@ export type ProCliVerb =
   | 'done'
   | 'remove'
   | 'adopt'
+  | 'purge'
 
 /** One parsed command: exactly what the relay needs, and nothing else. */
 export interface ProCliCall {
@@ -192,6 +193,8 @@ Task state:
   resume <taskId>             bring it back to active
   done <taskId>               mark it finished and clear its queue
   rm <taskId>                 drop the task record (its ledger stays on disk)
+    --close                   and close the shell under it (default: keep it running)
+  purge                       close every workspace a removal left running
   log <taskId>                the audit trail; --digest for goal / plan / next
 
 Text after -- is taken literally, so a prompt may start with a dash.
@@ -412,11 +415,19 @@ export function parseProCli(args: readonly string[]): ProCliParse {
     case 'remove': {
       const taskId = str(flags.get('task')) || positional[0] || ''
       if (!taskId) return reject('needs-target', `${verb} needs a task id`)
-      return call('remove', 'POST', '/pro/tasks', { op: 'remove', taskId }, json)
+      // `--close` is the difference between hiding a row and getting rid of the
+      // shell under it. Without it herdr keeps the workspace alive and the bench
+      // only stops adopting it, which is what the declined chip reports.
+      const body: Record<string, unknown> = { op: 'remove', taskId }
+      if (switches.has('close')) body.closeShell = true
+      return call('remove', 'POST', '/pro/tasks', body, json)
     }
 
     case 'adopt':
       return call('adopt', 'POST', '/pro/tasks', { op: 'adopt' }, json)
+
+    case 'purge':
+      return call('purge', 'POST', '/pro/tasks', { op: 'purge' }, json)
 
     case 'log':
     case 'ledger': {
@@ -898,9 +909,21 @@ export function renderProResult(payload: unknown, verb: ProCliVerb): string {
     case 'done':
       return `${task?.id ?? ''} is now ${result.detail || STATUS_VERB[verb]}`
     case 'remove':
-      return `removed ${data.taskId ?? ''} (its ledger stays on disk)`
+      // Saying which half happened matters: a row can be gone while the shell
+      // under it is not, and the terminal is the place that ambiguity is cheap
+      // to resolve - one line, instead of a chip nobody is looking at.
+      return data.closed
+        ? `removed ${data.taskId ?? ''} and closed its shell (its ledger stays on disk)`
+        : `removed ${data.taskId ?? ''} (its ledger stays on disk; its shell keeps running)`
     case 'adopt':
       return `adopted ${num(data.created)} tasks, rebound ${num(data.bindings)}`
+    case 'purge': {
+      const closed = num(data.closed)
+      const remaining = num(data.remaining)
+      if (!closed && !remaining) return 'nothing was left running'
+      const tail = remaining ? `, ${remaining} still running (herdr refused)` : ''
+      return `closed ${closed} removed workspace${closed === 1 ? '' : 's'}${tail}`
+    }
     default:
       return result.detail || result.code || 'ok'
   }

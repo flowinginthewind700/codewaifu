@@ -44,6 +44,7 @@ import type { ChatTranscript } from '../../shared/chat'
 import type { BubbleMessage } from '../../shared/ui'
 import {
   buildBench,
+  declinedWorkspaces,
   groupKeyFor,
   groupLabelFor,
   handoffPrompt,
@@ -55,6 +56,7 @@ import {
   type AttentionExecution,
   type AttentionItem,
   type BenchView,
+  type DeclinedWorkspace,
   type HerdrView,
   type LedgerDigest,
   type LedgerEntry,
@@ -263,6 +265,11 @@ export interface HerdrClientLike {
     text: string
     wait?: { until?: readonly AgentStatus[]; timeoutMs?: number } | null
   }): Promise<AgentInstance | null>
+  /**
+   * Close a workspace, which is how "remove this terminal" stops being a
+   * promise about the bench and becomes a fact about the machine.
+   */
+  closeWorkspace(workspaceId: string, closeGroup?: boolean): Promise<boolean>
 }
 
 export interface SessionLike {
@@ -294,6 +301,8 @@ export interface RegistryLike {
   forgotten(): string[]
   /** Record that the human removed this workspace; see `TaskRegistry.forget`. */
   forget(workspaceId: string, paneIds?: readonly string[]): void
+  /** Drop one remembered removal; see `TaskRegistry.unforget`. */
+  unforget(workspaceId: string): void
   /** Drop remembered removals herdr has let go of, or that went stale. */
   reconcileForgotten(live: readonly string[]): void
 }
@@ -1233,6 +1242,9 @@ export class ProService implements CompanionApi {
       recovery: this.recoveryPlans(),
       attachedPanes: [...this.bridges.keys()],
       blockedSince: this.triage.blockedSinceMap(),
+      // What the bench is refusing to adopt has to be part of the projection:
+      // a suppression nobody can see is indistinguishable from a lost terminal.
+      forgotten: this.registry.forgotten(),
       companion: {
         visible: this.host.widgetVisible(),
         notices: needsMeCount(attention, now)
@@ -1764,12 +1776,37 @@ export class ProService implements CompanionApi {
         if (!this.registry.remove(request.taskId)) return this.noTask(request.taskId)
         this.triage.resolveTaskItems(request.taskId, 'task removed')
         this.lastGit.delete(request.taskId)
+        // Closing is the other half of "remove this terminal". The row going
+        // away is a change to our file; the shell staying alive is a change to
+        // nothing, and a bench that only ever does the first one grows a pile
+        // of unreachable workspaces in herdr that every later snapshot has to
+        // step around. Asked for, not assumed: an adopted row is somebody's
+        // shell, and a running agent is work in flight.
+        let closed = false
+        if (request.closeShell && task.workspaceId) {
+          closed = await this.closeWorkspaceQuietly(task.workspaceId, 'remove')
+          // A workspace herdr really let go of does not need its id blocked,
+          // and leaving the entry behind would keep the next w3 out for a day.
+          if (closed) this.registry.unforget(task.workspaceId)
+          this.ledger.append(
+            {
+              taskId: request.taskId,
+              kind: 'event',
+              text: closed
+                ? `workspace ${task.workspaceId} closed on remove`
+                : `workspace ${task.workspaceId} survived remove`,
+              source: 'gui'
+            },
+            this.timers.now()
+          )
+        }
         // The ledger file stays on disk. It is the record of what happened, and
         // a task recreated with the same id should inherit it rather than start
         // amnesiac; deleting it would make "remove" destroy history.
         this.registry.save()
+        if (closed && this.session) await this.session.refresh().catch(() => null)
         this.invalidate()
-        return okResult({ taskId: request.taskId }, '', 'removed')
+        return okResult({ taskId: request.taskId, closed }, '', closed ? 'removed-closed' : 'removed')
       }
       case 'adopt': {
         // Explicit: the human pressed the button, so a workspace they removed
@@ -1784,6 +1821,8 @@ export class ProService implements CompanionApi {
           'adopted'
         )
       }
+      case 'purge':
+        return this.purgeDeclined()
       case 'import':
         return this.importThreads(request)
       case 'transcript':
@@ -1791,6 +1830,73 @@ export class ProService implements CompanionApi {
       case 'steer':
         return this.steerTask(request)
     }
+  }
+
+  /**
+   * The live workspaces a remembered removal is holding off the bench.
+   *
+   * The topbar chip renders this list and `purge` closes it. Both read the same
+   * function, so what the chip says and what the button does cannot drift.
+   */
+  private declined(): DeclinedWorkspace[] {
+    return declinedWorkspaces(this.snapshot(), this.registry.forgotten())
+  }
+
+  /**
+   * Close one workspace, and never let a refused close fail the operation that
+   * asked for it.
+   *
+   * By the time this runs the row is already gone and the human's intent has
+   * landed, so the worst outcome here is a shell that keeps running - which is
+   * precisely what the declined chip reports, with a button that tries again.
+   * Turning that into a red toast would say "remove failed" about a remove that
+   * succeeded.
+   */
+  private async closeWorkspaceQuietly(workspaceId: string, why: string): Promise<boolean> {
+    const client = this.client()
+    if (!client || !workspaceId) return false
+    try {
+      const closed = await client.closeWorkspace(workspaceId)
+      if (!closed) {
+        this.host.log('warn', `pro: herdr declined to close a workspace (${why})`, { workspaceId })
+      }
+      return closed
+    } catch (error) {
+      this.host.log('warn', `pro: closing a workspace threw (${why})`, {
+        workspaceId,
+        error: String(error)
+      })
+      return false
+    }
+  }
+
+  /**
+   * Close every declined workspace: the answer to the chip, in one click.
+   *
+   * Removals made before removals were remembered, and removals where the human
+   * left "keep it running" ticked, both leave herdr carrying shells this bench
+   * can no longer show. They are not lost - they are on the chip - but the only
+   * honest way to be rid of them is to close them, and doing that one dialog at
+   * a time is not a thing anybody will finish.
+   */
+  private async purgeDeclined(): Promise<ProResult> {
+    const declined = this.declined()
+    if (!declined.length) return okResult({ closed: 0, remaining: 0 }, '', 'purged')
+    let closed = 0
+    for (const entry of declined) {
+      if (!(await this.closeWorkspaceQuietly(entry.workspaceId, 'purge'))) continue
+      closed += 1
+      // Genuinely gone, so the id must not stay blocked: herdr hands the same
+      // numbers back on a fresh session, and a stale entry would quietly eat a
+      // workspace the human just opened.
+      this.registry.unforget(entry.workspaceId)
+    }
+    this.registry.save()
+    this.host.log('info', 'pro: purged removed workspaces', { closed, of: declined.length })
+    if (this.session) await this.session.refresh().catch(() => null)
+    this.invalidate()
+    if (closed < declined.length) this.notice(this.text(CLOSE_FAILED_TEXT), 'warn')
+    return okResult({ closed, remaining: declined.length - closed }, '', 'purged')
   }
 
   /**
@@ -2879,6 +2985,11 @@ const SEND_FAILED_TEXT = {
   en: 'send failed: herdr refused the input'
 }
 
+const CLOSE_FAILED_TEXT = {
+  zh: 'herdr 没能关掉其中一些终端，它们还在运行',
+  en: 'herdr did not close some of them; those shells are still running'
+}
+
 function recordOf(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -3005,6 +3116,7 @@ function signatureOf(view: BenchView): string {
     .join('|')
   const groups = view.groups.map((group) => `${group.key}:${group.tasks.length}`).join(',')
   const recovery = view.recovery.map((plan) => `${plan.taskId}:${plan.verdict}:${plan.steps.length}`).join(',')
+  const declined = view.declined.map((entry) => `${entry.workspaceId}:${entry.agentStatus}`).join(',')
   const counts = view.counts
   return [
     view.herdr.online ? 1 : 0,
@@ -3024,6 +3136,7 @@ function signatureOf(view: BenchView): string {
     tasks,
     attention,
     recovery,
+    declined,
     view.companion.visible ? 1 : 0,
     view.companion.notices
   ].join('#')

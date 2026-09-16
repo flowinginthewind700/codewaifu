@@ -498,6 +498,34 @@ textarea {
   background: rgba(var(--danger-rgb), 0.08);
 }
 
+/* Removals that left the shell running. Warning rather than danger: nothing
+   broke, there is just something to close, and the button on the chip closes
+   it. */
+.chip.declined {
+  color: var(--warn);
+  border-color: rgba(var(--warn-rgb), 0.32);
+  background: rgba(var(--warn-rgb), 0.08);
+  flex: 0 1 auto;
+}
+
+.chip.declined > svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+/* The number is the part that has to survive a narrow window; the sentence
+   around it is the part that can go, since the tooltip carries all of it. */
+.chip.declined .chip-text {
+  max-width: 26ch;
+}
+
+@media (max-width: 1180px) {
+  .chip.declined .chip-text {
+    max-width: 12ch;
+  }
+}
+
 /* Truncation lives on the text, not the chip, so the border never clips. */
 .chip-text {
   overflow: hidden;

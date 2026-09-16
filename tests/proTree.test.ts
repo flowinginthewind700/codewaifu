@@ -28,6 +28,7 @@ import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
 import {
   buildBench,
   bindTasks,
+  declinedWorkspaces,
   deriveGroups,
   filterGroups,
   groupKeyFor,
@@ -548,5 +549,100 @@ describe('groupLabelFor', () => {
   it('falls back to the key, then to unknown, rather than to an empty heading', () => {
     expect(groupLabelFor('/')).toBe('/')
     expect(groupLabelFor('')).toBe('unknown')
+  })
+})
+
+/**
+ * The list behind the topbar's declined chip: live workspaces a remembered
+ * removal is holding off the bench.
+ *
+ * A removal that only drops the row leaves the shell running, which is what the
+ * confirmation offers, so herdr keeps reporting it and adoption keeps stepping
+ * around it. Unreported, that is a terminal the human closed and can no longer
+ * find anywhere - the exact shape of the bug these cases sit next to.
+ */
+describe('declinedWorkspaces', () => {
+  function snapshotOf(
+    workspaces: readonly { id: string; label?: string; panes?: number; checkout?: string; status?: string }[]
+  ): Snapshot {
+    const parsed = parseSnapshot({
+      version: '0.0.0-test',
+      protocol: 1,
+      workspaces: workspaces.map((entry, index) => ({
+        workspace_id: entry.id,
+        number: index + 1,
+        label: entry.label ?? '',
+        pane_count: entry.panes ?? 1,
+        agent_status: entry.status ?? 'unknown',
+        ...(entry.checkout ? { worktree: { checkout_path: entry.checkout } } : {})
+      })),
+      panes: workspaces.flatMap((entry) =>
+        Array.from({ length: entry.panes ?? 1 }, (_unused, at) => ({
+          pane_id: `${entry.id}:p${at + 1}`,
+          workspace_id: entry.id,
+          tab_id: `${entry.id}:t1`,
+          cwd: `/tmp/live/${entry.id}`,
+          agent: 'codex',
+          agent_status: entry.status ?? 'idle'
+        }))
+      )
+    })
+    if (!parsed) throw new Error('snapshot fixture did not parse')
+    return parsed
+  }
+
+  it('reports only the workspaces a removal is standing in front of', () => {
+    const snapshot = snapshotOf([
+      { id: 'w1', label: 'codewaifu', panes: 2, status: 'working' },
+      { id: 'w2', label: 'robotworld' }
+    ])
+    expect(declinedWorkspaces(snapshot, ['w1'])).toEqual([
+      { workspaceId: 'w1', label: 'codewaifu', panes: 2, agentStatus: 'working' }
+    ])
+  })
+
+  it('names an unlabelled workspace by its checkout, then by its number', () => {
+    const snapshot = snapshotOf([
+      { id: 'w3', checkout: '/work/codewaifu' },
+      { id: 'w4' }
+    ])
+    expect(declinedWorkspaces(snapshot, ['w4', 'w3']).map((entry) => entry.label)).toEqual([
+      'codewaifu',
+      'workspace 2'
+    ])
+  })
+
+  it('sorts by id, so a tooltip does not reshuffle on every snapshot', () => {
+    const snapshot = snapshotOf([{ id: 'w9' }, { id: 'w2' }, { id: 'w5' }])
+    expect(declinedWorkspaces(snapshot, ['w9', 'w2', 'w5']).map((entry) => entry.workspaceId)).toEqual([
+      'w2',
+      'w5',
+      'w9'
+    ])
+  })
+
+  it('is empty without a snapshot or without a removal, and ignores a blank id', () => {
+    const snapshot = snapshotOf([{ id: 'w1' }])
+    expect(declinedWorkspaces(null, ['w1'])).toEqual([])
+    expect(declinedWorkspaces(snapshot, [])).toEqual([])
+    expect(declinedWorkspaces(snapshot, [''])).toEqual([])
+    // A remembered removal for a workspace herdr no longer has is a removal
+    // that landed; there is nothing left to decline.
+    expect(declinedWorkspaces(snapshot, ['w9'])).toEqual([])
+  })
+
+  it('rides along in the projection, because the chip renders a view and not a service', () => {
+    const view = buildBench({
+      now: NOW,
+      herdr: benchView().herdr,
+      snapshot: snapshotOf([{ id: 'w1', label: 'codewaifu' }]),
+      tasks: [],
+      attention: [],
+      forgotten: ['w1']
+    })
+    expect(view.declined.map((entry) => entry.workspaceId)).toEqual(['w1'])
+    // And the default is no suppression at all: a caller that never heard of
+    // removals must not get a chip it cannot explain.
+    expect(bench([]).declined).toEqual([])
   })
 })

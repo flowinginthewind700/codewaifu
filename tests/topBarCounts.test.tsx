@@ -69,6 +69,7 @@ function bench(attention: AttentionItem[], taskCount: number): BenchView {
     tasks: [],
     attention,
     recovery: [],
+    declined: [],
     companion: { visible: false, notices: 0 }
   }
 }
@@ -82,7 +83,7 @@ async function render(node: ReactNode): Promise<void> {
   })
 }
 
-function renderBar(view: BenchView): Promise<void> {
+function renderBar(view: BenchView, onPurgeDeclined = vi.fn()): Promise<void> {
   return render(
     <TopBar
       view={view}
@@ -95,6 +96,7 @@ function renderBar(view: BenchView): Promise<void> {
       onCompanion={vi.fn()}
       onSnoozeAll={vi.fn()}
       onAdopt={vi.fn()}
+      onPurgeDeclined={onPurgeDeclined}
       onImport={vi.fn()}
       onStage={vi.fn()}
       onNewTask={vi.fn()}
@@ -167,5 +169,56 @@ describe('the needs-me chip', () => {
     await renderBar(view)
     expect(chip().textContent).toContain(t('countNeedsMe'))
     expect(bell().getAttribute('aria-label')).toBe(t('queueTitle'))
+  })
+})
+
+/**
+ * The chip that reports removals which left the shell running.
+ *
+ * Keeping a shell alive on purpose is a fine answer, but only if it stays
+ * reachable: without this chip the bench would be hiding a terminal the human
+ * removed, which is indistinguishable from having lost it - and it is the
+ * hidden half of the bug where removed rows came back on the next snapshot.
+ */
+describe('the declined chip', () => {
+  function declinedChip(): HTMLElement | null {
+    return container.querySelector<HTMLElement>('.chip.declined')
+  }
+
+  function withDeclined(n: number): BenchView {
+    return {
+      ...bench([], 0),
+      declined: Array.from({ length: n }, (_unused, at) => ({
+        workspaceId: `w${at + 1}`,
+        label: `repo-${at + 1}`,
+        panes: 1,
+        agentStatus: 'idle' as const
+      }))
+    }
+  }
+
+  it('is absent at zero, because a chip reading "nothing is wrong" is noise', async () => {
+    await renderBar(bench([], 0))
+    expect(declinedChip()).toBeNull()
+  })
+
+  it('counts what the projection says, and names every workspace in the tooltip', async () => {
+    await renderBar(withDeclined(2))
+    const el = declinedChip()
+    expect(el?.textContent).toContain('2')
+    const title = el?.getAttribute('title') ?? ''
+    expect(title).toContain('w1 · repo-1')
+    expect(title).toContain('w2 · repo-2')
+  })
+
+  it('closes them all from the one button on it, which is the only way to reach them', async () => {
+    const purge = vi.fn()
+    await renderBar(withDeclined(3), purge)
+    const button = declinedChip()?.querySelector<HTMLButtonElement>('button')
+    expect(button?.getAttribute('aria-label')).toBe(t('declinedClose'))
+    await act(async () => {
+      button?.click()
+    })
+    expect(purge).toHaveBeenCalledTimes(1)
   })
 })

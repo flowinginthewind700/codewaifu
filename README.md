@@ -289,6 +289,8 @@ codewaifu pro new "fix the flaky test" --dir ~/dev/thing --agent codex
 codewaifu pro recovery               # what survived the last interruption, and what it takes
 codewaifu pro log <taskId> --digest  # goal / plan / decisions / next
 codewaifu pro park <taskId>          # stop counting it; its panes keep running
+codewaifu pro rm <taskId>            # drop the row; add --close to take the shell with it
+codewaifu pro purge                  # close the shells earlier removals left running
 ```
 
 Every verb takes `--json`. The text is ASCII and clamped to the width of the
@@ -311,6 +313,11 @@ attention queue, it does not drive a terminal. And `pro recovery` is read-only -
 applying a plan creates workspaces, launches an agent and types a re-prompt into
 a pane, and the ledger records who asked, so the Bench window applies plans and
 the terminal reports them.
+
+`pro rm` drops the row and, by default, leaves the terminal running - the same
+split the Bench window offers as a checkbox. A shell kept on purpose is not a
+shell you can still see, so the bench reports those on a chip in the topbar and
+`pro purge` closes them in one go.
 
 ## Your data
 

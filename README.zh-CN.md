@@ -253,6 +253,8 @@ codewaifu pro new "修掉这个 flaky 测试" --dir ~/dev/thing --agent codex
 codewaifu pro recovery               # 上次中断后还剩什么,以及接回来要哪几步
 codewaifu pro log <taskId> --digest  # 目标 / 计划 / 已做的决定 / 下一步
 codewaifu pro park <taskId>          # 不再统计它;它的 pane 继续跑
+codewaifu pro rm <taskId>            # 只删这一行;加 --close 连它下面的终端一起关
+codewaifu pro purge                  # 关掉之前移除时留下来的那些终端
 ```
 
 每个动词都支持 `--json`。输出是 ASCII,按终端宽度收在 60-160 列之间;id 一律完整
@@ -270,6 +272,10 @@ ctrl-c 的退出码是 0,所以 shell 循环能分清「是我停的」和「它
 有两件事它永远不做。没有 `send-keys`:CLI 回答的是待办队列,不去驱动终端。
 `pro recovery` 也是只读的——执行一份恢复计划会建工作区、拉起 agent、往 pane 里
 打一段重启提示,而账本要记下是谁下的手,所以计划由 Bench 窗口执行,终端负责报告。
+
+`pro rm` 默认只删记录、让终端继续跑,和 Bench 窗口里那个勾选框是同一个分岔。
+故意留下的进程也是看不见的进程,所以顶栏有一个 chip 报出它们的数量,
+`pro purge` 一次全关。
 
 ## 你的数据
 

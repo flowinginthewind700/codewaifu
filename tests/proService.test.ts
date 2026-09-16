@@ -193,7 +193,7 @@ function throwingClient(): HerdrClientLike {
  * makes, and remembers every call so a test can assert on what the unattended
  * pass actually did to herdr.
  */
-function recordingClient(calls: ClientCall[]): HerdrClientLike {
+function recordingClient(calls: ClientCall[], closeOk = true): HerdrClientLike {
   return new Proxy({} as HerdrClientLike, {
     get(_target, prop): unknown {
       return async (...args: unknown[]): Promise<unknown> => {
@@ -202,6 +202,10 @@ function recordingClient(calls: ClientCall[]): HerdrClientLike {
         // and `setup` do once the pane exists: answering null here would turn
         // every ssh case into the "herdr refused the input" case.
         if (prop === 'sendText' || prop === 'sendKeys') return true
+        // Closing is a boolean, and the honest default is "yes": a herdr that
+        // always refused would make every removal case a refusal case. The
+        // cases that want a refusal say so through `closeOk`.
+        if (prop === 'closeWorkspace') return closeOk
         if (prop === 'createWorkspace' || prop === 'createWorktree') {
           return {
             workspace: { workspaceId: 'w-new' },
@@ -220,6 +224,8 @@ interface FakeSessionOpts {
   /** What `start` and `refresh` hand back; null is "herdr has nothing". */
   snapshot?: Snapshot | null
   record?: boolean
+  /** What the recorded client answers `closeWorkspace` with. */
+  closeOk?: boolean
 }
 
 function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
@@ -239,7 +245,7 @@ function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
     reconnectInMs: online ? 0 : 1000,
     subscribedPanes: 0
   })
-  const client = opts.record ? recordingClient(calls) : throwingClient()
+  const client = opts.record ? recordingClient(calls, opts.closeOk ?? true) : throwingClient()
   const snapshot = opts.snapshot ?? null
 
   return {
@@ -628,6 +634,8 @@ interface BootOpts {
   snapshot?: Snapshot | null
   /** Answer herdr calls instead of throwing on them. */
   record?: boolean
+  /** With `record`, what `closeWorkspace` answers. */
+  closeOk?: boolean
   lang?: 'zh' | 'en'
   autoResumeOnBoot?: boolean
   bootResumeMs?: number
@@ -648,7 +656,11 @@ interface BootOpts {
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
   const clock = testClock(START)
-  const session = fakeSession({ snapshot: opts.snapshot ?? null, record: opts.record ?? false })
+  const session = fakeSession({
+    snapshot: opts.snapshot ?? null,
+    record: opts.record ?? false,
+    closeOk: opts.closeOk
+  })
   const logs: string[] = []
   const announced: string[] = []
   const calls: string[] = []
@@ -1282,12 +1294,13 @@ describe('ProService task paths', () => {
  * Removing a row and closing a session are different operations, and the gap
  * between them is the bug these cases pin down.
  *
- * The confirmation promises the pane keeps running, so removal cannot close it -
- * and a session that keeps running keeps arriving in snapshots, unclaimed. The
- * bench adopts every workspace no task claims, which made removal self-undoing:
- * drop five rows, open one terminal, and the snapshot that arrives next adopts
- * all five back as fresh rows. What the human meant by "remove" has to outlive
- * the row it deleted.
+ * Dropping the row is a change to our file; leaving the shell alive is a change
+ * to nothing, and a session that keeps running keeps arriving in snapshots,
+ * unclaimed. The bench adopts every workspace no task claims, which made removal
+ * self-undoing: drop five rows, open one terminal, and the snapshot that arrives
+ * next adopts all five back as fresh rows. What the human meant by "remove" has
+ * to outlive the row it deleted - and a shell kept on purpose has to stay
+ * reachable, which is what the declined list and its purge are for.
  */
 describe('ProService removal', () => {
   /** Any number of one-pane workspaces, all sitting in the same directory. */
@@ -1298,14 +1311,16 @@ describe('ProService removal', () => {
       workspaces: workspaceIds.map((id, index) => ({
         workspace_id: id,
         number: index + 1,
-        label: id
+        label: id,
+        pane_count: 1
       })),
       panes: workspaceIds.map((id) => ({
         pane_id: `${id}:p1`,
         workspace_id: id,
         tab_id: `${id}:t1`,
         cwd: WORKDIR,
-        agent: 'codex'
+        agent: 'codex',
+        agent_status: 'idle'
       }))
     }) as Snapshot
   }
@@ -1335,7 +1350,7 @@ describe('ProService removal', () => {
     })
 
     for (const taskId of ['t-a', 't-b']) {
-      expect((await bench.service.taskOp({ op: 'remove', taskId })).ok).toBe(true)
+      expect((await bench.service.taskOp({ op: 'remove', taskId, closeShell: false })).ok).toBe(true)
     }
     expect(bench.registry.tasks()).toHaveLength(0)
 
@@ -1352,7 +1367,7 @@ describe('ProService removal', () => {
       snapshot: snapshotOf(['w1']),
       record: true
     })
-    await bench.service.taskOp({ op: 'remove', taskId: 't-a' })
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a', closeShell: false })
     bench.session.pushSnapshot(snapshotOf(['w1']))
     expect(workspaces(bench)).toEqual([])
 
@@ -1368,19 +1383,121 @@ describe('ProService removal', () => {
     expect(workspaces(bench)).toEqual(['w1'])
   })
 
-  it('leaves the pane running, which is what the confirmation promises', async () => {
+  it('leaves the pane running when asked to, and says so where it can be seen', async () => {
     const bench = await boot({
       tasks: [shell('t-a', 'w1')],
       snapshot: snapshotOf(['w1']),
       record: true
     })
 
-    await bench.service.taskOp({ op: 'remove', taskId: 't-a' })
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a', closeShell: false })
 
     // Closing it would be the easy way to stop the resurrection, and a
     // destructive one: an adopted row is somebody else's shell, running
     // something they did not start from this bench.
     expect(bench.session.calls.map((call) => call.method)).not.toContain('closeWorkspace')
+
+    // ...which is also why keeping it cannot be silent. A shell the bench will
+    // no longer show and nobody can reach from here is indistinguishable from a
+    // lost terminal, so it goes on the projection the topbar chip renders.
+    expect(bench.service.view()?.declined).toEqual([
+      { workspaceId: 'w1', label: 'w1', panes: 1, agentStatus: 'idle' }
+    ])
+  })
+
+  it('closes the shell when the box says so, and stops holding its id', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true
+    })
+
+    const result = await bench.service.taskOp({ op: 'remove', taskId: 't-a', closeShell: true })
+
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('removed-closed')
+    const closes = bench.session.calls.filter((call) => call.method === 'closeWorkspace')
+    expect(closes.map((call) => call.arg)).toEqual(['w1'])
+    // herdr let it go, so the id is free. A remembered removal stands in for a
+    // shell that is still running; blocking a recycled w1 for a day after the
+    // real one is gone would cost the human the next terminal they open.
+    expect(bench.registry.forgotten()).toEqual([])
+    expect(bench.service.view()?.declined).toEqual([])
+    expect(bench.ledgerTape.map((entry) => entry.text)).toContain('workspace w1 closed on remove')
+  })
+
+  it('treats a refused close as a removal that worked and a shell that survived', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true,
+      closeOk: false
+    })
+
+    const result = await bench.service.taskOp({ op: 'remove', taskId: 't-a', closeShell: true })
+
+    // The row is gone, so the human's intent landed; what failed is the optional
+    // half. Reporting that as a failed remove invites a retry of a remove that
+    // already happened, so it is a kept shell on the chip instead.
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('removed')
+    expect(bench.registry.forgotten()).toEqual(['w1'])
+    expect(bench.service.view()?.declined.map((entry) => entry.workspaceId)).toEqual(['w1'])
+    expect(bench.ledgerTape.map((entry) => entry.text)).toContain('workspace w1 survived remove')
+  })
+
+  it('purges what removals left running, because one dialog at a time is not a thing anybody finishes', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1'), shell('t-b', 'w2')],
+      snapshot: snapshotOf(['w1', 'w2', 'w3']),
+      record: true
+    })
+    for (const taskId of ['t-a', 't-b']) {
+      await bench.service.taskOp({ op: 'remove', taskId, closeShell: false })
+    }
+    expect(bench.service.view()?.declined.map((entry) => entry.workspaceId)).toEqual(['w1', 'w2'])
+
+    const result = await bench.service.taskOp({ op: 'purge' })
+
+    expect(result.ok).toBe(true)
+    expect(result.data).toEqual({ closed: 2, remaining: 0 })
+    expect(
+      bench.session.calls.filter((call) => call.method === 'closeWorkspace').map((call) => call.arg)
+    ).toEqual(['w1', 'w2'])
+    // `w3` was never a removal. Purging the declined list is not a licence to
+    // close anything else herdr happens to be carrying.
+    expect(bench.registry.forgotten()).toEqual([])
+    expect(bench.service.view()?.declined).toEqual([])
+  })
+
+  it('answers a purge with nothing declined without touching herdr', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true
+    })
+
+    const result = await bench.service.taskOp({ op: 'purge' })
+
+    expect(result.ok).toBe(true)
+    expect(result.data).toEqual({ closed: 0, remaining: 0 })
+    expect(bench.session.calls).toHaveLength(0)
+  })
+
+  it('keeps a refused purge on the chip, so the count cannot lie about the machine', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true,
+      closeOk: false
+    })
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a', closeShell: true })
+
+    const result = await bench.service.taskOp({ op: 'purge' })
+
+    expect(result.ok).toBe(true)
+    expect(result.data).toEqual({ closed: 0, remaining: 1 })
+    expect(bench.registry.forgotten()).toEqual(['w1'])
   })
 
   it('lets the id go once herdr does, so a recycled id is not blocked forever', async () => {
@@ -1389,23 +1506,48 @@ describe('ProService removal', () => {
       snapshot: snapshotOf(['w1']),
       record: true
     })
-    await bench.service.taskOp({ op: 'remove', taskId: 't-a' })
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a', closeShell: false })
 
-    // A snapshot without it is herdr agreeing the removal landed - and the id
-    // is about to mean something else, so the removal stops standing in front.
-    bench.session.pushSnapshot(emptySnapshot())
+    // A snapshot that still reports other workspaces but not this one is herdr
+    // agreeing the removal landed - and the id is about to mean something else,
+    // so the removal stops standing in front of it.
+    bench.session.pushSnapshot(snapshotOf(['w2']))
     bench.session.pushSnapshot(snapshotOf(['w1']))
 
     expect(workspaces(bench)).toEqual(['w1'])
     expect(bench.registry.tasks()[0]?.origin).toBe('adopted')
   })
 
+  it('does not read an empty snapshot as agreement, because that is what a reconnect looks like', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1'), shell('t-b', 'w2')],
+      snapshot: snapshotOf(['w1', 'w2']),
+      record: true
+    })
+    for (const taskId of ['t-a', 't-b']) {
+      await bench.service.taskOp({ op: 'remove', taskId, closeShell: false })
+    }
+
+    // "herdr has no workspaces" is what the bridge reports while the server is
+    // still restoring its session. Taking it as evidence clears every removal a
+    // moment before the real snapshot re-adopts all of them: the resurrection
+    // this list exists to prevent, back again on a timer nobody can see.
+    bench.session.pushSnapshot(emptySnapshot())
+    expect(bench.registry.forgotten()).toEqual(['w1', 'w2'])
+
+    bench.session.pushSnapshot(snapshotOf(['w1', 'w2']))
+    expect(workspaces(bench)).toEqual([])
+  })
+
   it('reports an unknown task instead of remembering a removal that did not happen', async () => {
     const bench = await boot({ tasks: [], snapshot: snapshotOf(['w1']), record: true })
 
-    const result = await bench.service.taskOp({ op: 'remove', taskId: 't-nope' })
+    const result = await bench.service.taskOp({ op: 'remove', taskId: 't-nope', closeShell: true })
     expect(result.ok).toBe(false)
     expect(bench.registry.forgotten()).toEqual([])
+    // Not a scratch on herdr either: an unknown row is not a licence to close
+    // whatever workspace the caller happened to name.
+    expect(bench.session.calls).toHaveLength(0)
   })
 })
 
@@ -1453,6 +1595,13 @@ describe('TaskRegistry forgotten removals', () => {
     box.registry.forget('w1')
     box.registry.reconcileForgotten(['w2', 'w3'])
     expect(box.registry.forgotten()).toEqual([])
+  })
+
+  it('reads nothing into an empty report, because that is a reconnect and not an answer', () => {
+    const box = registry(START)
+    box.registry.forget('w1')
+    box.registry.reconcileForgotten([])
+    expect(box.registry.forgotten()).toEqual(['w1'])
   })
 
   it('expires an entry herdr never let go of, rather than block the id forever', () => {

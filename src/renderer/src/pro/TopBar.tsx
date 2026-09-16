@@ -23,6 +23,7 @@ import {
   Bell,
   Clock,
   FolderInput,
+  FolderX,
   Import,
   LayoutGrid,
   MessageCircle,
@@ -30,6 +31,7 @@ import {
   PersonStanding,
   Plug,
   Plus,
+  Power,
   RefreshCw,
   Sparkles,
   TerminalSquare,
@@ -50,6 +52,8 @@ export interface TopBarProps {
   onCompanion: () => void
   onSnoozeAll: () => void
   onAdopt: () => void
+  /** Close every terminal a removal left running in herdr. */
+  onPurgeDeclined: () => void
   onImport: () => void
   onStage: () => void
   onNewTask: () => void
@@ -114,6 +118,7 @@ export function TopBar({
   onCompanion,
   onSnoozeAll,
   onAdopt,
+  onPurgeDeclined,
   onImport,
   onStage,
   onNewTask,
@@ -143,6 +148,8 @@ export function TopBar({
       <BenchBrand t={t} onStage={onStage} />
 
       <HerdrChip view={view} t={t} onRediscover={onRediscover} />
+
+      <DeclinedChip view={view} t={t} onPurge={onPurgeDeclined} />
 
       <div className="counts">
         <Count state="working" n={counts.working} label={t('countWorking')} />
@@ -344,6 +351,45 @@ function HerdrChip({
       <span className="chip-text">
         {fill(t, 'herdrStats', { workspaces: herdr.workspaces, panes: herdr.panes })}
       </span>
+    </span>
+  )
+}
+
+/**
+ * Terminals the human removed and left running.
+ *
+ * Adoption steps around a remembered removal, which is what makes "remove"
+ * stick - and a suppression nobody can see is indistinguishable from a terminal
+ * the bench lost. So the fact gets its own chip, the ids behind it go in the
+ * tooltip, and the button on it is the way out: one click closes all of them in
+ * herdr. Hidden entirely at zero, unlike the counts, because a chip reading
+ * "nothing is wrong" is noise in a bar this dense.
+ */
+function DeclinedChip({
+  view,
+  t,
+  onPurge
+}: {
+  view: BenchView
+  t: Translate
+  onPurge: () => void
+}): ReactElement | null {
+  const declined = view.declined
+  if (!declined.length) return null
+  const ids = declined.map((entry) => `${entry.workspaceId} · ${entry.label}`).join('\n')
+  return (
+    <span className="chip declined" title={`${t('declinedTip')}\n${ids}`}>
+      <FolderX />
+      <span className="chip-text">{fill(t, 'declinedChip', { n: declined.length })}</span>
+      <button
+        type="button"
+        className="btn ghost icon"
+        title={t('declinedClose')}
+        aria-label={t('declinedClose')}
+        onClick={onPurge}
+      >
+        <Power />
+      </button>
     </span>
   )
 }

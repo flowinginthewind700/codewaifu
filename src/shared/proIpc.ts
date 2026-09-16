@@ -280,8 +280,23 @@ export type ProTaskRequest =
     }
   | { op: 'patch'; taskId: string; title: string; goal: string; branch: string }
   | { op: 'status'; taskId: string; status: TaskStatus }
-  | { op: 'remove'; taskId: string }
+  /**
+   * Drop the row, and optionally the shell underneath it.
+   *
+   * `closeShell` is the difference between "hide this" and "get rid of this".
+   * Absent means keep the workspace running, which is what a script calling the
+   * HTTP API has always got; the bench sends an explicit answer from a checkbox
+   * the human just read.
+   */
+  | { op: 'remove'; taskId: string; closeShell: boolean }
   | { op: 'adopt' }
+  /**
+   * Close every live workspace a remembered removal is holding off the bench.
+   * The chip in the topbar is the only thing that reports those, so this is the
+   * verb that answers it: one click and herdr stops carrying shells nobody can
+   * reach from here.
+   */
+  | { op: 'purge' }
   /**
    * Pull sessions the companion can already see into the tree. `keys` are
    * `${agent}:${id}` thread keys; the service resolves them against the live
@@ -349,9 +364,11 @@ export function parseProTask(payload: unknown): ProTaskParse {
     case 'remove': {
       const taskId = taskIdOf(raw.taskId ?? raw.id)
       if (!taskId) return reject('bad-task', 'taskId is required')
-      return { op, taskId }
+      return { op, taskId, closeShell: bool(raw.closeShell ?? raw.close) }
     }
     case 'adopt':
+      return { op }
+    case 'purge':
       return { op }
     case 'import': {
       const keys = threadKeysOf(raw.keys ?? raw.ids)

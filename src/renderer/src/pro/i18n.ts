@@ -187,11 +187,51 @@ const STRINGS = {
   handoffFailed: { zh: '复制失败', en: 'Copy failed' },
   confirmRemoveTitle: { zh: '移除这个任务？', en: 'Remove this task?' },
   confirmRemoveBody: {
-    zh: '只会从工作台移除记录，herdr 里的面板和进程不受影响。',
-    en: 'This only drops it from the bench. The pane and its process in herdr keep running.'
+    zh: '记录会从工作台移除。下面这一项决定 herdr 里那个终端的去留。',
+    en: 'The row leaves the bench. The box below decides what happens to its terminal in herdr.'
+  },
+  confirmRemoveCloseShell: {
+    zh: '同时关闭 herdr 里的终端（里面正在跑的进程会一起结束）',
+    en: 'Also close the terminal in herdr (anything running in it stops)'
+  },
+  /** Shown while the box above is unticked, because that choice has a tail. */
+  confirmRemoveKeepShell: {
+    zh: '不关闭：终端继续在 herdr 里跑，工作台不再显示它，顶栏会留一个一键关闭的入口。',
+    en: 'Left running: the bench stops showing it, and the topbar keeps a one-click way to close it.'
+  },
+  /** Shown instead of the box, when there is nothing left to close. */
+  confirmRemoveNoShell: {
+    zh: '这一行没有正在运行的终端，移除只删记录。',
+    en: 'This row has no terminal running, so removing it only drops the record.'
   },
   confirmRemove: { zh: '移除', en: 'Remove' },
   confirmCancel: { zh: '取消', en: 'Cancel' },
+
+  /* ------------------------------------------------- removed but alive */
+  /**
+   * Removals that left the shell running. The chip exists so suppression is
+   * never silent: a terminal you closed and can no longer find anywhere reads
+   * as a bug, and the button on it is the way out.
+   */
+  declinedChip: {
+    zh: '{n} 个已移除的终端仍在 herdr 里运行',
+    en: '{n} removed terminals still running in herdr'
+  },
+  declinedTip: {
+    zh: '你移除时选择了保留进程：工作台不再显示它们，但它们还开着。',
+    en: 'You removed these and left the processes running. The bench no longer shows them.'
+  },
+  declinedClose: { zh: '全部关闭', en: 'Close them all' },
+  /** What the toast says after a removal, which is the only proof it landed. */
+  removedAndClosed: {
+    zh: '已移除，herdr 里的终端也关掉了',
+    en: 'Removed, and its terminal in herdr is closed'
+  },
+  removedStillRunning: {
+    zh: '已移除，但 herdr 没能关掉那个终端，它还开着',
+    en: 'Removed, but herdr did not close that terminal; it is still running'
+  },
+  purgedToast: { zh: '已关闭 {n} 个终端', en: 'Closed {n} terminals' },
 
   /* ---------------------------------------------------------- recovery */
   recoveryTitle: { zh: '恢复计划', en: 'Recovery' },

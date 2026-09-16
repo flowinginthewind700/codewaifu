@@ -67,6 +67,18 @@ const NO_ITEMS: readonly AttentionItem[] = []
 /** Same, for a projection that has not landed yet. */
 const NO_GROUPS: GroupView[] = []
 
+/**
+ * Whether removing this row has a shell underneath it to close.
+ *
+ * An imported session runs in somebody else's terminal, and a row whose pane is
+ * already gone has nothing left, so the box is not offered in either case: a
+ * choice with one answer is noise, and ticking it would earn a toast about a
+ * close that could never have happened.
+ */
+function canCloseShell(task: TaskView | null | undefined): boolean {
+  return !!task?.workspaceId && task.alive
+}
+
 export function Bench(): ReactElement {
   const [booted, setBooted] = useState(false)
   const [view, setView] = useState<BenchView | null>(null)
@@ -88,6 +100,13 @@ export function Bench(): ReactElement {
   /** Origin facet. Viewing state like the rest of it; main owns the facts. */
   const [treeFilter, setTreeFilter] = useState<TreeFilter>('all')
   const [removeId, setRemoveId] = useState('')
+  /**
+   * "Close the shell too", the checkbox in the remove dialog.
+   *
+   * Set by `askRemove` for the row being removed; the initial true only covers a
+   * dialog opened before the projection landed.
+   */
+  const [removeClose, setRemoveClose] = useState(true)
   /** Bumped when a task's ledger changed, so the digest and the panel refetch. */
   const [revision, setRevision] = useState(0)
   const [now, setNow] = useState(() => Date.now())
@@ -389,6 +408,22 @@ export function Bench(): ReactElement {
     })
   }, [bump, report])
 
+  /**
+   * The chip's button: close every terminal a removal left running in herdr.
+   *
+   * These are the shells the tree can no longer show, so this is the only
+   * reachable way to be rid of them - and the reason a removal that kept its
+   * process alive is a safe choice to offer.
+   */
+  const purgeDeclined = useCallback((): void => {
+    void proApi.task.purgeDeclined().then((result) => {
+      if (!report(result)) return
+      const closed = result.data?.closed ?? 0
+      if (closed) push(fill(t, 'purgedToast', { n: closed }), 'ok')
+      bump()
+    })
+  }, [bump, push, report, t])
+
   const rediscover = useCallback((): void => {
     void proApi.host.discovery().then((result) => report(result))
   }, [report])
@@ -405,12 +440,35 @@ export function Bench(): ReactElement {
 
   const confirmRemove = useCallback((): void => {
     const id = removeId
+    const closeShell = removeClose
     setRemoveId('')
     if (!id) return
-    void proApi.task.remove(id).then((result) => {
-      if (report(result)) bump()
+    void proApi.task.remove(id, closeShell).then((result) => {
+      if (!report(result)) return
+      // Asked to close and herdr refused is worth saying out loud: the row is
+      // gone, so the chip is the only other trace of the shell that survived.
+      if (closeShell) {
+        const closed = result.data?.closed === true
+        push(t(closed ? 'removedAndClosed' : 'removedStillRunning'), closed ? 'ok' : 'warn')
+      }
+      bump()
     })
-  }, [bump, report, removeId])
+  }, [bump, push, report, removeClose, removeId, t])
+
+  /**
+   * Open the dialog with the checkbox at its default for *this* row.
+   *
+   * The default is "close it", and the box is only offered where there is
+   * something to close (`canCloseShell`). Reset on every open rather than
+   * remembered across the session: the answer belongs to the row in front of the
+   * human, so one deliberate "keep it running" must not become the default for
+   * the next five removals.
+   */
+  const askRemove = useCallback((id: string): void => {
+    const task = viewRef.current?.tasks.find((entry) => entry.id === id) ?? null
+    setRemoveClose(canCloseShell(task))
+    setRemoveId(id)
+  }, [])
 
   /** Recovery verbs all want the same thing: run, report, re-read the ledger. */
   const recover = useCallback(
@@ -608,6 +666,7 @@ export function Bench(): ReactElement {
 
   const install = !proEnabled || !herdrOnline
   const removeTask = view?.tasks.find((entry) => entry.id === removeId) ?? null
+  const closable = canCloseShell(removeTask)
 
   return (
     <div
@@ -627,6 +686,7 @@ export function Bench(): ReactElement {
           onCompanion={toggleCompanion}
           onSnoozeAll={snoozeAll}
           onAdopt={adopt}
+          onPurgeDeclined={purgeDeclined}
           onImport={() => setImportOpen(true)}
           onStage={toStage}
           onNewTask={() => setNewTaskOpen(true)}
@@ -680,7 +740,7 @@ export function Bench(): ReactElement {
                 t={t}
                 onNotify={push}
                 onStatus={setStatus}
-                onRemove={() => setRemoveId(selectedTask.id)}
+                onRemove={() => askRemove(selectedTask.id)}
               />
             )}
             {conversationTask ? (
@@ -812,6 +872,25 @@ export function Bench(): ReactElement {
               <p className="wide hint mono">
                 {removeTask?.title || removeTask?.workdir || removeId}
               </p>
+              {closable ? (
+                <>
+                  <span className="checks wide">
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={removeClose}
+                        onChange={(event) => setRemoveClose(event.target.checked)}
+                      />
+                      {t('confirmRemoveCloseShell')}
+                    </label>
+                  </span>
+                  {!removeClose && <p className="wide hint">{t('confirmRemoveKeepShell')}</p>}
+                </>
+              ) : (
+                // A disabled box with no sentence under it reads as a broken
+                // dialog. Say what is true instead: there is no shell to close.
+                <p className="wide hint">{t('confirmRemoveNoShell')}</p>
+              )}
             </div>
             <div className="dialog-foot">
               <button type="button" className="btn ghost" onClick={() => setRemoveId('')}>

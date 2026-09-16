@@ -1333,6 +1333,8 @@ export interface BenchInput {
   attachedPanes?: readonly string[]
   /** Blocked-since per task, from the triage tracker. */
   blockedSince?: Record<string, number>
+  /** Workspace ids a remembered removal is holding off the bench. */
+  forgotten?: readonly string[]
   companion?: { visible: boolean; notices: number }
 }
 
@@ -1344,7 +1346,52 @@ export interface BenchView {
   tasks: TaskView[]
   attention: AttentionItem[]
   recovery: RecoveryPlan[]
+  /**
+   * Live herdr workspaces the bench is refusing to adopt because the human
+   * removed them. Suppression that nobody can see reads as a lost terminal, so
+   * it is reported here with the count that makes the topbar chip honest.
+   */
+  declined: DeclinedWorkspace[]
   companion: { visible: boolean; notices: number }
+}
+
+/** One live workspace a remembered removal is standing in front of. */
+export interface DeclinedWorkspace {
+  workspaceId: string
+  label: string
+  panes: number
+  agentStatus: AgentStatus
+}
+
+/**
+ * Which of herdr's live workspaces the bench is declining, and why the question
+ * is worth asking out loud.
+ *
+ * A removal that only drops the row leaves the shell running - that is what the
+ * confirmation promises - so herdr keeps reporting it and adoption keeps
+ * stepping around it. Left invisible, that is a terminal the human closed and
+ * can no longer find anywhere. Sorted by id so the chip's tooltip is stable
+ * across snapshots rather than reshuffling on every push.
+ */
+export function declinedWorkspaces(
+  snapshot: Snapshot | null,
+  forgotten: readonly string[]
+): DeclinedWorkspace[] {
+  if (!snapshot || !forgotten.length) return []
+  const blocked = new Set(forgotten.filter(Boolean))
+  if (!blocked.size) return []
+  const out: DeclinedWorkspace[] = []
+  for (const workspace of snapshot.workspaces) {
+    if (!blocked.has(workspace.workspaceId)) continue
+    out.push({
+      workspaceId: workspace.workspaceId,
+      label: workspace.label || pathBase(workspace.worktree?.checkoutPath || '') || `workspace ${workspace.number}`,
+      panes: workspace.paneCount,
+      agentStatus: workspaceStatus(snapshot, workspace)
+    })
+  }
+  out.sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.label.localeCompare(b.label))
+  return out
 }
 
 /**
@@ -1413,6 +1460,7 @@ export function buildBench(input: BenchInput): BenchView {
     tasks: views,
     attention,
     recovery: (input.recovery ?? []).slice(),
+    declined: declinedWorkspaces(snapshot, input.forgotten ?? []),
     companion: input.companion ?? { visible: false, notices: 0 }
   }
 }
