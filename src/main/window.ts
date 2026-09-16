@@ -24,12 +24,25 @@ import { here } from './here'
 import { compositorProbe, currentSession, logDesktop } from './linux'
 import { log } from './log'
 import { badgeDigits, waifuIconPng } from './png'
+import {
+  trayInteraction,
+  trayMenu,
+  trayMenuKey,
+  type TrayAction,
+  type TrayMenuState
+} from '../shared/trayMenu'
+import type { Lang } from '../shared/protocol'
 
 export interface WindowHandlers {
   onExpanded: (expanded: boolean) => void
   onMoved: (position: { x: number; y: number }) => void
   onQuit: () => void
   isMuted: () => boolean
+  /**
+   * Language the tray's copy is written in, read live: it follows the UI
+   * language setting, which can change while the tray is already published.
+   */
+  lang: () => Lang
   onToggleMute: () => void
   onReinstallHooks: () => void
   /**
@@ -84,6 +97,12 @@ export interface WindowHandle {
    * plain mark. A no-op where the platform gave us no tray at all.
    */
   setBadge: (count: number) => void
+  /**
+   * Re-publish the tray menu from the current state. Needed on Linux, where the
+   * menu is the tray's only behaviour and is published once rather than built on
+   * open; a no-op elsewhere and whenever nothing a label depends on changed.
+   */
+  refreshTray: () => void
 }
 
 function rendererEntry(): string {
@@ -346,9 +365,17 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   }
 
   // Bound to the window's own events, not to our show/hide helpers, so a
-  // visibility change we did not cause still reaches the listeners.
-  win.on('show', () => handlers.onVisibility?.(true))
-  win.on('hide', () => handlers.onVisibility?.(false))
+  // visibility change we did not cause still reaches the listeners. The tray's
+  // first row is that same fact, so it re-publishes from here too: a window
+  // manager hiding us is exactly the case a `hide()`-side hook would miss.
+  win.on('show', () => {
+    handlers.onVisibility?.(true)
+    trayHandle.refresh()
+  })
+  win.on('hide', () => {
+    handlers.onVisibility?.(false)
+    trayHandle.refresh()
+  })
 
   const show = (focus: boolean): void => {
     if (!win.isDestroyed()) {
@@ -415,8 +442,10 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
       inputActive = active
     },
     setBadge: (count: number) => trayHandle.setBadge(count),
+    refreshTray: () => trayHandle.refresh(),
     applyConfig: (next: AppConfig) => {
       if (win.isDestroyed()) return
+      trayHandle.refresh()
       try {
         win.setAlwaysOnTop(next.alwaysOnTop, next.alwaysOnTop ? 'floating' : undefined)
         win.setOpacity(next.opacity)
@@ -434,10 +463,11 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   }
 }
 
-/** The tray, plus the one thing Pro needs from it. */
+/** The tray, plus the two things the rest of main needs from it. */
 interface TrayHandle {
   tray: Tray | null
   setBadge: (count: number) => void
+  refresh: () => void
 }
 
 /** Tray icon edge in device-independent pixels, per platform convention. */
@@ -462,6 +492,7 @@ function createTray(
   summon: (focus: boolean) => void,
   show: (focus: boolean) => void
 ): TrayHandle {
+  const dead: TrayHandle = { tray: null, setBadge: () => {}, refresh: () => {} }
   try {
     const size = trayIconSize()
     const tray = new Tray(trayImage(size, 0))
@@ -472,54 +503,94 @@ function createTray(
       logDesktop()
     }
     tray.setToolTip('CodeWaifu')
-    const build = (): Menu => {
-      const muted = handlers.isMuted()
-      return Menu.buildFromTemplate([
-        {
-          label: win.isVisible() ? 'Hide companion' : 'Show stage',
-          click: () => {
-            if (win.isDestroyed()) return
-            if (win.isVisible()) win.hide()
-            else summon(true)
-          }
-        },
-        {
-          label: 'Open panel',
-          click: () => {
-            // The window may be hidden; opening the panel must reveal it too.
-            show(true)
-            win.webContents.send(IPC.openPanel)
-          }
-        },
-        // The count in the label is the same number the badge draws, so the menu
-        // says whether opening it is worth it before the click rather than
-        // after. Gated on a live predicate: Pro can be switched off at runtime.
-        ...(handlers.onOpenBench && handlers.benchAvailable?.()
-          ? [
-              {
-                label: badgeCount > 0 ? `Open Bench (${badgeCount})` : 'Open Bench',
-                click: (): void => handlers.onOpenBench?.()
-              }
-            ]
-          : []),
-        { type: 'separator' },
-        { label: muted ? 'Unmute voice' : 'Mute voice', click: () => handlers.onToggleMute() },
-        { label: 'Repair agent hooks', click: () => handlers.onReinstallHooks() },
-        { type: 'separator' },
-        { label: 'Quit CodeWaifu', click: () => handlers.onQuit() }
-      ])
+
+    const state = (): TrayMenuState => ({
+      visible: !win.isDestroyed() && win.isVisible(),
+      muted: handlers.isMuted(),
+      bench: Boolean(handlers.onOpenBench && handlers.benchAvailable?.()),
+      badge: badgeCount,
+      lang: handlers.lang()
+    })
+
+    const run = (action: TrayAction): void => {
+      const alive = !win.isDestroyed()
+      switch (action) {
+        case 'stage':
+          if (alive) summon(true)
+          break
+        case 'hide':
+          if (alive) win.hide()
+          break
+        case 'bench':
+          handlers.onOpenBench?.()
+          break
+        case 'panel':
+          if (!alive) break
+          // The window may be hidden; opening the panel must reveal it too.
+          show(true)
+          win.webContents.send(IPC.openPanel)
+          break
+        case 'mute':
+        case 'unmute':
+          handlers.onToggleMute()
+          break
+        case 'hooks':
+          handlers.onReinstallHooks()
+          break
+        case 'quit':
+          handlers.onQuit()
+          break
+      }
     }
+
+    const template = (current: TrayMenuState): Electron.MenuItemConstructorOptions[] =>
+      trayMenu(current).map((entry) =>
+        entry.kind === 'separator'
+          ? { type: 'separator' as const }
+          : { label: entry.label, click: () => run(entry.action) }
+      )
+
     /*
-     * Left click is the summon gesture on every platform: she appears on the
-     * simple stage. A tray with `setContextMenu` makes macOS swallow the left
-     * click into the menu, which put the full panel one mis-click away from a
-     * casual click; popping the menu on right click only keeps the left click
-     * for her.
+     * `setContextMenu` publishes a menu over D-Bus; on Linux that publication
+     * *is* the tray's behaviour, so it has to be redone whenever a label
+     * changes rather than built on open. The memo is what makes that cheap:
+     * appindicator re-registers the whole layout on every call, and a badge
+     * tick during a busy hour would otherwise be hundreds of identical
+     * registrations.
      */
-    tray.on('click', () => summon(true))
-    tray.on('double-click', () => summon(true))
-    // Rebuilt on open so the mute label reflects the current state.
-    tray.on('right-click', () => tray.popUpContextMenu(build()))
+    const interaction = trayInteraction(process.platform)
+    let published = ''
+    const refresh = (): void => {
+      if (interaction !== 'menu') return
+      const current = state()
+      const key = trayMenuKey(current)
+      if (key === published) return
+      published = key
+      try {
+        tray.setContextMenu(Menu.buildFromTemplate(template(current)))
+      } catch (error) {
+        log('warn', 'tray menu failed', String(error))
+      }
+    }
+    refresh()
+
+    if (interaction === 'gesture') {
+      /*
+       * Left click is the summon gesture on mac and Windows: she appears on the
+       * simple stage. A tray with `setContextMenu` makes macOS swallow the left
+       * click into the menu, which put the full panel one mis-click away from a
+       * casual click; popping the menu on right click only keeps the left click
+       * for her. Linux gets neither handler: its host has no click event to
+       * deliver and `popUpContextMenu` is a mac/Windows API, so the menu above
+       * is the whole interaction.
+       */
+      tray.on('click', () => summon(true))
+      tray.on('double-click', () => summon(true))
+      tray.on('right-click', () => tray.popUpContextMenu(Menu.buildFromTemplate(template(state()))))
+    } else {
+      win.on('show', refresh)
+      win.on('hide', refresh)
+    }
 
     /**
      * One number, three renders: tray icon, tray tooltip, Bench header. The
@@ -539,10 +610,12 @@ function createTray(
       } catch (error) {
         log('warn', 'tray badge failed', String(error))
       }
+      // The bench row carries the same count, so it is part of the menu's state.
+      refresh()
     }
-    return { tray, setBadge }
+    return { tray, setBadge, refresh }
   } catch (error) {
     log('warn', 'tray unavailable (headless session?)', String(error))
-    return { tray: null, setBadge: () => {} }
+    return dead
   }
 }

@@ -301,6 +301,16 @@ function proHost(instance: Core): ProHost {
     setBadge: (count) => handle?.setBadge(count),
     bubbleMs: () => instance.config.bubbleMs,
     openBench: () => ensureBench()?.show(true),
+    // One app, two modes: the Bench hides (it is kept alive, so its terminal
+    // scrollback survives the trip back) and the stage window comes forward
+    // with focus, because a human just clicked "take me back".
+    openStage: () => {
+      handle?.show(true)
+      benchAlive()?.hide()
+    },
+    // The sessions the companion already tracks on this machine. Read-only:
+    // the bench offers them for import, it never writes to the tracker.
+    listThreads: () => instance.threads(),
     pickDir: () => pickDirectory(),
     openPath: (target) => {
       void revealPath(target)
@@ -368,10 +378,18 @@ async function boot(): Promise<void> {
     onMoved: (position) => instance.setWindowPosition(position),
     onQuit: () => app.quit(),
     isMuted: () => !instance.config.speak,
+    // The tray's copy follows the interface language, not the voice language:
+    // a Chinese UI speaking English lines is the combination the setting exists
+    // for, and the menu is UI.
+    lang: () => instance.uiLang(),
     onToggleMute: () => {
       const speak = !instance.config.speak
       void instance.updateConfig({ speak }).then(() => {
         send(handle?.win ?? null, IPC.pushConfig, { ...instance.config, token: '***' })
+        // On Linux the menu is published, not built on open, so the row that
+        // just changed meaning has to be re-published or it keeps saying the
+        // opposite of what it will do.
+        handle?.refreshTray()
         if (speak) {
           const lang = instance.config.lang === 'en' ? 'en' : 'zh'
           instance.say(lang === 'zh' ? '我回来了' : 'I am back', lang)
