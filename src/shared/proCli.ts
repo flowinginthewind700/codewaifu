@@ -791,13 +791,13 @@ const MIN_TITLE = 4
  */
 export function fitSegments(parts: string[], width: number): string {
   const joined = parts.join('  ')
-  if (joined.length <= width) return joined
+  if (displayWidth(joined) <= width) return joined
   let head = parts[0] ?? ''
   let kept = 1
   for (let i = 1; i < parts.length; i++) {
     const next = `${head}  ${parts[i]}`
     // Reserve room for the ` ...` that says something was dropped.
-    if (next.length + 4 > width) break
+    if (displayWidth(next) + 4 > width) break
     head = next
     kept = i + 1
   }
@@ -811,26 +811,105 @@ function fitTail(text: string, room: number): string {
 }
 
 /**
+ * Two columns, not one. This is the East Asian Wide/Fullwidth block the terminal
+ * double-widths; everything outside it draws in a single cell. The ranges are
+ * the ones a machine name or a task title can actually contain - CJK, Hangul,
+ * fullwidth forms, and the emoji planes - not the whole Unicode width table.
+ */
+function isWide(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0x303e) ||
+    (code >= 0x3041 && code <= 0x33ff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xa000 && code <= 0xa4cf) ||
+    (code >= 0xa960 && code <= 0xa97f) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe19) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1f6ff) ||
+    (code >= 0x1f900 && code <= 0x1f9ff) ||
+    (code >= 0x1fa70 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  )
+}
+
+/**
+ * How many terminal columns a string occupies.
+ *
+ * Every column budget in this file is measured in these units, never in
+ * `string.length`: UTF-16 counts a Chinese label as one character per glyph
+ * while the terminal draws two cells for it, so a `.length`-based pad leaves
+ * every row carrying CJK one column off and the table stops being a table.
+ * Combining marks, zero-width joiners and variation selectors draw nothing of
+ * their own and count as zero; iteration is by code point so a surrogate pair
+ * is never measured as two columns and never sliced in half.
+ */
+export function displayWidth(text: string): number {
+  let width = 0
+  for (const char of String(text ?? '')) {
+    const code = char.codePointAt(0) ?? 0
+    if (
+      code === 0 ||
+      (code >= 0x0300 && code <= 0x036f) ||
+      (code >= 0x200b && code <= 0x200f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      (code >= 0xfe00 && code <= 0xfe0f) ||
+      (code >= 0xe0100 && code <= 0xe01ff)
+    ) {
+      continue
+    }
+    width += isWide(code) ? 2 : 1
+  }
+  return width
+}
+
+/**
  * Truncate with `...`, the ASCII marker a terminal cannot mangle. Clipping
  * beats wrapping everywhere in here: a wrapped row destroys the alignment of
  * every row below it, and alignment is the whole reason this is a table.
  */
 export function clip(text: string, max: number): string {
   const value = String(text ?? '')
-  if (max <= 3 || value.length <= max) return value
-  return `${value.slice(0, max - 3)}...`
+  if (max <= 3 || displayWidth(value) <= max) return value
+  let kept = ''
+  let used = 0
+  const room = max - 3
+  for (const char of value) {
+    const charWidth = displayWidth(char)
+    if (used + charWidth > room) break
+    kept += char
+    used += charWidth
+  }
+  return `${kept}...`
 }
 
 /** Keep the end of a path: that is the part two checkouts differ in. */
 export function clipLeft(text: string, max: number): string {
   const value = String(text ?? '')
-  if (max <= 3 || value.length <= max) return value
-  return `...${value.slice(value.length - max + 3)}`
+  if (max <= 3 || displayWidth(value) <= max) return value
+  const chars = [...value]
+  let kept = ''
+  let used = 0
+  const room = max - 3
+  for (let i = chars.length - 1; i >= 0; i -= 1) {
+    const charWidth = displayWidth(chars[i])
+    if (used + charWidth > room) break
+    kept = chars[i] + kept
+    used += charWidth
+  }
+  return `...${kept}`
 }
 
 export function pad(text: string, width: number): string {
   const value = String(text ?? '')
-  return value.length >= width ? value : value + ' '.repeat(width - value.length)
+  const used = displayWidth(value)
+  return used >= width ? value : value + ' '.repeat(width - used)
 }
 
 /** `4m`, not `4 minutes`: this lands in a fixed-width column. */
@@ -894,7 +973,7 @@ function taskTail(task: TaskView): string {
 }
 
 function idColumnWidth(tasks: readonly TaskView[]): number {
-  const longest = tasks.reduce((max, task) => Math.max(max, String(task.id || '').length), 0)
+  const longest = tasks.reduce((max, task) => Math.max(max, displayWidth(String(task.id || ''))), 0)
   return Math.max(ID_MIN, Math.min(ID_MAX, longest + 1))
 }
 
@@ -905,8 +984,9 @@ function taskLine(task: TaskView, width: number, idW: number): string {
   // word does: an id past the ceiling still leaves the gap instead of butting
   // into the next column (`e2e-smoke-...unknown`).
   const head = `  ${pad(clip(markFor(task), MARK_W), MARK_W)} ${pad(clip(task.id, idW - 1), idW)}${pad(clip(stateWord(task), STATE_W - 1), STATE_W)}`
-  const tail = fitTail(taskTail(task), width - head.length - 2 - MIN_TITLE)
-  const budget = Math.max(MIN_TITLE, width - head.length - (tail ? tail.length + 2 : 0))
+  const headW = displayWidth(head)
+  const tail = fitTail(taskTail(task), width - headW - 2 - MIN_TITLE)
+  const budget = Math.max(MIN_TITLE, width - headW - (tail ? displayWidth(tail) + 2 : 0))
   const title = clip(task.title || '(untitled)', budget)
   return `${head}${pad(title, budget)}${tail ? `  ${tail}` : ''}`.trimEnd()
 }
@@ -919,12 +999,12 @@ function groupHead(group: GroupView, open: number, width: number): string {
   const label = group.label || 'unknown'
   // A wrapped group head leaves the reader unable to tell which rows belong to
   // which directory, so the label is clipped before the counts are appended.
-  const room = Math.max(8, width - tail.length - 2)
-  const keyRoom = room - label.length - 2
+  const room = Math.max(8, width - displayWidth(tail) - 2)
+  const keyRoom = room - displayWidth(label) - 2
   const where = group.key && group.key !== label && keyRoom >= 12
     ? `  ${clipLeft(group.key, Math.min(46, keyRoom))}`
     : ''
-  return `${clip(label, room - where.length)}${where}  ${tail}`.trimEnd()
+  return `${clip(label, room - displayWidth(where))}${where}  ${tail}`.trimEnd()
 }
 
 function fleetLine(
@@ -1066,7 +1146,7 @@ function planLines(plan: RecoveryPlan, ordinal: number, width: number): string[]
   // it is printed whole and the title gives way instead. A clipped id is a
   // command that cannot be typed.
   const id = plan.taskId || ''
-  const room = Math.max(8, width - head.length - id.length - 2)
+  const room = Math.max(8, width - displayWidth(head) - displayWidth(id) - 2)
   out.push(`${head}${clip(plan.title || '(untitled)', room)}  ${id}`.trimEnd())
   if (plan.reason) out.push(`    ${clip(plan.reason, width - 4)}`)
   for (const step of plan.steps) {
@@ -1098,7 +1178,9 @@ export function renderProAttention(
     const head = `${pad(`${index + 1}.`, 4)}${clip(item.kind, 14)}  waited ${durShort(waitedMs(item, now))}   `
     const group = item.groupLabel ? `  (${item.groupLabel})` : ''
     const where = item.taskTitle || item.taskId
-    lines.push(`${head}${clip(where, Math.max(8, width - head.length - group.length))}${group}`)
+    lines.push(
+      `${head}${clip(where, Math.max(8, width - displayWidth(head) - displayWidth(group)))}${group}`
+    )
     const ask = item.title || item.detail
     if (ask) lines.push(`    ${clip(ask, body)}`)
     if (item.command) lines.push(`    $ ${clip(item.command, body - 2)}`)
@@ -1282,7 +1364,10 @@ const PROBE_TEXT: Record<string, string> = {
 }
 
 function sshLabelWidth(labels: readonly string[]): number {
-  const longest = labels.reduce((max, label) => Math.max(max, String(label ?? '').length), 0)
+  const longest = labels.reduce(
+    (max, label) => Math.max(max, displayWidth(String(label ?? ''))),
+    0
+  )
   return Math.max(SSH_LABEL_MIN, Math.min(SSH_LABEL_MAX, longest + 2))
 }
 
@@ -1295,7 +1380,7 @@ function sshRow(label: string, tag: string, line: string, width: number, labelW:
   // No floor on the dial column: a row that overflows the terminal wraps, and a
   // wrapped row destroys the alignment of every row under it. The runner clamps
   // the width to 60 at the narrowest, which is room for both columns.
-  return `${head}${clip(line, Math.max(0, width - head.length))}`
+  return `${head}${clip(line, Math.max(0, width - displayWidth(head)))}`
 }
 
 /**
@@ -1335,11 +1420,11 @@ function hiddenText(hidden: readonly HiddenMachine[], width: number): string {
   if (!hidden.length) return 'nothing is hidden'
   const keyW = Math.max(
     12,
-    Math.min(40, hidden.reduce((max, row) => Math.max(max, row.key.length), 0) + 2)
+    Math.min(40, hidden.reduce((max, row) => Math.max(max, displayWidth(row.key)), 0) + 2)
   )
   const rows = hidden.map((row) => {
     const head = `  ${pad(clip(row.key, keyW - 2), keyW)}${pad(row.stale ? 'stale' : '', 7)}`
-    return `${head}${clip(sshLine(row.machine, {}), Math.max(0, width - head.length))}`
+    return `${head}${clip(sshLine(row.machine, {}), Math.max(0, width - displayWidth(head)))}`
   })
   return [`${hidden.length} hidden`, ...rows, 'restore: codewaifu pro ssh restore <key>'].join(
     '\n'
@@ -1726,8 +1811,8 @@ export function renderProChange(change: ProChange, at: number, width = 100): str
   const head = `${clock(at)}  ${pad(tagFor(change), TAG_W)}  `
   const body = bodyFor(change)
   const id = idFor(change)
-  if (!id) return `${head}${clip(body, Math.max(8, width - head.length))}`.trimEnd()
-  const room = Math.max(8, width - head.length - id.length - 2)
+  if (!id) return `${head}${clip(body, Math.max(8, width - displayWidth(head)))}`.trimEnd()
+  const room = Math.max(8, width - displayWidth(head) - displayWidth(id) - 2)
   return `${head}${clip(body, room)}  ${id}`.trimEnd()
 }
 

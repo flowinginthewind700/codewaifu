@@ -51,6 +51,7 @@ import {
   clip,
   clipLeft,
   diffProViews,
+  displayWidth,
   durShort,
   exitForStatus,
   failureFor,
@@ -794,6 +795,30 @@ describe('renderProState', () => {
     for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(72)
   })
 
+  it('measures a Chinese title in cells, so the row still fits the width it was given', () => {
+    // The title is user text, and a user who names their task in Chinese gets a
+    // string whose `.length` is half its width on screen. Padded by `.length`
+    // the row overflowed and wrapped, which is exactly what clipping exists to
+    // prevent.
+    const view = buildBench({
+      now: NOW,
+      herdr: benchView().herdr,
+      snapshot: null,
+      tasks: [
+        taskRecord({
+          id: 't3',
+          title: '重构终端滚动缓冲区'.repeat(8),
+          workdir: REPO,
+          status: 'active'
+        })
+      ],
+      attention: []
+    })
+    const text = renderProState({ view }, 72)
+    expect(text).toContain('...')
+    for (const line of text.split('\n')) expect(displayWidth(line)).toBeLessThanOrEqual(72)
+  })
+
   it('offers the two ways out of an empty bench', () => {
     const text = renderProState({ view: benchView() }, 100)
     expect(text).toContain('no tasks yet')
@@ -1159,6 +1184,20 @@ describe('renderProSsh', () => {
 
   it('counts one machine without the plural', () => {
     expect(renderProSsh(okResult({ machines: [BOX] })).split('\n')[0]).toBe('1 machine')
+  })
+
+  it('keeps one dial column for a Chinese label, which the terminal draws twice as wide', () => {
+    // `自测机` is three characters and six cells. Padded by `.length` it came up
+    // three cells short, so the one row a user named in their own language was
+    // also the one row whose ssh line started in a different column.
+    const cn: SshMachine = { ...BOX, id: 'cn', label: '自测机', host: '10.0.0.1' }
+    const cnLine = sshLine(cn, {})
+    const lines = renderProSsh(okResult({ machines: [cn, BOX], hidden: [], home: '' })).split('\n')
+    const dialAt = (row: string, dial: string): number =>
+      displayWidth(row.slice(0, row.indexOf(dial)))
+    expect(lines[1]).toContain('自测机')
+    expect(lines[2]).toContain('box')
+    expect(dialAt(lines[1], cnLine)).toBe(dialAt(lines[2], boxLine))
   })
 
   it('puts the hidden count in the footer, with the command that lists them', () => {
@@ -1669,6 +1708,36 @@ describe('the column helpers', () => {
   it('pads to a fixed width so the columns line up', () => {
     expect(pad('ab', 5)).toBe('ab   ')
     expect(pad('abcdef', 3)).toBe('abcdef')
+  })
+
+  it('counts a CJK label in terminal cells, which is two per glyph, not one', () => {
+    // The terminal draws 自测机 six cells wide. Measured in `string.length` it
+    // is three, so every padded row carrying a Chinese label landed one column
+    // left of its neighbours and the roster stopped being a table.
+    expect(displayWidth('自测机')).toBe(6)
+    expect(displayWidth('box')).toBe(3)
+    expect(displayWidth('jetson-orin')).toBe(11)
+    expect(displayWidth('')).toBe(0)
+    // Fullwidth forms and emoji take two cells as well.
+    expect(displayWidth('ＡＢ')).toBe(4)
+    expect(displayWidth('🚀')).toBe(2)
+    // A combining mark and a variation selector draw nothing of their own.
+    expect(displayWidth('e\u0301')).toBe(1)
+    expect(displayWidth('a\ufe0f')).toBe(1)
+  })
+
+  it('pads and clips by cells, so a mixed roster keeps one column edge', () => {
+    expect(pad('自测机', 8)).toBe('自测机  ')
+    expect(pad('box', 8)).toBe('box     ')
+    expect(displayWidth(pad('自测机', 8))).toBe(displayWidth(pad('box', 8)))
+    // Clipping never cuts a surrogate pair in half, and never overshoots the
+    // budget: a wide glyph that does not fit is dropped whole, so the result
+    // can come in one cell short rather than one cell over.
+    expect(clip('自测机器人', 8)).toBe('自测...')
+    expect(displayWidth(clip('自测机器人', 8))).toBeLessThanOrEqual(8)
+    expect(clip('🚀🚀🚀', 5)).toBe('🚀...')
+    expect(displayWidth(clip('🚀🚀🚀', 5))).toBeLessThanOrEqual(5)
+    expect(clipLeft('/home/dev/自测机', 12)).toBe('...ev/自测机')
   })
 
   it('shortens durations and token totals for a fixed column', () => {
