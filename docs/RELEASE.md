@@ -62,13 +62,29 @@ Open the dmg, drag to /Applications, launch, and check by hand:
   bench row carries the attention count;
 - the Bench opens and attaches to a running herdr, or shows the install card;
 - the packaged binary answers the CLI:
-  `./release/mac*/CodeWaifu.app/Contents/MacOS/CodeWaifu --cli help`.
+  `./release/mac-arm64/CodeWaifu.app/Contents/MacOS/CodeWaifu --cli help`.
 
 Then attach the artifacts to the tag's release:
 
 ```bash
-gh release upload v0.5.0 release/*.dmg release/*-mac-*.zip --repo flowinginthewind700/codewaifu --clobber
+V=$(node -p "require('./package.json').version")
+gh release upload "v$V" \
+  release/CodeWaifu-"$V"-mac-*.dmg release/CodeWaifu-"$V"-mac-*.zip \
+  --repo flowinginthewind700/codewaifu --clobber
 ```
+
+Both globs carry the version on purpose. `release/` keeps every mac build this
+box has ever made and nothing prunes it, so an unscoped `release/*.dmg` attaches
+all eleven dmgs currently on this disk - 1.5 GB, ten of them versions nobody
+should install - and each one looks equally official in the asset list. Count
+them rather than trusting this number: `ls release/*.dmg | wc -l`.
+
+The scoped `.zip` glob still does not pick up `.zip.blockmap`, and
+`latest-mac.yml` stays out. The published mac set is the arm64 dmg plus the
+arm64 and x64 zips, three files - which is what v0.4.5 and v0.4.8 carry, and
+what v0.4.2, v0.4.6 and v0.4.7 do not, because no mac pass happened for those.
+A release with linux and windows assets but no mac ones means this step was
+never done, not that the mac build failed.
 
 Known mac gaps at this version: no LoginItems autostart (Linux has
 `install.sh --autostart`), and no CI runtime check - the manual pass above is
