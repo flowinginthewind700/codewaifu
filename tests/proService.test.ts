@@ -16,14 +16,18 @@
  * Nothing here is Electron, and nothing touches disk: the registry is an
  * in-memory file, the ledger answers from a closure, the session is a flag.
  */
+import os from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG } from '../src/shared/config'
 import { emptyCounts, type LedgerDigest, type RecoveryPlan, type TaskRecord } from '../src/shared/pro'
-import { okResult, type ProCompanionPush } from '../src/shared/proIpc'
+import { okResult, type ImportCandidate, type ProCompanionPush } from '../src/shared/proIpc'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
+import type { ThreadInfo } from '../src/shared/protocol'
 import { TaskRegistry } from '../src/main/pro/bench'
 import type { AnnounceResult } from '../src/main/pro/companion'
+import { GitProbe } from '../src/main/pro/git'
 import type { HerdrTarget } from '../src/main/pro/herdr/discovery'
+import type { LedgerInput } from '../src/main/pro/ledger'
 import type { SessionChange, SessionStatus } from '../src/main/pro/herdr/session'
 import type { Recovery } from '../src/main/pro/recovery'
 import {
@@ -49,6 +53,18 @@ const LIVE_WORKSPACE = 'w-live'
 const LIVE_PANE = 'p-live'
 /** The settle window the unattended pass waits out, kept short and explicit. */
 const BOOT_RESUME_MS = 30
+/**
+ * A directory that really exists, because `importThreads` stats a thread's cwd
+ * before it will create anything: a conversation whose folder is gone is a
+ * conversation the bench cannot run, and importing it would be a task that can
+ * never be resumed.
+ */
+const IMPORT_DIR = os.tmpdir()
+/** What the fake git answers `rev-parse --show-toplevel` with for it. */
+const IMPORT_ROOT = '/repo/imported'
+/** Session ids: one nobody owns, one a task already carries. */
+const FREE = 'sess-free'
+const CLAIMED = 'sess-claimed'
 
 /* ------------------------------------------------------------------ *
  * Harness
@@ -226,7 +242,8 @@ function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
   }
 }
 
-function fakeLedger(): LedgerLike {
+/** Ledger with a tape: an import writes a line, and a task with no history is a task nobody can explain later. */
+function fakeLedger(tape: LedgerInput[] = []): LedgerLike {
   return {
     entries: () => [],
     digest: () => null,
@@ -235,7 +252,10 @@ function fakeLedger(): LedgerLike {
       for (const taskId of taskIds) out[taskId] = null
       return out
     },
-    append: () => null,
+    append: (input) => {
+      tape.push(input)
+      return null
+    },
     invalidate: () => {}
   }
 }
@@ -274,6 +294,10 @@ interface FakeHostOpts {
   lang?: 'zh' | 'en'
   /** `pro.autoResumeOnBoot`; the shipped default is on, so tests turn it off. */
   autoResumeOnBoot?: boolean
+  /** What the companion can see on this machine; the import picker reads it. */
+  threads?: readonly ThreadInfo[]
+  /** Window verbs the service asked for, in order. */
+  calls?: string[]
 }
 
 function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
@@ -296,7 +320,13 @@ function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
     benchFocused: () => false,
     setBadge: () => {},
     bubbleMs: () => 0,
-    openBench: () => {},
+    openBench: () => {
+      opts.calls?.push('openBench')
+    },
+    openStage: () => {
+      opts.calls?.push('openStage')
+    },
+    listThreads: async () => opts.threads ?? [],
     pickDir: async () => '',
     openPath: () => {},
     openExternal: () => {},
@@ -341,8 +371,43 @@ function seedTask(): TaskRecord {
     status: 'active',
     createdAt: START,
     updatedAt: START,
-    parkedAt: 0
+    parkedAt: 0,
+    origin: 'created'
   }
+}
+
+/** One conversation as the companion sees it, key and all. */
+function thread(agent: 'codex' | 'claude', id: string, cwd = IMPORT_DIR, title = ''): ThreadInfo {
+  return {
+    key: `${agent}:${id}`,
+    agent,
+    id,
+    title,
+    cwd,
+    updatedAt: START,
+    live: false,
+    lastKind: '',
+    lastDetail: '',
+    steerable: false
+  }
+}
+
+/**
+ * A git probe that cannot spawn anything. `importThreads` resolves the repo root
+ * of the directory a conversation started in, so that answer has to come from a
+ * probe rather than from whatever `git` happens to be on the runner's PATH; the
+ * tree it feeds is grouped by repo, and a group that depends on the machine
+ * running the test is a test that passes for the wrong reason.
+ */
+function fakeGit(clock: TestClock, roots: Record<string, string>): GitProbe {
+  return new GitProbe({
+    now: () => clock.now(),
+    run: async (args, cwd) => {
+      const root = roots[cwd] ?? ''
+      if (root && args.includes('rev-parse')) return { code: 0, stdout: `${root}\n`, stderr: '' }
+      return { code: 128, stdout: '', stderr: 'fatal: not a git repository' }
+    }
+  })
 }
 
 interface Bench {
@@ -352,6 +417,12 @@ interface Bench {
   logs: string[]
   /** Every `announceText` the service sent, in order. */
   announced: string[]
+  /** Window verbs the service asked the app for, in order. */
+  calls: string[]
+  /** Every ledger line written, so a case can ask what the task remembers. */
+  ledgerTape: LedgerInput[]
+  /** The registry the service was built on: what an import actually created. */
+  registry: TaskRegistry
   /** How many times the plans were actually computed, memo misses only. */
   planAllCalls(): number
 }
@@ -426,6 +497,12 @@ interface BootOpts {
   autoResumeOnBoot?: boolean
   bootResumeMs?: number
   autoResumeMax?: number
+  /** What `listThreads` answers; absent means the companion sees nothing. */
+  threads?: readonly ThreadInfo[]
+  /** Directory -> repo root for the fake probe. Absent keeps the service default. */
+  gitRoots?: Record<string, string>
+  /** Build the real companion bridge instead of the tape. */
+  realCompanion?: boolean
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -433,6 +510,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
   const session = fakeSession({ snapshot: opts.snapshot ?? null, record: opts.record ?? false })
   const logs: string[] = []
   const announced: string[] = []
+  const calls: string[] = []
+  const ledgerTape: LedgerInput[] = []
   const registry = new TaskRegistry({
     file: 'memory://bench.json',
     now: () => clock.now(),
@@ -440,7 +519,12 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
     write: () => true
   })
   const service = new ProService({
-    host: fakeHost(logs, { lang: opts.lang, autoResumeOnBoot: opts.autoResumeOnBoot }),
+    host: fakeHost(logs, {
+      lang: opts.lang,
+      autoResumeOnBoot: opts.autoResumeOnBoot,
+      threads: opts.threads,
+      calls
+    }),
     timers: clock.timers,
     // Intervals an order of magnitude past any advance below: the tick, the git
     // sweep and the hydrate would each rebuild the projection for a reason this
@@ -457,13 +541,19 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
     },
     discover: () => herdrTarget(),
     registry,
-    ledger: fakeLedger(),
-    companion: () => fakeCompanion(announced),
+    ledger: fakeLedger(ledgerTape),
+    // The mode switch is a verb the real bridge owns, so the cases that send one
+    // leave the factory out and let the service build it: a fake companion
+    // answering `stage` would only tell us what the fake does.
+    ...(opts.realCompanion ? {} : { companion: () => fakeCompanion(announced) }),
+    // Same reasoning for git. Cases that never resolve a directory keep the
+    // service default, which is the probe the shipped bench uses.
+    ...(opts.gitRoots ? { git: fakeGit(clock, opts.gitRoots) } : {}),
     session: () => session
   })
   const planAllCalls = countPlanAll(service.recovery)
   await service.start()
-  return { service, clock, session, logs, announced, planAllCalls }
+  return { service, clock, session, logs, announced, calls, ledgerTape, registry, planAllCalls }
 }
 
 /** Read the projection the way the window and `pro state` both do. */
@@ -683,5 +773,162 @@ describe('ProService boot auto-resume', () => {
     await flush()
     expect(bench.session.calls).toHaveLength(6)
     expect(bench.announced).toHaveLength(2)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Import: the tree's other door
+ * ------------------------------------------------------------------ */
+
+/**
+ * The tree lists the bench's own tasks, grouped by the directory they run in.
+ * Importing is the other way in: conversations Codex and Claude Code already
+ * have on this machine, which the companion can see and the bench cannot.
+ *
+ * What is worth pinning is the three places this could quietly lie, because all
+ * three are visible to a human as a row that does not do what it says:
+ *
+ *   claimed  a session a task already carries must not become a second row,
+ *            since only one of the two could ever be resumed;
+ *   parked   the conversation is running in a terminal the bench does not own,
+ *            and an active task with no pane is exactly what the Recovery tab
+ *            calls `lost` - importing one would be a crash we caused ourselves;
+ *   re-parked `attach` is the honest way to want it working now, but herdr may
+ *            be down, and a failed attach must not leave the active-and-unbound
+ *            task behind.
+ */
+describe('ProService import', () => {
+  it('lists what the companion sees and marks the session a task already claims', async () => {
+    const bench = await boot({
+      tasks: [seedTask(), { ...seedTask(), id: 't-claim', agentSessionId: CLAIMED }],
+      threads: [
+        thread('codex', FREE, IMPORT_DIR, 'a conversation nobody owns'),
+        thread('codex', CLAIMED, IMPORT_DIR, 'already a task'),
+        thread('claude', 'c-1', IMPORT_DIR)
+      ]
+    })
+
+    const result = await bench.service.hostOp({ op: 'threads' })
+    expect(result.code).toBe('threads')
+    const rows = ((result.data as { threads: ImportCandidate[] } | null)?.threads ?? []).map(
+      (row) => [row.key, row.taskId]
+    )
+    expect(rows).toEqual([
+      [`codex:${FREE}`, ''],
+      [`codex:${CLAIMED}`, 't-claim'],
+      ['claude:c-1', '']
+    ])
+  })
+
+  it('imports a session as a parked task, in the directory it was started in', async () => {
+    const bench = await boot({
+      threads: [thread('codex', FREE, IMPORT_DIR, 'refactor the socket layer')],
+      gitRoots: { [IMPORT_DIR]: IMPORT_ROOT }
+    })
+
+    const result = await bench.service.taskOp({
+      op: 'import',
+      keys: [`codex:${FREE}`],
+      attach: false
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('imported')
+    const data = result.data as { imported: number; attached: number; skipped: string[] }
+    expect([data.imported, data.attached, data.skipped]).toEqual([1, 0, []])
+
+    const created = bench.registry.tasks().find((task) => task.id !== TASK_ID)
+    expect(created?.status, 'an import is not ours to run yet').toBe('parked')
+    expect(created?.origin).toBe('imported')
+    expect(created?.title).toBe('refactor the socket layer')
+    expect(created?.workdir).toBe(IMPORT_DIR)
+    // The tree groups by repo, so the root is resolved at import time and not
+    // guessed from the cwd later.
+    expect(created?.repoRoot).toBe(IMPORT_ROOT)
+    expect(created?.agentKind).toBe('codex')
+    expect(created?.agentSessionId).toBe(FREE)
+
+    // And it is on the map: the projection the window renders, not just the file.
+    expect(bench.service.view()?.tasks).toHaveLength(2)
+    expect(bench.ledgerTape.map((entry) => entry.text)).toContain(
+      `imported codex:${FREE} from the companion`
+    )
+  })
+
+  it('refuses a session a task already claims', async () => {
+    const bench = await boot({
+      tasks: [{ ...seedTask(), agentSessionId: CLAIMED }],
+      threads: [thread('codex', CLAIMED, IMPORT_DIR)]
+    })
+
+    const result = await bench.service.taskOp({
+      op: 'import',
+      keys: [`codex:${CLAIMED}`],
+      attach: false
+    })
+    // The picker marks a claimed row so it cannot be chosen; this is the second
+    // gate, for the caller that did not go through the picker (`pro import`).
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('nothing-to-do')
+    expect(bench.registry.tasks()).toHaveLength(1)
+  })
+
+  it('names what it skipped: an aged-out key and a directory that is gone', async () => {
+    const bench = await boot({
+      threads: [thread('codex', FREE, IMPORT_DIR), thread('codex', 'ghost', WORKDIR)]
+    })
+
+    const result = await bench.service.taskOp({
+      op: 'import',
+      keys: [`codex:${FREE}`, 'codex:aged-out', 'codex:ghost'],
+      attach: false
+    })
+    expect(result.code).toBe('imported')
+    const data = result.data as { imported: number; skipped: string[] }
+    expect(data.imported).toBe(1)
+    // A silent skip is a click that appears to have done nothing, so the
+    // refusal carries the keys it dropped.
+    expect(data.skipped).toEqual(['codex:aged-out', 'codex:ghost'])
+  })
+
+  it('parks the task again when attach cannot reach herdr', async () => {
+    const bench = await boot({ threads: [thread('codex', FREE, IMPORT_DIR)] })
+
+    const result = await bench.service.taskOp({
+      op: 'import',
+      keys: [`codex:${FREE}`],
+      attach: true
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('imported-attached')
+    const data = result.data as { imported: number; attached: number }
+    expect([data.imported, data.attached]).toEqual([1, 0])
+
+    const created = bench.registry.tasks().find((task) => task.id !== TASK_ID)
+    expect(
+      created?.status,
+      'a failed attach must not leave an active task with no pane behind'
+    ).toBe('parked')
+    expect(created?.agentSessionId).toBe(FREE)
+  })
+})
+
+/**
+ * One app, two modes. "Take me back to her" puts the bench window away and
+ * brings the stage forward; it is not a quit, so the projection has to survive
+ * the switch - the badge keeps counting and the widget keeps reading the fleet
+ * while the stage is what the human looks at.
+ */
+describe('ProService mode switch', () => {
+  it('hands the screen back to the stage without closing the bench', async () => {
+    const bench = await boot({ realCompanion: true })
+    expect(bench.calls).toEqual([])
+
+    const result = bench.service.companionOp({ op: 'stage' })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('stage')
+    // The focused window verb, and not `openBench`: the bench is the window
+    // being put away here.
+    expect(bench.calls).toEqual(['openStage'])
+    expect(bench.service.view()?.tasks).toHaveLength(1)
   })
 })

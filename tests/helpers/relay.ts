@@ -90,6 +90,9 @@ export function createTestRelay(
     voices: [],
     // The relay never synthesizes; this is the shape the widget expects.
     neural: { phase: 'unavailable', received: 0, total: 0, file: '', error: '', dir: '', sampleRate: 0, loadMs: 0 },
+    // Mirrors Core: the flag says whether the bench mode is running, which for
+    // a test relay is exactly whether one was handed to it.
+    pro: pro() !== null,
     systemLang: 'zh'
   })
 

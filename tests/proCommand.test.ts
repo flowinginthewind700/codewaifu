@@ -12,9 +12,14 @@ import { describe, expect, it } from 'vitest'
 import {
   isProReject,
   parseBenchCommand,
+  parseProCompanion,
   parseProRecovery,
+  parseProTask,
   paneIdOf,
-  taskIdOf
+  taskIdOf,
+  threadKeysOf,
+  type ProCompanionRequest,
+  type ProTaskRequest
 } from '../src/shared/proIpc'
 import { DEFAULT_SNOOZE_MINUTES } from '../src/shared/pro'
 import type { BenchCommand } from '../src/shared/companionLink'
@@ -247,5 +252,96 @@ describe('the id gates', () => {
     // so the asymmetry with taskIdOf reads as a decision, not an oversight.
     expect(paneIdOf('a'.repeat(121))).toBe('a'.repeat(120))
     expect(taskIdOf('x'.repeat(65))).toBe('')
+  })
+})
+
+/** Narrow a task parse to a request, failing the test if it was refused. */
+function task(payload: unknown): ProTaskRequest {
+  const result = parseProTask(payload)
+  if (isProReject(result)) {
+    throw new Error(`expected a request, got ${result.code}: ${result.error}`)
+  }
+  return result
+}
+
+function refusedTask(payload: unknown): string {
+  const result = parseProTask(payload)
+  if (!isProReject(result)) throw new Error(`expected a refusal, got ${JSON.stringify(result)}`)
+  return result.code
+}
+
+function companion(payload: unknown): ProCompanionRequest {
+  const result = parseProCompanion(payload)
+  if (isProReject(result)) {
+    throw new Error(`expected a request, got ${result.code}: ${result.error}`)
+  }
+  return result
+}
+
+describe('the import verb', () => {
+  it('accepts the keys the picker sends, with the attach box as it was ticked', () => {
+    expect(task({ op: 'import', keys: ['codex:0190f'], attach: true })).toEqual({
+      op: 'import',
+      keys: ['codex:0190f'],
+      attach: true
+    })
+    expect(task({ op: 'import', keys: ['claude:abc-123'] })).toEqual({
+      op: 'import',
+      keys: ['claude:abc-123'],
+      attach: false
+    })
+  })
+
+  it('folds the op, and reads the ids alias the first picker shipped', () => {
+    expect(task({ op: ' IMPORT ', ids: ['codex:1'] })).toEqual({
+      op: 'import',
+      keys: ['codex:1'],
+      attach: false
+    })
+  })
+
+  it('refuses an import with nothing in it, naming the payload and not the op', () => {
+    // A dead button reads as a version mismatch; this says what was missing.
+    expect(refusedTask({ op: 'import', keys: [] })).toBe('bad-payload')
+    expect(refusedTask({ op: 'import', keys: ['not-a-key'] })).toBe('bad-payload')
+  })
+})
+
+describe('threadKeysOf', () => {
+  it('keeps agent:id and nothing else', () => {
+    expect(threadKeysOf(['codex:0190f', 'claude:9c1e', 'codex', 'a b:c', '../x:y'])).toEqual([
+      'codex:0190f',
+      'claude:9c1e'
+    ])
+  })
+
+  it('collapses a repeat, because two rows for one conversation is two tasks', () => {
+    expect(threadKeysOf(['codex:1', 'codex:1', 'codex:1'])).toEqual(['codex:1'])
+  })
+
+  it('caps the batch, and answers nothing for a value that is not a list', () => {
+    const many = Array.from({ length: 500 }, (_, at) => `codex:s${at}`)
+    expect(threadKeysOf(many)).toHaveLength(200)
+    expect(threadKeysOf(many, 3)).toHaveLength(3)
+    expect(threadKeysOf('codex:1')).toEqual([])
+    expect(threadKeysOf(undefined)).toEqual([])
+  })
+
+  it('does not fold or clip the session id, which is the only handle on the chat', () => {
+    const id = 'ABCdef0123456789-_.x'
+    expect(threadKeysOf([`codex:${id}`])).toEqual([`codex:${id}`])
+  })
+})
+
+describe('the stage verb', () => {
+  it('accepts the mode switch back to her, folded like every other verb', () => {
+    expect(companion({ op: 'stage' })).toEqual({ op: 'stage' })
+    expect(companion({ op: ' STAGE ' })).toEqual({ op: 'stage' })
+  })
+
+  it('still refuses a verb nobody defined', () => {
+    const result = parseProCompanion({ op: 'quit' })
+    if (!isProReject(result)) throw new Error('expected a refusal')
+    expect(result.code).toBe('bad-op')
   })
 })

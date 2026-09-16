@@ -40,6 +40,7 @@ import { planFind, type FindFault } from '@shared/findQuery'
 import type { PaneView } from '@shared/pro'
 import type { ProBridgePush, ProFramePush } from '@shared/proIpc'
 import { clipboardAction, searchAction } from '@shared/termKeys'
+import { agentClass } from './agentTag'
 import { platform, proApi } from './api'
 import { bridgeErrorText, fill, type Translate } from './i18n'
 import { bridgeOf, registerPane } from './paneBus'
@@ -171,14 +172,6 @@ const PHASE_KEYS = {
   closed: 'phaseClosed',
   error: 'phaseError'
 } as const
-
-/** Agent colour classes, matching the widget's thread list. */
-function agentClass(agent: string): string {
-  const key = String(agent || '').toLowerCase()
-  if (key.includes('codex')) return 'codex'
-  if (key.includes('claude')) return 'claude'
-  return ''
-}
 
 /** The counter's three states: nothing searched yet, no hits, and a position. */
 function matchCountLabel(t: Translate, matches: ISearchResultChangeEvent | null): string {

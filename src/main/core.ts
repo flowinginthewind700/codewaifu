@@ -572,6 +572,9 @@ export class Core {
       agents: { codex: exists(codexHome), claude: exists(claudeHome) },
       voices: this.speaker.listVoices(),
       neural: this.neuralStatus(),
+      // `view()` answers null while herdr is unreachable, so this reads as
+      // "the bench mode is running", not "the bench has something to show".
+      pro: this.proApi?.view() !== null,
       systemLang: this.systemLang
     }
   }

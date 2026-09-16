@@ -140,7 +140,7 @@ textarea {
 
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   flex: 0 0 auto;
@@ -152,12 +152,64 @@ textarea {
   white-space: nowrap;
 }
 
-.brand-sub {
-  font-size: var(--fs-small);
+/* The mode switch. One app, two modes, and this is the only thing on screen
+   that tells you which one you are in.
+
+   The stage segment is a real button because leaving is a verb. The bench
+   segment is a lit span instead: a disabled button reads as broken right now,
+   while a lit segment reads as you are here. */
+.mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 99px;
+  border: 1px solid var(--bench-line-soft);
+  background: var(--bench-bg);
+  flex: 0 0 auto;
+}
+
+.mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
   color: var(--faint);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
+  font-family: var(--font);
+  font-size: var(--fs-small);
+  line-height: 1;
+  letter-spacing: 0;
   white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-swift),
+    background var(--dur-1) var(--ease-swift);
+}
+
+.mode svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.mode:hover {
+  color: var(--text);
+}
+
+.mode:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mode[data-on] {
+  background: var(--bench-panel-2);
+  color: var(--text);
+  cursor: default;
+  box-shadow: inset 0 0 0 1px var(--bench-line-soft);
 }
 
 .counts {
@@ -582,6 +634,63 @@ textarea {
   padding: 7px 9px;
   border-bottom: 1px solid var(--bench-line-soft);
   flex: 0 0 auto;
+}
+
+/* The origin facet: chips above the tree, not a fourth group in it. The spine
+   of this tree is directories, and an Imported folder would move a task out of
+   the checkout it lives in to satisfy a fact about where it came from. The row
+   only renders when something was actually imported, so a fresh bench does not
+   grow a control that filters nothing. */
+.rail-facets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+}
+
+.facet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 99px;
+  border: 1px solid var(--bench-line-soft);
+  background: var(--bench-bg);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease-swift),
+    border-color var(--dur-1) var(--ease-swift),
+    background var(--dur-1) var(--ease-swift);
+}
+
+.facet:hover {
+  color: var(--text);
+  border-color: var(--bench-line);
+}
+
+.facet:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.facet[data-on] {
+  background: rgba(var(--accent-rgb), 0.14);
+  border-color: rgba(var(--accent-rgb), 0.42);
+  color: var(--accent);
+}
+
+.facet-n {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
 }
 
 .rail-scroll {
@@ -2176,7 +2285,6 @@ button.plan-title:focus-visible {
     transform: translateX(0);
   }
 
-  .brand-sub,
   .counts .count[data-state='idle'],
   .counts .count[data-state='unknown'] {
     display: none;
@@ -2185,4 +2293,139 @@ button.plan-title:focus-visible {
 
 .rail-toggle {
   display: none;
+}
+
+/* ------------------------------------------------------------ provenance */
+
+/* Adopted by herdr, or imported from a session she saw. Quieter than the agent
+   tags beside it on purpose: it answers a question you ask once, not one you
+   ask on every glance. The border replaces the fill and the line-height drops
+   by the same 2px the border adds, so a tagged row keeps its height. */
+.tag[data-origin] {
+  background: transparent;
+  border: 1px solid var(--bench-line);
+  color: var(--faint);
+  line-height: 13px;
+}
+
+/* ---------------------------------------------------------------- import */
+
+.dialog-hint {
+  margin: 4px 0 0;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+
+/* Wider than the default dialog: every row is a path, and a path truncated
+   twice is a row you cannot tell apart from its neighbour. */
+.import-dialog {
+  width: min(660px, 100%);
+}
+
+.import-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+}
+
+.import-count {
+  color: var(--faint);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.import-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+.import-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-swift);
+}
+
+.import-row:hover {
+  background: var(--bench-panel-2);
+}
+
+.import-row input {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+/* Already in the tree: still listed, no longer a choice. A row that vanished
+   would leave you guessing whether the scan ran at all. */
+.import-row[data-claimed] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.import-row[data-claimed]:hover {
+  background: transparent;
+}
+
+.import-row[data-claimed] input {
+  cursor: default;
+}
+
+.import-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.import-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-cwd {
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.import-when {
+  color: var(--faint);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.import-error {
+  padding: 10px 13px;
+}
+
+/* Narrow window: the mode segments keep their icons and drop their labels,
+   same as every other control in the topbar at this width. */
+@media (max-width: 720px) {
+  .mode span {
+    display: none;
+  }
 }

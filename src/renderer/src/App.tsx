@@ -521,6 +521,11 @@ export function App(): ReactElement {
     [notice, t]
   )
 
+  /** The door from the stage into the bench: the same command the bubble sends. */
+  const onBench = useCallback((): void => {
+    void api.proCommand({ type: 'openBench' }).then(reportPro)
+  }, [reportPro])
+
   const onBubbleOpen = useCallback(
     (route: BubbleRoute) => {
       hideBubble()
@@ -811,6 +816,8 @@ export function App(): ReactElement {
               lang={lang}
               expressions={avatar?.character.expressions ?? []}
               motions={avatar?.character.motions ?? []}
+              proAvailable={runtime.pro}
+              onBench={onBench}
               onReport={() => void onReport()}
               onExpression={onExpression}
               onMotion={onMotion}

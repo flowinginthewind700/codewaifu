@@ -353,6 +353,16 @@ a {
   background: var(--line-soft);
 }
 
+/* Vertical hairline between the door to the bench and the buttons that act on
+   her. Same rule as the menu separator, turned 90 degrees. */
+.stage-tools-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  flex: 0 0 auto;
+  background: var(--line-soft);
+}
+
 .avatar-wrap {
   position: relative;
   display: flex;

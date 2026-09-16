@@ -334,7 +334,8 @@ function seedTask(dir: string, now: number): TaskRecord {
     status: 'active',
     createdAt: now,
     updatedAt: now,
-    parkedAt: 0
+    parkedAt: 0,
+    origin: 'created'
   }
 }
 

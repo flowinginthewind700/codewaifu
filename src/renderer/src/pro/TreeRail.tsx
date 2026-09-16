@@ -5,15 +5,25 @@
  * nobody can click accurately. Urgency lives in the two places allowed to move:
  * the attention queue, and the `needs me` pill on a row.
  *
+ * Origin is a facet, not a fourth group. Imported and adopted tasks live in the
+ * directory they actually live in - that is the spine, and a task with two homes
+ * in one tree is a tree that lies about where work is. What they get instead is
+ * a badge on the row and a chip in the header, and the chip row only appears
+ * once there is something to filter: three segments reading 12 / 12 / 0 on a
+ * machine where everything was made here is chrome that says nothing.
+ *
  * Collapse state lives in the Bench, not here and not in config. It is a viewing
  * preference for the next ten seconds, so persisting it would only make two
  * windows argue about which repo is open. But it cannot be private to this
  * component either: `j/k` walks the rows that are actually on screen, and only
- * the Bench knows both the tree order and which groups are folded.
+ * the Bench knows both the tree order and which groups are folded. The origin
+ * filter is the same kind of state, so it is applied there too and handed down
+ * already filtered - one derivation, or the cursor walks rows nobody can see.
  */
 import { useEffect, useMemo, useRef, type ReactElement } from 'react'
 import { ChevronRight } from 'lucide-react'
-import type { GroupView, TaskView } from '@shared/pro'
+import { TREE_FILTERS, type GroupView, type OriginCounts, type TreeFilter } from '@shared/pro'
+import { agentClass } from './agentTag'
 import { fill, type Translate } from './i18n'
 import { dur } from './time'
 
@@ -23,9 +33,14 @@ export interface TreeRailProps {
   selectedId: string
   cursorId: string
   needsMeOnly: boolean
+  /** Origin facet currently applied. The groups arrive already filtered by it. */
+  filter: TreeFilter
+  /** Counts over the *unfiltered* tree, so a chip can say what it would show. */
+  counts: OriginCounts
   /** Group keys currently folded. Owned by the Bench; see the header note. */
   collapsed: ReadonlySet<string>
   t: Translate
+  onFilter: (filter: TreeFilter) => void
   onToggleNeedsMe: () => void
   onToggleGroup: (key: string) => void
   onSelect: (taskId: string) => void
@@ -38,11 +53,22 @@ const STATUS_KEY = {
   lost: 'statusLost'
 } as const
 
-function agentClass(agent: string): string {
-  const key = String(agent || '').toLowerCase()
-  if (key.includes('codex')) return 'codex'
-  if (key.includes('claude')) return 'claude'
-  return ''
+const FILTER_KEY = {
+  all: 'filterAll',
+  mine: 'filterMine',
+  imported: 'filterImported'
+} as const satisfies Record<TreeFilter, string>
+
+const ORIGIN_KEY = {
+  adopted: 'originAdopted',
+  imported: 'originImported'
+} as const
+
+/** Why the list is empty matters: the fix for each case is a different button. */
+function emptyNote(needsMeOnly: boolean, filter: TreeFilter, t: Translate): string {
+  if (needsMeOnly) return t('treeEmptyFiltered')
+  if (filter !== 'all') return t('treeEmptyFacet')
+  return t('treeEmpty')
 }
 
 export function TreeRail({
@@ -51,8 +77,11 @@ export function TreeRail({
   selectedId,
   cursorId,
   needsMeOnly,
+  filter,
+  counts,
   collapsed,
   t,
+  onFilter,
   onToggleNeedsMe,
   onToggleGroup,
   onSelect
@@ -88,10 +117,26 @@ export function TreeRail({
         </label>
       </div>
 
+      {counts.imported > 0 ? (
+        <div className="rail-facets" role="group" aria-label={t('filterLabel')}>
+          {TREE_FILTERS.map((key) => (
+            <button
+              type="button"
+              className="facet"
+              key={key}
+              data-on={filter === key || undefined}
+              aria-pressed={filter === key}
+              onClick={() => onFilter(key)}
+            >
+              {t(FILTER_KEY[key])}
+              <span className="facet-n">{counts[key]}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="rail-scroll" ref={scrollRef}>
-        {!shown.length && (
-          <p className="empty-note">{needsMeOnly ? t('treeEmptyFiltered') : t('treeEmpty')}</p>
-        )}
+        {!shown.length && <p className="empty-note">{emptyNote(needsMeOnly, filter, t)}</p>}
         {shown.map((group) => {
           const open = !collapsed.has(group.key)
           return (
@@ -130,12 +175,15 @@ export function TreeRail({
 }
 
 interface TaskRowProps {
-  task: TaskView
+  task: TaskRowTask
   selectedId: string
   cursorId: string
   t: Translate
   onSelect: (taskId: string) => void
 }
+
+/** The slice of a `TaskView` a row reads. Named so the props stay honest. */
+type TaskRowTask = GroupView['tasks'][number]
 
 function TaskRow({ task, selectedId, cursorId, t, onSelect }: TaskRowProps): ReactElement {
   const selected = task.id === selectedId
@@ -154,6 +202,13 @@ function TaskRow({ task, selectedId, cursorId, t, onSelect }: TaskRowProps): Rea
         <span className="task-name">{task.title || t('unfiled')}</span>
         <span className="task-sub">
           {agent && <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>}
+          {/* Provenance, quiet: it answers "did I start this here" without
+              competing with the status pill for the same row. */}
+          {task.origin !== 'created' && (
+            <span className="tag" data-origin={task.origin}>
+              {t(ORIGIN_KEY[task.origin])}
+            </span>
+          )}
           {task.branch && <span className="branch">{task.branch}</span>}
           {task.dirty > 0 && <span>{fill(t, 'dirtyCount', { n: task.dirty })}</span>}
           {task.blockedMs > 0 && <span className="warn">{dur(task.blockedMs, t)}</span>}

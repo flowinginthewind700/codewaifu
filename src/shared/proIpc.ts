@@ -272,6 +272,14 @@ export type ProTaskRequest =
   | { op: 'status'; taskId: string; status: TaskStatus }
   | { op: 'remove'; taskId: string }
   | { op: 'adopt' }
+  /**
+   * Pull sessions the companion can already see into the tree. `keys` are
+   * `${agent}:${id}` thread keys; the service resolves them against the live
+   * thread list, so a key that has aged out imports nothing and says so.
+   * `attach` means "and put it to work now": the task is created active and the
+   * recovery plan resumes the conversation in a workspace the bench owns.
+   */
+  | { op: 'import'; keys: string[]; attach: boolean }
 
 export type ProTaskParse = ProTaskRequest | ProReject
 
@@ -318,11 +326,54 @@ export function parseProTask(payload: unknown): ProTaskParse {
     }
     case 'adopt':
       return { op }
+    case 'import': {
+      const keys = threadKeysOf(raw.keys ?? raw.ids)
+      if (!keys.length) return reject('bad-payload', 'import needs at least one thread key')
+      return { op, keys, attach: bool(raw.attach) }
+    }
     default:
       return reject('bad-op', `unknown task op ${str(raw.op, 20)}`)
   }
 }
 
+/**
+ * Thread keys, kept verbatim: `list()` lower-cases and truncates at 40, which
+ * is right for agent names and wrong for a session id that is the only handle
+ * on a conversation. A key that is not `agent:id` is dropped, and duplicates
+ * collapse, because importing one session twice would be two rows for one
+ * piece of work.
+ */
+export function threadKeysOf(value: unknown, max = 200): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    const key = str(entry, 200).trim()
+    if (!/^[A-Za-z0-9._-]{1,40}:[^\s:/\\]{1,150}$/.test(key)) continue
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(key)
+    if (out.length >= max) break
+  }
+  return out
+}
+
+/**
+ * One session the companion can see, as the import picker renders it. This is
+ * the thread list plus the one thing the picker has to know that the thread
+ * list does not: whether the bench already has a task for it.
+ */
+export interface ImportCandidate {
+  key: string
+  agent: string
+  id: string
+  title: string
+  cwd: string
+  updatedAt: number
+  live: boolean
+  /** Non-empty once a task claims this session; the row is then not offered. */
+  taskId: string
+}
 /* ------------------------------------------------------------------ *
  * Ledger
  * ------------------------------------------------------------------ */
@@ -481,6 +532,8 @@ export function parseProPane(payload: unknown): ProPaneParse {
 export type ProHostRequest =
   | { op: 'discovery' }
   | { op: 'agents' }
+  /** Sessions the companion can see, with the task that already claims each. */
+  | { op: 'threads' }
   | { op: 'pickDir' }
   | { op: 'openPath'; path: string }
   | { op: 'openExternal'; url: string }
@@ -512,6 +565,7 @@ export function parseProHost(payload: unknown): ProHostParse {
   switch (op) {
     case 'discovery':
     case 'agents':
+    case 'threads':
       return { op }
     case 'pickdir':
       return { op: 'pickDir' }
@@ -540,6 +594,12 @@ export type ProCompanionRequest =
   | { op: 'summon' }
   | { op: 'dismiss' }
   | { op: 'toggle' }
+  /**
+   * Hand the screen back: the bench goes away and the stage comes forward. It
+   * is a mode switch inside one app, not "show the widget" - the widget may
+   * already be visible, and what the human asked for is to be back on it.
+   */
+  | { op: 'stage' }
   | { op: 'announce'; text: string; lang: Lang }
 
 export type ProCompanionParse = ProCompanionRequest | ProReject
@@ -547,7 +607,7 @@ export type ProCompanionParse = ProCompanionRequest | ProReject
 export function parseProCompanion(payload: unknown): ProCompanionParse {
   const raw = record(payload)
   const op = str(raw.op ?? raw.type, 20).trim().toLowerCase()
-  if (op === 'summon' || op === 'dismiss' || op === 'toggle') return { op }
+  if (op === 'summon' || op === 'dismiss' || op === 'toggle' || op === 'stage') return { op }
   if (op === 'announce') {
     const text = str(raw.text, 400).trim()
     if (!text) return reject('needs-text', 'an announcement needs text')

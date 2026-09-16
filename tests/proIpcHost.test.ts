@@ -35,7 +35,7 @@ function urlOf(payload: unknown): string {
 }
 
 describe('the ops that take no arguments', () => {
-  it.each(['discovery', 'agents', 'pickDir'])('accepts %s', (op) => {
+  it.each(['discovery', 'agents', 'threads', 'pickDir'])('accepts %s', (op) => {
     expect(parsed({ op })).toEqual({ op })
   })
 

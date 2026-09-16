@@ -25,26 +25,31 @@ import { resolveUiLang, systemLangFromLocales } from '@shared/lang'
 import {
   DEFAULT_SNOOZE_MINUTES,
   attentionActions,
+  filterGroups,
   needsRecovery,
+  originCounts,
   type AttentionAction,
   type AttentionItem,
   type BenchView,
+  type GroupView,
   type TaskRecord,
-  type TaskView
+  type TaskView,
+  type TreeFilter
 } from '@shared/pro'
 import type { Lang, RedactedConfig, RuntimeState } from '@shared/protocol'
 import type { ProFocusPush, ProResult } from '@shared/proIpc'
 import { proApi } from './api'
 import { AttentionQueue } from './AttentionQueue'
+import { ImportDialog } from './ImportDialog'
 import { InstallCard } from './InstallCard'
 import { LedgerPanel } from './LedgerPanel'
 import { NewTaskDialog } from './NewTaskDialog'
 import { PaneGrid } from './PaneGrid'
 import { RecoveryPanel } from './RecoveryPanel'
 import { TaskCard } from './TaskCard'
-import { TopBar } from './TopBar'
+import { BenchBrand, TopBar } from './TopBar'
 import { TreeRail } from './TreeRail'
-import { makeTranslator, type Translate } from './i18n'
+import { fill, makeTranslator, type Translate } from './i18n'
 import { focusPane, routeBridge, routeFrames } from './paneBus'
 import { Toasts, noticeTone, useToasts } from './toast'
 
@@ -57,6 +62,8 @@ const FOCUS_TTL_MS = 10_000
 
 /** Stable identity, so an empty queue does not re-render the panel on every push. */
 const NO_ITEMS: readonly AttentionItem[] = []
+/** Same, for a projection that has not landed yet. */
+const NO_GROUPS: GroupView[] = []
 
 export function Bench(): ReactElement {
   const [booted, setBooted] = useState(false)
@@ -74,6 +81,9 @@ export function Bench(): ReactElement {
   const [railOpen, setRailOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
   const [newTaskOpen, setNewTaskOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  /** Origin facet. Viewing state like the rest of it; main owns the facts. */
+  const [treeFilter, setTreeFilter] = useState<TreeFilter>('all')
   const [removeId, setRemoveId] = useState('')
   /** Bumped when a task's ledger changed, so the digest and the panel refetch. */
   const [revision, setRevision] = useState(0)
@@ -192,6 +202,10 @@ export function Bench(): ReactElement {
   const proEnabled = pro?.enabled ?? false
   const herdrOnline = view?.herdr.online ?? false
   const attention = view?.attention ?? NO_ITEMS
+  const allGroups = view?.groups ?? NO_GROUPS
+  /** Over the whole tree, so a chip can promise what it would show. */
+  const origins = useMemo(() => originCounts(allGroups), [allGroups])
+  const shownGroups = useMemo(() => filterGroups(allGroups, treeFilter), [allGroups, treeFilter])
   const selectedTask = useMemo(
     () => view?.tasks.find((entry) => entry.id === taskId) ?? null,
     [view, taskId]
@@ -205,18 +219,25 @@ export function Bench(): ReactElement {
   /**
    * The rows the tree is actually showing, in the order they are drawn. `j/k`
    * walk this and nothing else, so the cursor can never land on a folded row:
-   * the same two pieces of state drive the filter in `TreeRail`.
+   * the same three pieces of state drive the filter in `TreeRail`.
    */
   const flat = useMemo(() => {
     const rows: TaskView[] = []
-    for (const group of view?.groups ?? []) {
+    for (const group of shownGroups) {
       if (collapsed.has(group.key)) continue
       for (const task of group.tasks) {
         if (!needsMeOnly || task.needsMe > 0) rows.push(task)
       }
     }
     return rows
-  }, [view, collapsed, needsMeOnly])
+  }, [shownGroups, collapsed, needsMeOnly])
+
+  // The facet row only exists while there is something imported or adopted. If
+  // the last one is removed while its chip is selected, the tree would stay
+  // empty with no control left on screen to unfilter it.
+  useEffect(() => {
+    if (origins.imported === 0) setTreeFilter('all')
+  }, [origins.imported])
 
   /* ---- keeping the selection honest ----------------------------------- */
 
@@ -312,6 +333,34 @@ export function Bench(): ReactElement {
   const toggleCompanion = useCallback((): void => {
     void proApi.companion.toggle().then((result) => report(result))
   }, [report])
+
+  /** Back to the stage: one app, two modes, and the widget is the other one. */
+  const toStage = useCallback((): void => {
+    void proApi.companion.stage().then((result) => report(result))
+  }, [report])
+
+  /**
+   * Import landed. Main pushes a fresh projection on its own, so this only
+   * closes the picker, re-reads the ledger and says what happened - including
+   * the rows that did not make it, because a silently smaller import reads as a
+   * bug.
+   */
+  const onImported = useCallback(
+    (imported: number, attached: number, skipped: number): void => {
+      setImportOpen(false)
+      bump()
+      if (imported > 0) {
+        push(
+          attached > 0
+            ? fill(t, 'importAttached', { attached })
+            : fill(t, 'importDone', { n: imported }),
+          'ok'
+        )
+      }
+      if (skipped > 0) push(fill(t, 'importSkipped', { n: skipped }), 'warn')
+    },
+    [bump, push, t]
+  )
 
   const snoozeAll = useCallback((): void => {
     void proApi.snoozeAll().then((result) => {
@@ -538,6 +587,8 @@ export function Bench(): ReactElement {
           onCompanion={toggleCompanion}
           onSnoozeAll={snoozeAll}
           onAdopt={adopt}
+          onImport={() => setImportOpen(true)}
+          onStage={toStage}
           onNewTask={() => setNewTaskOpen(true)}
           onRediscover={rediscover}
           onToggleRail={() => setRailOpen((value) => !value)}
@@ -547,10 +598,7 @@ export function Bench(): ReactElement {
         // Pro switched off: no projection, so no stage bar - but the chrome stays
         // mounted, because a cockpit that blanks itself cannot be switched back on.
         <header className="bench-topbar">
-          <div className="brand">
-            <span className="brand-name">{t('brandName')}</span>
-            <span className="brand-sub">{t('brandSub')}</span>
-          </div>
+          <BenchBrand t={t} onStage={toStage} />
         </header>
       )}
 
@@ -565,16 +613,19 @@ export function Bench(): ReactElement {
       ) : (
         <>
           <TreeRail
-            groups={view?.groups ?? []}
+            groups={shownGroups}
             totalTasks={view?.tasks.length ?? 0}
             selectedId={taskId}
             cursorId={cursorId}
             needsMeOnly={needsMeOnly}
             collapsed={collapsed}
+            filter={treeFilter}
+            counts={origins}
             t={t}
             onToggleNeedsMe={() => setNeedsMeOnly((value) => !value)}
             onToggleGroup={toggleGroup}
             onSelect={(id) => selectTask(id)}
+            onFilter={setTreeFilter}
           />
 
           <main className="bench-center">
@@ -665,6 +716,16 @@ export function Bench(): ReactElement {
           t={t}
           onCancel={() => setNewTaskOpen(false)}
           onCreated={onCreated}
+          onNotify={push}
+        />
+      )}
+
+      {importOpen && (
+        <ImportDialog
+          t={t}
+          now={now}
+          onCancel={() => setImportOpen(false)}
+          onImported={onImported}
           onNotify={push}
         />
       )}

@@ -103,6 +103,14 @@ export interface CompanionDeps {
   speaking: () => boolean
   /** Show or hide the widget. Never focuses it; see the file header. */
   setWidget: (visible: boolean) => void
+  /**
+   * The mode switch back to her: the bench goes away and the stage comes
+   * forward *with* focus. This is not `setWidget(true)` - that verb never
+   * focuses on purpose, because it serves notifications. This one serves a
+   * human who asked to be taken back, and a click that leaves the keyboard on a
+   * window that just closed is a click that did not happen.
+   */
+  openStage: () => void
   widgetVisible: () => boolean
   benchFocused: () => boolean
   setBadge: (count: number) => void
@@ -398,6 +406,12 @@ export class CompanionBridge {
         this.sync(this.api.view())
         return okResult({ visible }, '', visible ? 'summoned' : 'dismissed')
       }
+      case 'stage':
+        // One app, two modes: the bench is a window we put away, not a program
+        // we quit, so the projection stays live and the badge keeps counting.
+        this.deps.openStage()
+        this.sync(this.api.view())
+        return okResult(null, '', 'stage')
       case 'announce': {
         const said = this.say(parsed.text, parsed.lang, 'notice')
         return said ? okResult(null, '', 'announced') : failResult('muted', 'ambient output is off')

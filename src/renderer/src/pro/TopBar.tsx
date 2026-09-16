@@ -2,7 +2,7 @@
  * The topbar: one line that answers "is anything waiting for me, and is the
  * runtime underneath me alive".
  *
- * Three deliberate choices:
+ * Four deliberate choices:
  *
  * 1. herdr's state is a chip, never a modal. The bench without herdr is not an
  *    error dialog, it is an empty cockpit with an install card in the middle;
@@ -14,14 +14,20 @@
  *    "stop talking to me for a while" has to be one click away at the moment it
  *    is wanted. Everything here writes straight through to `config.pro`, which
  *    is also what the widget reads - one source of truth, two surfaces.
+ * 4. The mode switch is part of the brand block, not a menu item. This is one
+ *    app with two surfaces, so "which one am I in" and "how do I get back" are
+ *    the same two words, painted where the product name is.
  */
 import type { ReactElement } from 'react'
 import {
   Bell,
   Clock,
   FolderInput,
+  Import,
+  LayoutGrid,
   MessageCircle,
   PanelLeft,
+  PersonStanding,
   Plus,
   RefreshCw,
   Sparkles,
@@ -42,6 +48,8 @@ export interface TopBarProps {
   onCompanion: () => void
   onSnoozeAll: () => void
   onAdopt: () => void
+  onImport: () => void
+  onStage: () => void
   onNewTask: () => void
   onRediscover: () => void
   onToggleRail: () => void
@@ -54,6 +62,41 @@ const SUMMON_KEYS = {
   never: 'summonNever'
 } as const satisfies Record<ProConfig['summon'], string>
 
+/**
+ * The product name plus the mode control.
+ *
+ * Exported because the bench renders a stripped topbar while the projection is
+ * missing (pro switched off, herdr unreachable), and that bar still owes the
+ * human a way back to the stage: a window you cannot leave is a window you
+ * close, and closing it is the one verb we did not want to need.
+ *
+ * The current mode is a `<span>`, not a disabled button. A greyed-out button
+ * reads as "broken right now"; a lit segment reads as "you are here".
+ */
+export function BenchBrand({
+  t,
+  onStage
+}: {
+  t: Translate
+  onStage: () => void
+}): ReactElement {
+  return (
+    <div className="brand">
+      <span className="brand-name">{t('brandName')}</span>
+      <div className="mode-switch" role="group" aria-label={t('modeLabel')}>
+        <button type="button" className="mode" title={t('backToStage')} onClick={onStage}>
+          <PersonStanding />
+          <span>{t('modeStage')}</span>
+        </button>
+        <span className="mode" data-on="1" aria-current="true" title={t('modeBench')}>
+          <LayoutGrid />
+          <span>{t('modeBench')}</span>
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function TopBar({
   view,
   pro,
@@ -65,6 +108,8 @@ export function TopBar({
   onCompanion,
   onSnoozeAll,
   onAdopt,
+  onImport,
+  onStage,
   onNewTask,
   onRediscover,
   onToggleRail,
@@ -87,10 +132,7 @@ export function TopBar({
         <PanelLeft />
       </button>
 
-      <div className="brand">
-        <span className="brand-name">{t('brandName')}</span>
-        <span className="brand-sub">{t('brandSub')}</span>
-      </div>
+      <BenchBrand t={t} onStage={onStage} />
 
       <HerdrChip view={view} t={t} onRediscover={onRediscover} />
 
@@ -161,6 +203,9 @@ export function TopBar({
         >
           <Clock />
         </button>
+        {/* Two doors into existing work, side by side and differently shaped:
+            adopt takes what herdr is already running, import takes what the
+            companion has seen codex and claude do on this machine. */}
         <button
           type="button"
           className="btn ghost icon"
@@ -169,6 +214,15 @@ export function TopBar({
           onClick={onAdopt}
         >
           <FolderInput />
+        </button>
+        <button
+          type="button"
+          className="btn ghost icon"
+          title={t('importTitle')}
+          aria-label={t('importTitle')}
+          onClick={onImport}
+        >
+          <Import />
         </button>
         <button
           type="button"

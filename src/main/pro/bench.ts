@@ -18,6 +18,7 @@ import {
   type ProvisionResult,
   type TaskBinding,
   type TaskRecord,
+  type TaskOrigin,
   type TaskStatus
 } from '../../shared/pro'
 import type { Snapshot } from '../../shared/herdr'
@@ -44,6 +45,8 @@ export interface CreateTaskInput {
   paneIds?: readonly string[]
   status?: TaskStatus
   id?: string
+  /** Defaults to `created`; adoption and import pass their own. */
+  origin?: TaskOrigin
 }
 
 export type RegistryPatch = Partial<Omit<TaskRecord, 'id' | 'createdAt'>>
@@ -146,7 +149,8 @@ export class TaskRegistry {
       status: input.status ?? 'active',
       createdAt: now,
       updatedAt: now,
-      parkedAt: 0
+      parkedAt: 0,
+      origin: input.origin ?? 'created'
     }
     this.load().push(task)
     this.touch()

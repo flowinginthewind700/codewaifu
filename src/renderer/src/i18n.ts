@@ -223,6 +223,11 @@ const STRINGS = {
   },
   report: { zh: '汇报当前状态', en: 'Report status' },
   reportAria: { zh: '汇报当前 coding 状态', en: 'Read out the current coding status' },
+  /**
+   * The other mode. The wording matters: this is a door into the workbench of
+   * the same app, not a launcher for a second product.
+   */
+  openBench: { zh: '切到工作台', en: 'Switch to the bench' },
   expression: { zh: '表情', en: 'Expression' },
   expressionRandom: { zh: '随机', en: 'Random' },
   motion: { zh: '动作', en: 'Motion' },

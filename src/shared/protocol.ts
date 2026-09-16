@@ -136,6 +136,12 @@ export interface RuntimeState {
   voices: VoiceInfo[]
   neural: NeuralStatus
   /**
+   * Whether the workbench mode exists in this process. The stage renders its
+   * "switch to the bench" door off this: one app with two modes, so a mode that
+   * is not running must not offer a button that does nothing when clicked.
+   */
+  pro: boolean
+  /**
    * OS language, resolved once per launch. `config.uiLang === 'auto'` reads this
    * instead of asking the renderer for `navigator.language`, so the widget and
    * the CLI agree and a sandboxed renderer cannot drift from the desktop.

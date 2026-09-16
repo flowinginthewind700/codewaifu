@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactElement } from 'react'
-import { Activity, PersonStanding, Shuffle, Smile } from 'lucide-react'
+import { Activity, PanelsTopLeft, PersonStanding, Shuffle, Smile } from 'lucide-react'
 import { expressionLabel } from '@shared/expression'
 import { motionMenuLabels } from '@shared/motion'
 import type { Live2DMotionRef } from '@shared/live2dCatalog'
@@ -15,6 +15,12 @@ interface StageToolsProps {
   expressions: readonly string[]
   /** Empty for every avatar but Live2D: only a real model ships motion files. */
   motions: readonly Live2DMotionRef[]
+  /**
+   * Whether the bench mode exists in this process. A mode that is not running
+   * must not offer a door that does nothing when clicked.
+   */
+  proAvailable: boolean
+  onBench: () => void
   onReport: () => void
   /** `null` asks for a random face. */
   onExpression: (name: string | null) => void
@@ -35,6 +41,8 @@ export function StageTools({
   lang,
   expressions,
   motions,
+  proAvailable,
+  onBench,
   onReport,
   onExpression,
   onMotion
@@ -76,6 +84,23 @@ export function StageTools({
 
   return (
     <div className="stage-tools" data-solid="1" ref={rootRef}>
+      {/* The door sits apart from the face buttons on purpose: one row would
+          read as "more things you do to her", and this is the only control here
+          that leaves the stage. The hairline says so without a label. */}
+      {proAvailable ? (
+        <>
+          <button
+            className="icon-btn"
+            type="button"
+            title={t('openBench')}
+            aria-label={t('openBench')}
+            onClick={onBench}
+          >
+            <PanelsTopLeft size={14} strokeWidth={2.2} />
+          </button>
+          <span className="stage-tools-sep" aria-hidden="true" />
+        </>
+      ) : null}
       {open === 'expression' ? (
         <div className="stage-menu" role="menu" aria-label={t('expression')}>
           <button className="stage-menu-item" type="button" role="menuitem" onClick={() => pick(null)}>

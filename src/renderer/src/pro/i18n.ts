@@ -17,8 +17,14 @@ import { spawnFailure } from '@shared/pro'
 
 const STRINGS = {
   /* ---------------------------------------------------------- shell */
-  brandName: { zh: 'CodeWaifu Pro', en: 'CodeWaifu Pro' },
-  brandSub: { zh: '工作台', en: 'Bench' },
+  // The product, not the mode. The mode is the segmented control next to it, so
+  // a name like CodeWaifu Pro here would claim two apps where there is one app
+  // with two surfaces.
+  brandName: { zh: 'CodeWaifu', en: 'CodeWaifu' },
+  modeLabel: { zh: '模式', en: 'Mode' },
+  modeStage: { zh: '舞台', en: 'Stage' },
+  modeBench: { zh: '工作台', en: 'Bench' },
+  backToStage: { zh: '回到舞台', en: 'Back to the stage' },
   booting: { zh: '正在启动工作台…', en: 'Starting the bench…' },
   keyHints: {
     zh: 'j/k 移动 · Enter 打开 · i 进终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
@@ -95,14 +101,50 @@ const STRINGS = {
   snoozeAll: { zh: '全部稍后', en: 'Snooze all' },
   refresh: { zh: '重新发现 herdr', en: 'Re-discover herdr' },
 
+  /* --------------------------------------------------------- import */
+  importTitle: { zh: '导入会话', en: 'Import sessions' },
+  importHint: {
+    zh: '看板娘在这台机器上看到的 codex / claude 会话。导入后它们会落进自己所在的目录分组，并带上「导入」标记。',
+    en: 'The codex and claude sessions she can see on this machine. Imported ones land in the tree under their own directory, tagged as imported.'
+  },
+  importLoading: { zh: '正在扫描会话…', en: 'Scanning sessions…' },
+  importEmpty: { zh: '还没有可导入的会话。', en: 'No sessions to import yet.' },
+  importSelectAll: { zh: '全选', en: 'Select all' },
+  importPicked: { zh: '已选 {n} / {total}', en: '{n} of {total} selected' },
+  importClaimed: { zh: '已在树中', en: 'In the tree' },
+  importLive: { zh: '这个会话刚刚还有动静', en: 'This session is live' },
+  importAttach: { zh: '导入后立即接入', en: 'Attach right after import' },
+  importAttachHint: {
+    zh: '不勾选就先搁置：任务进树但不占终端，之后可以在任务卡上点「接管终端」。',
+    en: 'Leave unticked to park them: they enter the tree without a terminal, and you can attach later from the task card.'
+  },
+  importSubmit: { zh: '导入 {n} 个', en: 'Import {n}' },
+  importDone: { zh: '已导入 {n} 个会话', en: 'Imported {n} sessions' },
+  importAttached: {
+    zh: '已导入并接入 {attached} 个会话',
+    en: 'Imported and attached {attached} sessions'
+  },
+  importSkipped: {
+    zh: '{n} 个被跳过：目录不存在，或已经在树里。',
+    en: '{n} skipped: missing directory, or already in the tree.'
+  },
+
   /* ---------------------------------------------------------- tree */
   treeTitle: { zh: '任务', en: 'Tasks' },
   needsMeOnly: { zh: '只看待处理', en: 'Needs me only' },
   treeEmpty: {
-    zh: '还没有任务。点「新建任务」开一个，或「接管现有工作区」把 herdr 里已有的会话收进来。',
-    en: 'No tasks yet. Create one, or adopt whatever herdr already has running.'
+    zh: '还没有任务。点「新建任务」开一个，「接管现有工作区」收 herdr 里在跑的，或「导入会话」把她看到的 codex / claude 会话收进来。',
+    en: 'No tasks yet. Create one, adopt whatever herdr already has running, or import the sessions she can see.'
   },
   treeEmptyFiltered: { zh: '没有任务需要你处理。', en: 'Nothing needs you right now.' },
+  treeEmptyFacet: { zh: '这个来源下还没有任务。', en: 'Nothing in the tree from that source yet.' },
+  /** The facet chips. A filter, not a fourth group: the spine is directories. */
+  filterLabel: { zh: '来源', en: 'Origin' },
+  filterAll: { zh: '全部', en: 'All' },
+  filterMine: { zh: '我建的', en: 'Mine' },
+  filterImported: { zh: '不是这里建的', en: 'Imported' },
+  originAdopted: { zh: '接管', en: 'adopted' },
+  originImported: { zh: '导入', en: 'imported' },
   treeFoot: { zh: '{shown} / {total} 个任务', en: '{shown} of {total} tasks' },
   unfiled: { zh: '未归档', en: 'Unfiled' },
   statusActive: { zh: '进行中', en: 'Active' },

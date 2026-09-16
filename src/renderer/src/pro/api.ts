@@ -25,7 +25,8 @@ import type {
   ProFocusPush,
   ProFramesPush,
   ProNoticePush,
-  ProResult
+  ProResult,
+  ImportCandidate
 } from '@shared/proIpc'
 import type { Lang, RedactedConfig, RuntimeState, UiSnapshot } from '@shared/protocol'
 
@@ -117,7 +118,19 @@ export const proApi = {
     setStatus: (taskId: string, status: TaskStatus): Promise<ProResult<TaskRecord>> =>
       call<TaskRecord>(CH.proTask, { op: 'status', taskId, status }),
     remove: (taskId: string): Promise<ProResult> => call(CH.proTask, { op: 'remove', taskId }),
-    adopt: (): Promise<ProResult> => call(CH.proTask, { op: 'adopt' })
+    adopt: (): Promise<ProResult> => call(CH.proTask, { op: 'adopt' }),
+    /**
+     * Turn sessions the companion already sees into bench tasks.
+     *
+     * `attach` decides the landing status: false parks them (the default, and
+     * the honest one - we have not proven a workspace exists for them), true
+     * runs the recovery plan immediately so the terminal comes back with them.
+     */
+    import: (
+      keys: readonly string[],
+      attach: boolean
+    ): Promise<ProResult<{ imported: number; attached: number; skipped: string[] }>> =>
+      call(CH.proTask, { op: 'import', keys, attach })
   },
 
   ledger: {
@@ -162,6 +175,13 @@ export const proApi = {
     discovery: (): Promise<ProResult> => call(CH.proHost, { op: 'discovery' }),
     agents: (): Promise<ProResult<{ agents: string[] }>> =>
       call<{ agents: string[] }>(CH.proHost, { op: 'agents' }),
+    /**
+     * The codex/claude sessions on this machine, with the ones already claimed
+     * marked. Answered as an envelope, not as a bare list: the picker has to be
+     * able to tell nothing-to-import from the-tracker-did-not-answer.
+     */
+    threads: (): Promise<ProResult<{ threads: ImportCandidate[] }>> =>
+      call<{ threads: ImportCandidate[] }>(CH.proHost, { op: 'threads' }),
     pickDir: (): Promise<ProResult<{ path: string }>> =>
       call<{ path: string }>(CH.proHost, { op: 'pickDir' }),
     openPath: (path: string): Promise<ProResult> => call(CH.proHost, { op: 'openPath', path }),
@@ -173,6 +193,11 @@ export const proApi = {
     summon: (): Promise<ProResult> => call(CH.proCompanion, { op: 'summon' }),
     dismiss: (): Promise<ProResult> => call(CH.proCompanion, { op: 'dismiss' }),
     toggle: (): Promise<ProResult> => call(CH.proCompanion, { op: 'toggle' }),
+    /**
+     * Put the bench away and bring the stage forward. A mode switch, not a
+     * quit: the projection keeps running and the badge keeps counting.
+     */
+    stage: (): Promise<ProResult> => call(CH.proCompanion, { op: 'stage' }),
     announce: (text: string, lang: Lang): Promise<ProResult> =>
       call(CH.proCompanion, { op: 'announce', text, lang })
   },

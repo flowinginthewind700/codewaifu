@@ -39,7 +39,7 @@ import {
   type Snapshot
 } from '../../shared/herdr'
 import { IPC } from '../../shared/ipcChannels'
-import type { HookEvent, Lang } from '../../shared/protocol'
+import type { HookEvent, Lang, ThreadInfo } from '../../shared/protocol'
 import type { BubbleMessage } from '../../shared/ui'
 import {
   buildBench,
@@ -47,6 +47,7 @@ import {
   groupLabelFor,
   handoffPrompt,
   needsMeCount,
+  pathBase,
   planAttentionAction,
   rePromptText,
   type AttentionExecution,
@@ -80,7 +81,8 @@ import {
   type ProPaneRequest,
   type ProRecoveryRequest,
   type ProResult,
-  type ProTaskRequest
+  type ProTaskRequest,
+  type ImportCandidate
 } from '../../shared/proIpc'
 import { TaskRegistry, type CreateTaskInput, type RegistryPatch } from './bench'
 import { CompanionBridge, type AnnounceResult, type CompanionApi } from './companion'
@@ -143,6 +145,19 @@ export interface ProHost {
   setBadge: (count: number) => void
   bubbleMs: () => number
   openBench: () => void
+  /**
+   * The other half of the mode switch: the bench goes away and the stage comes
+   * forward, *with* focus, because this one is a human clicking "take me back"
+   * rather than a notification arriving. Two window verbs, both of them ours.
+   */
+  openStage: () => void
+  /**
+   * The sessions the companion can already see (Codex and Claude Code history
+   * on this machine). The bench reads it to offer imports; it never writes it.
+   * Async because the honest list is read off disk, and the picker is opened by
+   * a human who can wait twenty milliseconds.
+   */
+  listThreads: () => Promise<readonly ThreadInfo[]>
   pickDir: () => Promise<string>
   openPath: (path: string) => void
   /** Hand a link to the OS browser. The scheme allow-list already ran. */
@@ -572,6 +587,7 @@ export class ProService implements CompanionApi {
       benchFocused: () => this.host.benchFocused(),
       setBadge: (count) => this.host.setBadge(count),
       bubbleMs: () => this.host.bubbleMs(),
+      openStage: () => this.host.openStage(),
       // Every push the bridge makes funnels through here, which is what lets a
       // single comparison decide whether the widget needs to hear about it.
       push: (state) => this.onCompanionPush(state),
@@ -1708,6 +1724,8 @@ export class ProService implements CompanionApi {
           'adopted'
         )
       }
+      case 'import':
+        return this.importThreads(request)
     }
   }
 
@@ -1806,6 +1824,119 @@ export class ProService implements CompanionApi {
     if (this.session) await this.session.refresh().catch(() => null)
     this.invalidate()
     return okResult({ taskId: task.id, workspaceId, paneId, task }, '', code)
+  }
+
+  /**
+   * The sessions the companion can see, each with the task that already claims
+   * it. Claimed means "some task carries this session id", which is what keeps
+   * the picker from offering a duplicate: two rows for one conversation, and
+   * only one of them can be resumed.
+   */
+  private async importCandidates(): Promise<ImportCandidate[]> {
+    const claimed = new Map<string, string>()
+    for (const task of this.registry.tasks()) {
+      if (task.agentSessionId && !claimed.has(task.agentSessionId)) {
+        claimed.set(task.agentSessionId, task.id)
+      }
+    }
+    const threads = await this.host.listThreads().catch(() => [] as readonly ThreadInfo[])
+    return threads.map((thread) => ({
+      key: thread.key,
+      agent: thread.agent,
+      id: thread.id,
+      title: thread.title,
+      cwd: thread.cwd,
+      updatedAt: thread.updatedAt,
+      live: thread.live,
+      taskId: claimed.get(thread.id) ?? ''
+    }))
+  }
+
+  /**
+   * Pull sessions in from the companion's list (the tree's other door).
+   *
+   * An import lands *parked* unless `attach` was asked for. That is the honest
+   * state: the conversation is running somewhere the bench does not own - the
+   * human's own terminal - and an active task with no pane is a lost task, so
+   * importing it as active would put a fresh crash on the Recovery tab. Parked
+   * keeps it on the map and out of the queue.
+   *
+   * `attach` is the other answer to the same question, and it reuses recovery
+   * instead of inventing a second resume path: create the task active, then let
+   * `planRecovery` build what it already builds for an interrupted task
+   * (workspace, agent, `resume <session id>`). A failed attach parks the task
+   * again rather than leaving it active and unbound.
+   */
+  private async importThreads(
+    request: Extract<ProTaskRequest, { op: 'import' }>
+  ): Promise<ProResult> {
+    const found = await this.host.listThreads().catch(() => [] as readonly ThreadInfo[])
+    const threads = new Map(found.map((thread) => [thread.key, thread]))
+    const claimed = new Set(
+      this.registry
+        .tasks()
+        .map((task) => task.agentSessionId)
+        .filter(Boolean)
+    )
+    const imported: TaskRecord[] = []
+    const skipped: string[] = []
+    for (const key of request.keys) {
+      const thread = threads.get(key)
+      if (!thread || !thread.cwd || !isDirectory(thread.cwd)) {
+        skipped.push(key)
+        continue
+      }
+      if (thread.id && claimed.has(thread.id)) {
+        skipped.push(key)
+        continue
+      }
+      const repoRoot = await this.git.repoRoot(thread.cwd).catch(() => '')
+      const task = this.registry.create({
+        title: thread.title || pathBase(thread.cwd),
+        goal: '',
+        workdir: thread.cwd,
+        repoRoot: repoRoot || thread.cwd,
+        agentKind: thread.agent,
+        agentSessionId: thread.id,
+        status: request.attach ? 'active' : 'parked',
+        origin: 'imported'
+      })
+      if (thread.id) claimed.add(thread.id)
+      this.ledger.append(
+        {
+          taskId: task.id,
+          kind: 'event',
+          text: clipText(`imported ${thread.key} from the companion`, 400),
+          agent: thread.agent,
+          source: 'gui'
+        },
+        this.timers.now()
+      )
+      imported.push(task)
+    }
+
+    if (!imported.length) {
+      return failResult('nothing-to-do', `no session to import (${skipped.length} skipped)`)
+    }
+
+    let attached = 0
+    if (request.attach) {
+      for (const task of imported) {
+        const plan = this.recovery.plan(task, this.ledger.digest(task.id))
+        const result = await this.applyPlan(plan, task)
+        if (result.ok) attached += 1
+        else this.registry.setStatus(task.id, 'parked')
+      }
+    }
+
+    this.registry.save()
+    this.triage.resync(new Set(this.registry.tasks().map((task) => task.id)))
+    this.invalidate()
+    return okResult(
+      { imported: imported.length, attached, skipped, tasks: imported },
+      '',
+      request.attach ? 'imported-attached' : 'imported'
+    )
   }
 
   /* ---------------------------------------------------------------- *
@@ -2196,6 +2327,8 @@ export class ProService implements CompanionApi {
         // list is not a secret worth failing the form over.
         return okResult({ agents: [], kinds: KNOWN_AGENT_KINDS }, '', 'agents-fallback')
       }
+      case 'threads':
+        return okResult({ threads: await this.importCandidates() }, '', 'threads')
       case 'pickDir': {
         const dir = await this.host.pickDir().catch(() => '')
         return dir ? okResult({ path: dir }, '', 'picked') : failResult('cancelled', 'no directory chosen')

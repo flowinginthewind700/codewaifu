@@ -95,6 +95,8 @@ function renderBar(view: BenchView): Promise<void> {
       onCompanion={vi.fn()}
       onSnoozeAll={vi.fn()}
       onAdopt={vi.fn()}
+      onImport={vi.fn()}
+      onStage={vi.fn()}
       onNewTask={vi.fn()}
       onRediscover={vi.fn()}
       onToggleRail={vi.fn()}

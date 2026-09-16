@@ -62,6 +62,23 @@ export function taskStatusOf(value: unknown): TaskStatus {
   return TASK_STATUSES.includes(raw) ? (raw as TaskStatus) : 'active'
 }
 
+/**
+ * Where a task came from. The tree is a directory spine, so origin is a facet
+ * on a row rather than a bucket of its own: work you made here, work herdr was
+ * already running (adopted on first sight), and work pulled in from the
+ * companion's session list (imported). The last two are the same thing to a
+ * filter - "not made here" - and different things to a badge.
+ */
+export type TaskOrigin = 'created' | 'adopted' | 'imported'
+
+const TASK_ORIGINS: readonly string[] = ['created', 'adopted', 'imported']
+
+/** Unknown or hand-edited means `created`: the oldest records have no origin. */
+export function taskOriginOf(value: unknown): TaskOrigin {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return TASK_ORIGINS.includes(raw) ? (raw as TaskOrigin) : 'created'
+}
+
 /** What survives on disk in `bench.json`. Live state is never stored here. */
 export interface TaskRecord {
   id: string
@@ -84,6 +101,8 @@ export interface TaskRecord {
   updatedAt: number
   /** Epoch ms; 0 when not parked. Kept so the tree can show "parked 3d". */
   parkedAt: number
+  /** Provenance. Never affects ordering; see `TaskOrigin`. */
+  origin: TaskOrigin
 }
 
 function str(value: unknown): string {
@@ -127,7 +146,8 @@ export function parseTaskRecord(value: unknown): TaskRecord | null {
     status: taskStatusOf(raw.status),
     createdAt: createdAt || num(raw.updatedAt),
     updatedAt: num(raw.updatedAt) || createdAt,
-    parkedAt: num(raw.parkedAt)
+    parkedAt: num(raw.parkedAt),
+    origin: taskOriginOf(raw.origin)
   }
 }
 
@@ -1182,7 +1202,11 @@ export function provisionTasks(input: ProvisionInput): ProvisionResult {
       status: 'active',
       createdAt: now,
       updatedAt: now,
-      parkedAt: 0
+      parkedAt: 0,
+      // Adopted, not created: herdr was already running this, and the row says
+      // so, because "where did this come from" is the first question a tree
+      // full of somebody else's sessions gets asked.
+      origin: 'adopted'
     })
     claimed.add(workspace.workspaceId)
   }
@@ -1357,6 +1381,60 @@ export function deriveGroups(views: readonly TaskView[]): GroupView[] {
   // unreadable, and urgency already lives in the attention queue.
   groups.sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key))
   return groups
+}
+
+/**
+ * The tree's one facet: everything, only what you made here, or only what came
+ * in from outside (adopted from herdr, imported from the session list).
+ *
+ * A facet rather than a fourth group, because the spine is directories and two
+ * homes for one task is a tree that lies about where work lives. Filtering is
+ * pure and drops empty groups, so the rail never shows a heading with nothing
+ * under it; counts are recomputed from the rows that survived, never carried
+ * over from the unfiltered group.
+ */
+export type TreeFilter = 'all' | 'mine' | 'imported'
+
+export const TREE_FILTERS: readonly TreeFilter[] = ['all', 'mine', 'imported']
+
+export function treeFilterOf(value: unknown): TreeFilter {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return raw === 'mine' || raw === 'imported' ? raw : 'all'
+}
+
+function keepsTask(filter: TreeFilter, task: TaskView): boolean {
+  if (filter === 'mine') return task.origin === 'created'
+  if (filter === 'imported') return task.origin !== 'created'
+  return true
+}
+
+export function filterGroups(groups: readonly GroupView[], filter: TreeFilter): GroupView[] {
+  if (filter === 'all') return groups.slice()
+  return groups
+    .map((group) => {
+      const tasks = group.tasks.filter((task) => keepsTask(filter, task))
+      return { ...group, tasks, counts: stateCounts(tasks) }
+    })
+    .filter((group) => group.tasks.length > 0)
+}
+
+/** What the facet chips are labelled with. Computed from the same rows. */
+export interface OriginCounts {
+  all: number
+  mine: number
+  imported: number
+}
+
+export function originCounts(groups: readonly GroupView[]): OriginCounts {
+  const counts: OriginCounts = { all: 0, mine: 0, imported: 0 }
+  for (const group of groups) {
+    for (const task of group.tasks) {
+      counts.all += 1
+      if (task.origin === 'created') counts.mine += 1
+      else counts.imported += 1
+    }
+  }
+  return counts
 }
 
 /** The badge number: what the tray, the widget and the tree header all show. */

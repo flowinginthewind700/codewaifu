@@ -88,7 +88,10 @@ export function createBenchWindow(deps: BenchWindowDeps): BenchHandle {
     y: at.y,
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
-    title: 'CodeWaifu Pro',
+    // One app, two modes: the window is named after the product, not after the
+    // mode it happens to be showing. A second product name in the title bar is
+    // how a mode starts feeling like a separate install.
+    title: 'CodeWaifu',
     // A framed window: the human has to be able to move it, resize it, minimise
     // it and Alt-Tab to it without learning a new set of gestures.
     frame: true,
