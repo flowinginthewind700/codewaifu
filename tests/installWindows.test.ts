@@ -32,6 +32,10 @@ const SCENARIOS = [
 
 describe.skipIf(!hasPwsh)('install.ps1', () => {
   for (const scenario of SCENARIOS) {
+    // The first pwsh spawn on a shared runner cold-starts past vitest's default
+    // 5s (the linux job died exactly there), while later scenarios land in ~2s.
+    // The child is already bounded by spawnSync's own timeout, so give the test
+    // layer the same ceiling instead of racing a cold PowerShell.
     it(scenario, () => {
       const result = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-File', HARNESS, scenario], {
         encoding: 'utf8',
@@ -39,6 +43,6 @@ describe.skipIf(!hasPwsh)('install.ps1', () => {
       })
       const detail = [result.stdout, result.stderr].filter(Boolean).join(String.fromCharCode(10))
       expect(result.status, detail).toBe(0)
-    })
+    }, 120_000)
   }
 })

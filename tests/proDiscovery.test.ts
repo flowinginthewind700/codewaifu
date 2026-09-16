@@ -78,6 +78,17 @@ function dirsFor(entries: Record<string, string[]>): ListDirFn {
   return (dir) => entries[dir] ?? []
 }
 
+/**
+ * The blocks below lay a simulated home on the runner's real filesystem and put
+ * a real unix socket in it. On Windows that simulation cannot be honest: Node's
+ * `net` treats a string path as a named pipe there, so `listen()` on
+ * `C:\...\herdr.sock` answers EACCES instead of opening an AF_UNIX socket, and a
+ * POSIX `PATH` split at the drive colon turns `C:\...\bin` into `C/herdr`. The
+ * win32 discovery logic itself stays covered on every platform by the fake-deps
+ * matrix above, which never touches the host filesystem.
+ */
+const describeUnix = process.platform === 'win32' ? describe.skip : describe
+
 const LINUX = { platform: 'linux' } as const
 
 describe('the config dir, per platform and per spelling', () => {
@@ -192,7 +203,7 @@ describe('binary candidates', () => {
   })
 })
 
-describe('the real probe', () => {
+describeUnix('the real probe', () => {
   it('accepts a file and a socket, the only two things discovery looks for', async () => {
     const dir = root()
     const file = path.join(dir, 'herdr')
@@ -277,7 +288,7 @@ describe('reason, so the empty state can tell "not installed" from "not running"
  * against a fake probe; only these put the real one on a real socket, which is
  * what the app does at boot.
  */
-describe('resolving a real herdr on a real disk', () => {
+describeUnix('resolving a real herdr on a real disk', () => {
   /** A home with an executable herdr on PATH, laid out the way the installer does. */
   function installedHome(): { home: string; bin: string; binary: string } {
     const home = root()
@@ -546,7 +557,7 @@ describe('sessions the bench is not pointed at', () => {
   })
 })
 
-describe('the real directory read', () => {
+describeUnix('the real directory read', () => {
   it('lists what is there and treats everything else as empty', () => {
     const dir = root()
     fs.mkdirSync(path.join(dir, 'sessions', 'cwfix'), { recursive: true })
@@ -583,7 +594,7 @@ describe('the real directory read', () => {
  * a test that omitted the key - which is every test in this file. Each case
  * below passes the session explicitly, the way a real boot does.
  */
-describe('config versus HERDR_SESSION', () => {
+describeUnix('config versus HERDR_SESSION', () => {
   const NAMED = '/home/u/.config/herdr/sessions/cwfix/herdr.sock'
   const BIN = '/home/u/.local/bin/herdr'
 
