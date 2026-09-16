@@ -261,6 +261,25 @@ export class TaskRegistry {
   }
 
   /**
+   * Drop a remembered removal, because the workspace is back on the bench.
+   *
+   * Only the explicit adopt path calls this. The entry would be harmless while
+   * the row claims its workspace - a claimed workspace is never adopted twice -
+   * but leaving it there means the next removal of the same row starts a fresh
+   * day on the clock, and that a row whose binding went stale is blocked from
+   * re-binding for no reason anybody can see.
+   */
+  unforget(workspaceId: string): void {
+    this.load()
+    if (!workspaceId) return
+    const before = this.forgottenRecords.length
+    this.forgottenRecords = this.forgottenRecords.filter(
+      (entry) => entry.workspaceId !== workspaceId
+    )
+    if (this.forgottenRecords.length !== before) this.touch()
+  }
+
+  /**
    * Reconcile the list against what herdr now reports.
    *
    * A workspace herdr no longer has is a removal that landed - drop the entry,
@@ -282,8 +301,17 @@ export class TaskRegistry {
   /**
    * Adopt every unclaimed herdr workspace. Persisted immediately: an adopted
    * task that is lost on crash would make the bench look non-deterministic.
+   *
+   * `explicit` tells apart a snapshot arriving from the human pressing "adopt
+   * workspaces". A remembered removal stands against the first - that is the
+   * whole point of remembering it - and yields to the second. The alternative
+   * is a button in the toolbar that silently does nothing for up to a day
+   * after a removal, and the empty state invites a new user to press exactly
+   * that button. Re-adopting on request is not the resurrection bug: the bug
+   * was the bench growing rows nobody asked for.
    */
-  adopt(snapshot: Snapshot | null): ProvisionResult {
+  adopt(snapshot: Snapshot | null, options: { explicit?: boolean } = {}): ProvisionResult {
+    const explicit = options.explicit === true
     const result = provisionTasks({
       snapshot,
       tasks: this.load(),
@@ -291,9 +319,10 @@ export class TaskRegistry {
       newId: () => this.newId(),
       // A workspace the human removed is not "unclaimed", it is declined - and
       // the difference is whether it comes back on the next snapshot.
-      forgotten: this.forgotten()
+      forgotten: explicit ? [] : this.forgotten()
     })
     if (result.created.length) {
+      if (explicit) for (const task of result.created) this.unforget(task.workspaceId)
       const list = this.load()
       list.push(...result.created)
       this.touch()

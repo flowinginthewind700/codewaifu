@@ -287,7 +287,8 @@ export interface RegistryLike {
   patch(taskId: string, patch: RegistryPatch): TaskRecord | null
   setStatus(taskId: string, status: TaskStatus): TaskRecord | null
   remove(taskId: string): boolean
-  adopt(snapshot: Snapshot | null): ProvisionResult
+  /** `explicit` is a human pressing "adopt workspaces"; see `TaskRegistry.adopt`. */
+  adopt(snapshot: Snapshot | null, options?: { explicit?: boolean }): ProvisionResult
   rebind(snapshot: Snapshot | null): TaskBinding[]
   /** Workspace ids a removal is still standing in front of. */
   forgotten(): string[]
@@ -1771,7 +1772,10 @@ export class ProService implements CompanionApi {
         return okResult({ taskId: request.taskId }, '', 'removed')
       }
       case 'adopt': {
-        const result = this.registry.adopt(this.snapshot())
+        // Explicit: the human pressed the button, so a workspace they removed
+        // earlier comes back. The snapshot path a few hundred lines up stays
+        // implicit, and that is the one a removal has to survive.
+        const result = this.registry.adopt(this.snapshot(), { explicit: true })
         this.triage.resync(new Set(this.registry.tasks().map((task) => task.id)))
         this.invalidate()
         return okResult(

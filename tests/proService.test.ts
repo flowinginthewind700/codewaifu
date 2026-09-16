@@ -1346,6 +1346,28 @@ describe('ProService removal', () => {
     expect(workspaces(bench)).toEqual(['w3'])
   })
 
+  it('gives the adopt button the last word, because a removal with no undo is a trap', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true
+    })
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a' })
+    bench.session.pushSnapshot(snapshotOf(['w1']))
+    expect(workspaces(bench)).toEqual([])
+
+    // A snapshot is the world telling us what exists; the toolbar button is the
+    // human asking for it back. Only the second one overrides a removal, and it
+    // drops the entry so the row it just made is not blocked from re-binding.
+    expect((await bench.service.taskOp({ op: 'adopt' })).ok).toBe(true)
+    expect(workspaces(bench)).toEqual(['w1'])
+    expect(bench.registry.forgotten()).toEqual([])
+
+    // One row, not one per snapshot: the workspace is claimed again.
+    bench.session.pushSnapshot(snapshotOf(['w1']))
+    expect(workspaces(bench)).toEqual(['w1'])
+  })
+
   it('leaves the pane running, which is what the confirmation promises', async () => {
     const bench = await boot({
       tasks: [shell('t-a', 'w1')],

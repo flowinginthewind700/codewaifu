@@ -36,9 +36,16 @@ function pickAsset(os: string, arch: string, exts: string[], names: string[]): s
  * extra failure modes: no `cat` on a bare Windows runner, and an empty string
  * that reads exactly like "the needle is not in the file" - so the assertion
  * failed for a reason that had nothing to do with the installer.
+ *
+ * Line endings are normalised on the way in, for the same reason: a Windows
+ * checkout with `core.autocrlf=true` turns every `\n` this file searches for
+ * into `\r\n`, and `indexOf('\ninstall_herdr\n')` answers -1 on a script whose
+ * ordering is exactly right. `.gitattributes` pins `*.sh` to LF so the shipped
+ * installer is never CRLF; this keeps the assertions about the script's logic
+ * rather than about the reader's git config.
  */
 function source(path: string): string {
-  return readFileSync(path, 'utf8')
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
 }
 
 /**

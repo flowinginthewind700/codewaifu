@@ -1,0 +1,7 @@
+# A shell script checked out with CRLF is a broken shell script: bash reads the
+# carriage return as part of the command, and a test that looks for a line of
+# install.sh does not find it. Git for Windows ships core.autocrlf=true, so the
+# windows-latest runner was checking out scripts/install.sh with CRLF and the
+# ordering assertions failed on a file that is correct in the repository.
+# Say it once here instead of in every reader.
+*.sh text eol=lf
