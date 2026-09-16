@@ -84,6 +84,7 @@ export function registerProIpc(pro: ProService): void {
   handle(IPC.proRecovery, guard(proParsers.recovery, (request) => pro.recoveryOp(request)))
   handle(IPC.proPane, guard(proParsers.pane, (request) => pro.paneOp(request)))
   handle(IPC.proHost, guard(proParsers.host, (request) => pro.hostOp(request)))
+  handle(IPC.proSsh, guard(proParsers.ssh, (request) => pro.sshOp(request)))
 
   // These three take an opaque payload: the bridge and `applyPatch` are their
   // validators, and they already return envelopes.

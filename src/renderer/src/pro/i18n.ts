@@ -27,8 +27,8 @@ const STRINGS = {
   backToStage: { zh: '回到舞台', en: 'Back to the stage' },
   booting: { zh: '正在启动工作台…', en: 'Starting the bench…' },
   keyHints: {
-    zh: 'j/k 移动 · Enter 打开 · i 进终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
-    en: 'j/k move · Enter open · i terminal · Space filter · a/d/s decide · 1/2/3 tabs'
+    zh: 'j/k 移动 · Enter 打开 · i 聚焦终端 · c 连接 · t 开新终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
+    en: 'j/k move · Enter open · i focus pane · c connect · t shell · Space filter · a/d/s decide · 1/2/3 tabs'
   },
   /** `a/d/s` hit the head of the queue; this is what "that one has no such verb" says. */
   actionNotAvailable: {
@@ -432,6 +432,81 @@ const STRINGS = {
   startToggle: { zh: '现在就启动代理', en: 'Start the agent now' },
   createTask: { zh: '创建任务', en: 'Create task' },
   workdirPlaceholder: { zh: '留空 = ~（主目录）', en: 'blank = ~ (home)' },
+
+  /* ------------------------------------------------------ ssh + terminal */
+  /**
+   * Two topbar verbs and one palette. The wording keeps them apart on purpose:
+   * `i` focuses a terminal that already exists, `t` opens a new shell, and `c`
+   * connects to another machine - three things a user will conflate the moment
+   * any two of them share a label.
+   */
+  sshConnect: { zh: '连接', en: 'Connect' },
+  sshTerminal: { zh: '终端', en: 'Terminal' },
+  sshConnectTitle: { zh: '连接机器（c）', en: 'Connect to a machine (c)' },
+  sshTerminalTitle: { zh: '在选中任务的目录开一个 shell（t）', en: 'Open a shell in the selected task directory (t)' },
+  sshTitle: { zh: '连接', en: 'Connect' },
+  sshHint: {
+    zh: '筛选已保存的机器和 ~/.ssh/config 里的别名，输入 user@host[:port]，或直接粘贴一整条 ssh 命令',
+    en: 'Filter saved machines and ~/.ssh/config hosts, type user@host[:port], or paste a whole ssh command'
+  },
+  sshPlaceholder: { zh: 'user@host:port', en: 'user@host:port' },
+  sshLoading: { zh: '正在读取机器列表…', en: 'Reading machines…' },
+  sshEmpty: {
+    zh: '没有已保存的机器，~/.ssh/config 里也没有可用的 Host。',
+    en: 'No saved machines, and no usable Host in ~/.ssh/config.'
+  },
+  sshSourceSaved: { zh: '已保存', en: 'saved' },
+  sshSourceConfig: { zh: 'config', en: 'config' },
+  sshSourceHerdr: { zh: 'herdr', en: 'herdr' },
+  /* The row built from whatever is in the input, when it names a box the roster
+     does not already have. Labelled rather than left bare: connecting to a
+     machine nobody has vetted should look different from connecting to one
+     that was saved on purpose. */
+  sshSourceTyped: { zh: '手输', en: 'typed' },
+  /* A probe answers one question - "can I get in without typing a password?" -
+     so every status is phrased as that answer rather than as an exit code. */
+  sshProbeUnknown: { zh: '未测试', en: 'untested' },
+  sshProbeOk: { zh: '可免密登录', en: 'passwordless' },
+  sshProbeAuth: { zh: '需要密码', en: 'needs a password' },
+  sshProbeHostKey: { zh: '主机密钥未确认', en: 'host key not trusted' },
+  sshProbeTimeout: { zh: '连接超时', en: 'timed out' },
+  sshProbeUnreachable: { zh: '连不上', en: 'unreachable' },
+  sshProbeNoSsh: { zh: '本机没有 ssh 命令', en: 'no ssh on this machine' },
+  sshProbeError: { zh: '探测失败', en: 'probe failed' },
+  sshProbeBusy: { zh: '测试中…', en: 'testing…' },
+  sshTypedRow: { zh: '连接到 {target}', en: 'Connect to {target}' },
+  sshTerminalRow: { zh: '本地终端', en: 'Local terminal' },
+  sshTerminalHint: { zh: '在 {cwd} 开一个 shell', en: 'Open a shell in {cwd}' },
+  sshHome: { zh: '主目录', en: 'home' },
+  sshPin: { zh: '固定', en: 'Pin' },
+  sshUnpin: { zh: '取消固定', en: 'Unpin' },
+  sshPinned: { zh: '已固定 {label}', en: 'Pinned {label}' },
+  sshUnpinned: { zh: '已取消固定 {label}', en: 'Unpinned {label}' },
+  sshTest: { zh: '测试', en: 'Test' },
+  sshSetupKey: { zh: '配置免密', en: 'Passwordless' },
+  sshSetupHint: {
+    zh: '在终端里运行 ssh-copy-id，你需要输入一次远端密码',
+    en: 'Runs ssh-copy-id in a terminal; you type the remote password once'
+  },
+  sshSetupStarted: {
+    zh: '免密配置已在终端里开始，请按提示输入密码',
+    en: 'Passwordless setup is running in the terminal; answer the password prompt'
+  },
+  sshConnected: { zh: '已连接 {label}', en: 'Connected to {label}' },
+  sshTerminalOpened: { zh: '已打开终端', en: 'Terminal opened' },
+  sshSendFailed: {
+    zh: '窗格已打开，但连接命令没能输进去',
+    en: 'The pane opened, but the connect line did not reach it'
+  },
+  sshNoTarget: { zh: '没有可连接的目标', en: 'Nothing to connect to' },
+  /** The honest reason a terminal cannot open: herdr owns every PTY we show. */
+  sshNeedHerdr: { zh: '终端需要 herdr 在运行', en: 'Terminals need herdr running' },
+  sshKeysHint: {
+    /* Alt (⌥ on mac) rather than bare letters: the input is a text field, so an
+       unmodified `s` has to keep typing the hostname you are filtering on. */
+    zh: '↑/↓ 选择 · Enter 连接 · Alt/⌥+P 测试 · +S 固定 · +K 免密 · +U 取消固定',
+    en: '↑/↓ select · Enter connect · Alt/⌥+P test · +S pin · +K passwordless · +U unpin'
+  },
 
   /* ---------------------------------------------------------- time */
   timeNow: { zh: '刚刚', en: 'just now' },

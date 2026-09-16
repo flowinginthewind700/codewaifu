@@ -30,6 +30,10 @@ import {
   okResult,
   type ImportCandidate,
   type ProCompanionPush,
+  type ProSessionOpened,
+  type ProSshProbe,
+  type ProSshRoster,
+  type ProSshSetup,
   type ProTaskRequest
 } from '../src/shared/proIpc'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
@@ -42,6 +46,8 @@ import type { HerdrTarget } from '../src/main/pro/herdr/discovery'
 import type { LedgerInput } from '../src/main/pro/ledger'
 import type { SessionChange, SessionStatus } from '../src/main/pro/herdr/session'
 import type { Recovery } from '../src/main/pro/recovery'
+import { SshService, type MachinesFile } from '../src/main/pro/ssh'
+import { makeMachine, type SshMachine } from '../src/shared/ssh'
 import {
   ProService,
   type CompanionLike,
@@ -157,6 +163,12 @@ interface FakeSession extends SessionLike {
 interface ClientCall {
   method: string
   arg: unknown
+  /**
+   * Every argument, because the interesting one is not always first: a typed
+   * line arrives as `sendText(paneId, text)`, and asserting on `arg` alone would
+   * only ever prove that a pane was addressed.
+   */
+  args: unknown[]
 }
 
 /**
@@ -182,8 +194,12 @@ function throwingClient(): HerdrClientLike {
 function recordingClient(calls: ClientCall[]): HerdrClientLike {
   return new Proxy({} as HerdrClientLike, {
     get(_target, prop): unknown {
-      return async (arg: unknown): Promise<unknown> => {
-        calls.push({ method: String(prop), arg })
+      return async (...args: unknown[]): Promise<unknown> => {
+        calls.push({ method: String(prop), arg: args[0], args })
+        // A session pane is typed into, and typing is the whole of what `connect`
+        // and `setup` do once the pane exists: answering null here would turn
+        // every ssh case into the "herdr refused the input" case.
+        if (prop === 'sendText' || prop === 'sendKeys') return true
         if (prop === 'createWorkspace' || prop === 'createWorktree') {
           return {
             workspace: { workspaceId: 'w-new' },
@@ -461,6 +477,70 @@ function fakeGit(clock: TestClock, roots: Record<string, string>): GitProbe {
   })
 }
 
+/** A fake home, so `keys()` and `~` expansion have somewhere to point at. */
+const SSH_HOME = '/home/nobody'
+/** The box this file connects to: the real one the ssh work was verified against. */
+const UBUNTU = 'wanlian@172.18.29.206:2222'
+
+interface FakeSshOpts {
+  /** Machines already pinned in the store the service reads and writes. */
+  saved?: SshMachine[]
+  /** What `~/.ssh/config` says; absent means there is no config file. */
+  config?: string
+  /** Filenames in `~/.ssh`; absent means a box with no keypair at all. */
+  keys?: string[]
+  /** What the probe's `ssh` exits with. Absent means a key-auth host: exit 0. */
+  probe?: { code: number; stdout?: string; stderr?: string; timedOut?: boolean }
+  /** Every child the service spawned, as argv. Nothing is really executed. */
+  runs?: string[][]
+  /** Flip to false and the store refuses every write, like a read-only disk. */
+  writable?: boolean
+}
+
+/**
+ * The roster with all three of its impure edges injected: the machines file is a
+ * closure rather than `~/.config/codewaifu/machines.json`, `~/.ssh` is a list of
+ * names rather than a directory, and the probe is an exit code rather than a
+ * child process. Without this the suite would read the developer's own
+ * `~/.ssh/config` and spawn a real `ssh` at whatever host it found there, which
+ * is a test whose result depends on the machine running it.
+ */
+function fakeSsh(opts: FakeSshOpts = {}): SshService {
+  let store: MachinesFile = { version: 1, updatedAt: START, machines: opts.saved ?? [] }
+  let nextId = 0
+  return new SshService({
+    file: 'memory://machines.json',
+    home: SSH_HOME,
+    sshConfigPath: `${SSH_HOME}/.ssh/config`,
+    platform: 'posix',
+    now: () => START,
+    newId: () => `m${(nextId += 1)}`,
+    read: () => store,
+    write: (_file, value) => {
+      if (opts.writable === false) return false
+      store = value as MachinesFile
+      return true
+    },
+    readFile: (file) => (file === `${SSH_HOME}/.ssh/config` ? (opts.config ?? null) : null),
+    listDir: (dir) => (dir === `${SSH_HOME}/.ssh` ? (opts.keys ?? []) : []),
+    run: async (cmd, args) => {
+      opts.runs?.push([cmd, ...args])
+      const probe = opts.probe ?? { code: 0 }
+      return {
+        code: probe.code,
+        stdout: probe.stdout ?? '',
+        stderr: probe.stderr ?? '',
+        timedOut: probe.timedOut ?? false
+      }
+    }
+  })
+}
+
+/** The lines a session typed into its pane, in order, without the keystrokes. */
+function typedLines(bench: Bench): unknown[] {
+  return bench.session.calls.filter((call) => call.method === 'sendText').map((call) => call.args[1])
+}
+
 interface Bench {
   service: ProService
   clock: TestClock
@@ -560,6 +640,8 @@ interface BootOpts {
   gitRoots?: Record<string, string>
   /** Build the real companion bridge instead of the tape. */
   realCompanion?: boolean
+  /** The ssh roster the connect palette reads. Absent builds the real one. */
+  ssh?: SshService
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -610,6 +692,7 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
     // Same reasoning for git. Cases that never resolve a directory keep the
     // service default, which is the probe the shipped bench uses.
     ...(opts.gitRoots ? { git: fakeGit(clock, opts.gitRoots) } : {}),
+    ...(opts.ssh ? { ssh: opts.ssh } : {}),
     session: () => session
   })
   const planAllCalls = countPlanAll(service.recovery)
@@ -1182,5 +1265,333 @@ describe('ProService task paths', () => {
     expect(result.ok).toBe(false)
     expect(result.code).toBe('no-dir')
     expect(bench.registry.tasks()).toHaveLength(0)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * SSH: the connect palette's backend
+ * ------------------------------------------------------------------ */
+
+/**
+ * A terminal session is a Bench task with no agent in it. That is the whole
+ * design, and it is why these cases live in this file rather than in a new one:
+ * herdr owns the PTY, the registry owns the row in the tree, and the pane
+ * renderer that already draws agent output draws a shell too. There is no second
+ * terminal implementation in this app and no node-pty, so what `sshOp` adds is a
+ * provisioning path - `openSession` - which is task creation with the agent left
+ * out and some text typed into the result.
+ *
+ * Four things about that path can be wrong without anything throwing, and they
+ * are what gets pinned below:
+ *
+ * - the task carries `agentKind: ''`, so the tree does not grow a Codex badge
+ *   over what is only a shell,
+ * - the ledger line is `session`, not `goal`, because a connect line is not a
+ *   brief and the history panel must not present it as one,
+ * - the line is typed exactly once, as text plus Enter, and `typed` reports what
+ *   actually reached the pane rather than what was asked for,
+ * - a directory that is not there is refused, instead of opening a pane that can
+ *   never be resumed and a task that will read `lost` forever after.
+ *
+ * Nothing here spawns `ssh` or reads a real `~/.ssh`: the roster's disk and child
+ * edges are injected, so a suite cannot pass because of the machine it ran on.
+ */
+describe('ProService ssh', () => {
+  const HOME = os.homedir()
+  /** The connect line a human would have typed for the box below. */
+  const LINE = 'ssh -p 2222 wanlian@172.18.29.206'
+
+  /** One bench with herdr answering, an injected roster, and no git anywhere. */
+  async function sshBench(ssh: SshService, online = true): Promise<Bench> {
+    const bench = await boot({ tasks: [], record: true, ssh, gitRoots: {} })
+    if (online) bench.session.setOnline(true)
+    return bench
+  }
+
+  it('answers the palette with one roster, and the home a blank directory means', async () => {
+    const ssh = fakeSsh({
+      saved: [makeMachine({ id: 'm1', host: '10.0.0.9', user: 'alice', source: 'saved' })],
+      config: 'Host lab\n  HostName lab.example\n  User bob\n  Port 2222\n'
+    })
+    const bench = await sshBench(ssh)
+
+    const result = await bench.service.sshOp({ op: 'list', query: '' })
+    expect(result.ok).toBe(true)
+    const roster = result.data as ProSshRoster
+    expect(roster.machines.map((machine) => machine.host).sort()).toEqual([
+      '10.0.0.9',
+      'lab.example'
+    ])
+    // The palette prints this next to a blank field, so it has to be the same
+    // home `openSession` will resolve that blank against.
+    expect(roster.home).toBe(HOME)
+
+    // Filtering is the service's job: a renderer that re-implemented ranking
+    // would show a different list than the one it was handed.
+    const filtered = await bench.service.sshOp({ op: 'list', query: 'lab' })
+    expect((filtered.data as ProSshRoster).machines.map((machine) => machine.host)).toEqual([
+      'lab.example'
+    ])
+  })
+
+  it('refuses to connect to nothing, rather than opening a local shell that looks connected', async () => {
+    const bench = await sshBench(fakeSsh())
+
+    const result = await bench.service.sshOp({
+      op: 'connect',
+      machine: null,
+      target: '',
+      save: true,
+      cwd: ''
+    })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('bad-machine')
+    expect(bench.registry.tasks()).toHaveLength(0)
+  })
+
+  it('refuses while herdr is down, and still keeps the machine it was asked to pin', async () => {
+    const ssh = fakeSsh()
+    const bench = await sshBench(ssh, false)
+
+    const result = await bench.service.sshOp({
+      op: 'connect',
+      machine: null,
+      target: UBUNTU,
+      save: true,
+      cwd: ''
+    })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('offline')
+    // No task and no ledger line: a session that was never opened has no history.
+    expect(bench.registry.tasks()).toHaveLength(0)
+    expect(bench.ledgerTape).toHaveLength(0)
+    // Pinned anyway, on purpose - a box the human meant to keep is worth keeping
+    // even when the attempt to reach it could not be made.
+    expect(ssh.saved().map((machine) => machine.host)).toEqual(['172.18.29.206'])
+  })
+
+  it('opens a bare terminal in home when no directory came with it', async () => {
+    const bench = await sshBench(fakeSsh())
+
+    const result = await bench.service.sshOp({ op: 'terminal', cwd: '' })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('terminal')
+    const opened = result.data as ProSessionOpened
+    expect(opened.paneId).toBe('p-new')
+    expect(opened.typed).toBe(0)
+    expect(typedLines(bench)).toEqual([])
+
+    const task = bench.registry.tasks()[0]
+    expect(task?.agentKind, 'a shell is not an agent').toBe('')
+    expect(task?.workdir).toBe(HOME)
+    expect(task?.title).toBe(HOME.split('/').filter(Boolean).pop())
+    expect(bench.ledgerTape).toHaveLength(1)
+    expect(bench.ledgerTape[0]?.kind).toBe('session')
+    // The human asked to be somewhere; landing them there is the point.
+    expect(bench.calls).toContain('openBench')
+  })
+
+  it('names the directory that is not one instead of opening a pane inside it', async () => {
+    const bench = await sshBench(fakeSsh())
+
+    const result = await bench.service.sshOp({ op: 'terminal', cwd: WORKDIR })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('no-dir')
+    expect(result.detail).toContain(WORKDIR)
+    expect(bench.registry.tasks()).toHaveLength(0)
+  })
+
+  it('types one connect line into the pane it just opened, and pins the box on the way', async () => {
+    const ssh = fakeSsh()
+    const bench = await sshBench(ssh)
+
+    const result = await bench.service.sshOp({
+      op: 'connect',
+      machine: null,
+      target: UBUNTU,
+      save: true,
+      cwd: IMPORT_DIR
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('connected')
+    const opened = result.data as ProSessionOpened
+    expect(opened.typed).toBe(1)
+    expect(opened.workspaceId).toBe('w-new')
+    expect(typedLines(bench)).toEqual([LINE])
+    // Text without Enter is a prompt with something typed in it, not a connection.
+    expect(bench.session.calls.filter((call) => call.method === 'sendKeys').map((call) => call.args[1])).toEqual([['enter']])
+
+    const task = bench.registry.tasks()[0]
+    expect(task?.agentKind).toBe('')
+    expect(task?.workdir).toBe(IMPORT_DIR)
+    expect(task?.title).toBe('wanlian@172.18.29.206')
+    // The line is the goal: it is what the history panel can honestly say this
+    // task was for.
+    expect(task?.goal).toBe(LINE)
+    expect(bench.ledgerTape).toHaveLength(1)
+    expect(bench.ledgerTape[0]).toMatchObject({ kind: 'session', text: LINE, agent: '' })
+    expect(ssh.saved().map((machine) => machine.host)).toEqual(['172.18.29.206'])
+  })
+
+  it('leaves the roster alone when the palette said not to pin', async () => {
+    const ssh = fakeSsh()
+    const bench = await sshBench(ssh)
+
+    const result = await bench.service.sshOp({
+      op: 'connect',
+      machine: null,
+      target: UBUNTU,
+      save: false,
+      cwd: IMPORT_DIR
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('connected-unsaved')
+    expect(typedLines(bench)).toEqual([LINE])
+    expect(ssh.saved()).toEqual([])
+  })
+
+  it('connects by alias when the machine came from ~/.ssh/config', async () => {
+    // config already carries the port, the user and the key, so re-passing them
+    // could only contradict the file the user maintains by hand.
+    const ssh = fakeSsh({ config: 'Host ubu\n  HostName 172.18.29.206\n  Port 2222\n  User wanlian\n' })
+    const bench = await sshBench(ssh)
+    const [machine] = await ssh.roster('ubu')
+    expect(machine?.alias).toBe('ubu')
+
+    const result = await bench.service.sshOp({
+      op: 'connect',
+      machine: machine ?? null,
+      target: '',
+      save: false,
+      cwd: ''
+    })
+    expect(result.ok).toBe(true)
+    expect(typedLines(bench)).toEqual(['ssh ubu'])
+  })
+
+  it('reads a whole pasted command line the same as the target inside it', async () => {
+    const bench = await sshBench(fakeSsh())
+
+    const result = await bench.service.sshOp({
+      op: 'connect',
+      machine: null,
+      target: 'ssh wanlian@172.18.29.206 -p 2222',
+      save: false,
+      cwd: IMPORT_DIR
+    })
+    expect(result.ok).toBe(true)
+    expect(typedLines(bench)).toEqual([LINE])
+  })
+
+  it('hands back the passwordless plan without touching herdr, and makes a key first when there is none', async () => {
+    const runs: string[][] = []
+    const bench = await sshBench(fakeSsh({ runs }))
+
+    const result = await bench.service.sshOp({
+      op: 'setup',
+      machine: null,
+      target: UBUNTU,
+      key: '',
+      run: false
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('setup-plan')
+    const plan = result.data as ProSshSetup
+    // No keypair on this box, so `ssh-copy-id` alone would be the first of two
+    // failures the human has to read.
+    expect(plan.lines).toHaveLength(2)
+    expect(plan.lines[0]).toContain('ssh-keygen')
+    expect(plan.lines[1]).toBe('ssh-copy-id -p 2222 wanlian@172.18.29.206')
+    expect(plan.key).toBe('')
+    expect(bench.session.calls).toHaveLength(0)
+    expect(bench.registry.tasks()).toHaveLength(0)
+    expect(runs).toEqual([])
+  })
+
+  it('publishes the conventional key when this box has one', async () => {
+    const bench = await sshBench(fakeSsh({ keys: ['id_rsa.pub', 'id_ed25519.pub'] }))
+
+    const result = await bench.service.sshOp({
+      op: 'setup',
+      machine: null,
+      target: UBUNTU,
+      key: '',
+      run: false
+    })
+    const plan = result.data as ProSshSetup
+    expect(plan.key).toBe(`${SSH_HOME}/.ssh/id_ed25519.pub`)
+    expect(plan.lines).toEqual([
+      `ssh-copy-id -i ${SSH_HOME}/.ssh/id_ed25519.pub -p 2222 wanlian@172.18.29.206`
+    ])
+  })
+
+  it('types the plan when asked to run it, because the password prompt is the human\'s to answer', async () => {
+    const bench = await sshBench(fakeSsh({ keys: ['id_ed25519.pub'] }))
+
+    const result = await bench.service.sshOp({
+      op: 'setup',
+      machine: null,
+      target: UBUNTU,
+      key: '',
+      run: true
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('setup')
+    const setup = result.data as ProSshSetup & ProSessionOpened
+    expect(setup.typed).toBe(setup.lines.length)
+    expect(typedLines(bench)).toEqual(setup.lines)
+    expect(bench.registry.tasks()[0]?.agentKind).toBe('')
+    expect(bench.ledgerTape).toHaveLength(1)
+    expect(bench.ledgerTape[0]?.kind).toBe('session')
+  })
+
+  it('reports what the probe found, which is the cue to offer passwordless setup', async () => {
+    const runs: string[][] = []
+    const ssh = fakeSsh({
+      runs,
+      probe: {
+        code: 255,
+        stderr: 'wanlian@172.18.29.206: Permission denied (publickey,password).\n'
+      }
+    })
+    const bench = await sshBench(ssh)
+
+    const result = await bench.service.sshOp({ op: 'probe', machine: null, target: UBUNTU })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('auth')
+    const probe = result.data as ProSshProbe
+    expect(probe.status).toBe('auth')
+    expect(probe.detail).toContain('Permission denied')
+    // BatchMode is the whole trick: it forbids the prompt, so "would ask for a
+    // password" arrives as an exit code instead of a hung child.
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toContain('BatchMode=yes')
+    expect(runs[0]?.slice(-2)).toEqual(['wanlian@172.18.29.206', 'exit'])
+  })
+
+  it('calls a key-auth box ok, and a box with no ssh client no-ssh', async () => {
+    const ok = await sshBench(fakeSsh())
+    const good = await ok.service.sshOp({ op: 'probe', machine: null, target: UBUNTU })
+    expect((good.data as ProSshProbe).status).toBe('ok')
+
+    const missing = await sshBench(fakeSsh({ probe: { code: 127, stderr: 'ssh: command not found' } }))
+    const bad = await missing.service.sshOp({ op: 'probe', machine: null, target: UBUNTU })
+    expect((bad.data as ProSshProbe).status).toBe('no-ssh')
+  })
+
+  it('says so when the machine to unpin was never pinned', async () => {
+    const bench = await sshBench(fakeSsh())
+
+    const result = await bench.service.sshOp({ op: 'remove', id: 'm-nope' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('no-item')
+  })
+
+  it('tells the truth when the roster cannot be written', async () => {
+    const bench = await sshBench(fakeSsh({ writable: false }))
+
+    const result = await bench.service.sshOp({ op: 'save', machine: null, target: UBUNTU })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('bad-machine')
   })
 })

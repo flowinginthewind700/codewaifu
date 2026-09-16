@@ -28,9 +28,11 @@ import {
   MessageCircle,
   PanelLeft,
   PersonStanding,
+  Plug,
   Plus,
   RefreshCw,
   Sparkles,
+  TerminalSquare,
   Volume2
 } from 'lucide-react'
 import type { ProConfig } from '@shared/config'
@@ -51,6 +53,10 @@ export interface TopBarProps {
   onImport: () => void
   onStage: () => void
   onNewTask: () => void
+  /** Open the connect palette: saved machines, ssh config hosts, a typed target. */
+  onConnect: () => void
+  /** A plain local shell in the selected task's directory. */
+  onTerminal: () => void
   onRediscover: () => void
   onToggleRail: () => void
   onToggleRight: () => void
@@ -111,6 +117,8 @@ export function TopBar({
   onImport,
   onStage,
   onNewTask,
+  onConnect,
+  onTerminal,
   onRediscover,
   onToggleRail,
   onToggleRight
@@ -234,6 +242,28 @@ export function TopBar({
           onClick={onCompanion}
         >
           <Sparkles />
+        </button>
+        {/* The three ways a new pane comes into being, grouped at the right end
+            of the bar: somewhere else (connect), right here (terminal), and
+            under an agent (new task). `i` focuses a pane that already exists,
+            which is why none of these is labelled like it. */}
+        <button
+          type="button"
+          className="btn ghost icon"
+          title={t('sshConnectTitle')}
+          aria-label={t('sshConnectTitle')}
+          onClick={onConnect}
+        >
+          <Plug />
+        </button>
+        <button
+          type="button"
+          className="btn ghost icon"
+          title={t('sshTerminalTitle')}
+          aria-label={t('sshTerminalTitle')}
+          onClick={onTerminal}
+        >
+          <TerminalSquare />
         </button>
         <button type="button" className="btn primary sm" onClick={onNewTask}>
           <Plus />

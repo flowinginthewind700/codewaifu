@@ -91,6 +91,11 @@ export const IPC = {
   proConfig: 'cw-pro:config',
   /** Directory picker + discovery report, for the install card and New task. */
   proHost: 'cw-pro:host',
+  /**
+   * SSH and local terminals: the roster, a reachability probe, pinning a
+   * machine, and opening a session (which is a pane plus a task record).
+   */
+  proSsh: 'cw-pro:ssh',
 
   /** Main -> Bench: the projection changed. Payload is `BenchView`. */
   pushProState: 'cw-pro:state-changed',
@@ -144,7 +149,8 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.proCompanion,
   IPC.proCommand,
   IPC.proConfig,
-  IPC.proHost
+  IPC.proHost,
+  IPC.proSsh
 ]
 
 /** Main -> renderer pushes the preload is willing to subscribe to. */

@@ -2422,6 +2422,191 @@ button.plan-title:focus-visible {
   padding: 10px 13px;
 }
 
+/* ---------------------------------------------------------- connect palette
+
+   Same skeleton as the import dialog - filter, scrolling list, foot - because
+   two dialogs that shape themselves differently for the same gesture read as
+   two apps. The rows differ in one way that matters: each carries its own
+   verbs, so the row is a flex line with the actions pinned right and the
+   identity allowed to truncate. */
+
+.connect-dialog {
+  width: min(620px, 100%);
+}
+
+/* The input is the palette's spine: it filters the roster *and* names a
+   destination the roster does not have, so it earns an icon and a clear button
+   rather than sitting bare above the list. */
+.connect-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+}
+
+.connect-input > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.connect-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-body);
+}
+
+.connect-input input::placeholder {
+  color: var(--faint);
+}
+
+.connect-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+.connect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-swift);
+}
+
+.connect-row:hover {
+  background: var(--bench-panel-2);
+}
+
+/* Keyboard selection is an inset edge, not a second fill: the row already
+   fills on hover, and two competing fills leave "which one am I on" ambiguous
+   the moment the pointer rests somewhere you are not aiming. */
+.connect-row[data-selected] {
+  background: var(--bench-panel-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A call is in flight on this row. Dimmed rather than spinner-decorated: the
+   probe pill already says "testing", and the verbs are disabled besides. */
+.connect-row[data-busy] {
+  opacity: 0.6;
+}
+
+.connect-icon {
+  display: flex;
+  align-items: center;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.connect-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.connect-row[data-selected] .connect-icon {
+  color: var(--accent);
+}
+
+.connect-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.connect-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connect-detail {
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connect-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* On the row but not part of it: "test this" is not "connect to this", so the
+   JSX stops these clicks from reaching the row's own handler. */
+.connect-verbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.connect-verbs .btn.icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.connect-probe {
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--faint);
+}
+
+.connect-probe svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* Each verdict wears a colour this bench already means something by: green is
+   "you are in", amber is "it needs something from you", coral is "this will not
+   work". `unknown` and `busy` stay neutral - neither is an answer yet, and
+   colouring an unanswered question is how a palette starts lying. */
+.connect-probe[data-probe='ok'] {
+  background: rgba(var(--ok-rgb), 0.16);
+  color: var(--ok);
+}
+
+.connect-probe[data-probe='auth'] {
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
+.connect-probe[data-probe='host-key'] {
+  background: rgba(var(--review-rgb), 0.16);
+  color: var(--review);
+}
+
+.connect-probe[data-probe='timeout'],
+.connect-probe[data-probe='unreachable'],
+.connect-probe[data-probe='no-ssh'],
+.connect-probe[data-probe='error'] {
+  background: rgba(var(--coral-rgb), 0.16);
+  color: var(--coral);
+}
+
+.connect-keys {
+  color: var(--faint);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Narrow window: the mode segments keep their icons and drop their labels,
    same as every other control in the topbar at this width. */
 @media (max-width: 720px) {

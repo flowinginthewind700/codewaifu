@@ -98,6 +98,8 @@ function renderBar(view: BenchView): Promise<void> {
       onImport={vi.fn()}
       onStage={vi.fn()}
       onNewTask={vi.fn()}
+      onConnect={vi.fn()}
+      onTerminal={vi.fn()}
       onRediscover={vi.fn()}
       onToggleRail={vi.fn()}
       onToggleRight={vi.fn()}

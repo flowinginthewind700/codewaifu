@@ -72,6 +72,7 @@ import {
   parseProLedger,
   parseProPane,
   parseProRecovery,
+  parseProSsh,
   parseProTask,
   type ProActionRequest,
   type ProCompanionPush,
@@ -83,9 +84,16 @@ import {
   type ProPaneRequest,
   type ProRecoveryRequest,
   type ProResult,
+  type ProSessionOpened,
+  type ProSshKeys,
+  type ProSshProbe,
+  type ProSshRoster,
+  type ProSshSetup,
+  type ProSshRequest,
   type ProTaskRequest,
   type ImportCandidate
 } from '../../shared/proIpc'
+import { parseTarget, type SshMachine } from '../../shared/ssh'
 import { TaskRegistry, type CreateTaskInput, type RegistryPatch } from './bench'
 import { CompanionBridge, type AnnounceResult, type CompanionApi } from './companion'
 import { benchFile, ensureProDirs, tasksDir } from './env'
@@ -113,6 +121,7 @@ import {
 } from './herdr/terminalBridge'
 import { LedgerStore, type LedgerInput } from './ledger'
 import { Recovery, type ApplyResult } from './recovery'
+import { SshService } from './ssh'
 import {
   emptyHint,
   paneReadHint,
@@ -365,6 +374,12 @@ export interface ProServiceDeps {
   recovery?: Recovery
   companion?: CompanionFactory
   session?: SessionFactory
+  /**
+   * The SSH roster (saved machines, `~/.ssh/config`, probes, keys). Injected so
+   * a test never spawns a real `ssh` and never reads the developer's own
+   * `~/.ssh`.
+   */
+  ssh?: SshService
 }
 
 const DEFAULT_INTERVALS: ServiceIntervals = {
@@ -495,6 +510,7 @@ export class ProService implements CompanionApi {
   readonly triage: Triage
   readonly recovery: Recovery
   readonly companion: CompanionLike
+  readonly ssh: SshService
 
   private target: HerdrTarget = EMPTY_TARGET
   private session: SessionLike | null = null
@@ -563,6 +579,12 @@ export class ProService implements CompanionApi {
       deps.registry ?? new TaskRegistry({ file: benchFile, now: () => this.timers.now() })
     this.ledger = deps.ledger ?? new LedgerStore(tasksDir)
     this.git = deps.git ?? new GitProbe({ now: () => this.timers.now() })
+    this.ssh =
+      deps.ssh ??
+      new SshService({
+        home: homeDir,
+        platform: process.platform === 'win32' ? 'windows' : 'posix'
+      })
     this.triage =
       deps.triage ??
       new Triage({
@@ -2451,6 +2473,218 @@ export class ProService implements CompanionApi {
     }
   }
 
+  /* ---------------------------------------------------------------- *
+   * SSH and local terminals
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The connect palette's whole backend.
+   *
+   * A terminal session is a Bench task with no agent (`agentKind: ''`): herdr
+   * owns the PTY, the registry owns the row in the tree, and the pane renderer
+   * that already draws agent output draws a shell too. That is why `connect`,
+   * `terminal` and `setup` all end up in `openSession` - one provisioning path,
+   * and the only thing that differs is what gets typed into the fresh shell.
+   * There is no second terminal implementation in this app, and no node-pty.
+   */
+  async sshOp(request: ProSshRequest): Promise<ProResult> {
+    if (!this.running) return failResult('not-running', 'the bench is not running')
+    switch (request.op) {
+      case 'list': {
+        const machines = await this.ssh.roster(request.query)
+        const roster: ProSshRoster = { machines, home: homeDir }
+        return okResult(roster, '', 'roster')
+      }
+      case 'keys':
+        return okResult<ProSshKeys>(
+          { keys: this.ssh.keys(), key: this.ssh.defaultKey() },
+          '',
+          'keys'
+        )
+      case 'probe': {
+        const machine = this.machineFor(request.machine, request.target)
+        if (!machine) return this.noMachine()
+        const probe = await this.ssh.probe(machine)
+        const result: ProSshProbe = { machine, status: probe.status, detail: probe.detail }
+        return okResult(result, probe.detail, probe.status)
+      }
+      case 'save': {
+        const machine = this.machineFor(request.machine, request.target)
+        if (!machine) return this.noMachine()
+        const saved = this.ssh.save(machine)
+        this.invalidate()
+        return saved
+          ? okResult({ machine: saved }, '', 'saved')
+          : failResult('bad-machine', 'the machine could not be stored')
+      }
+      case 'remove': {
+        const removed = this.ssh.remove(request.id)
+        this.invalidate()
+        return removed
+          ? okResult({ id: request.id }, '', 'removed')
+          : failResult('no-item', `no saved machine ${request.id}`)
+      }
+      case 'connect': {
+        const machine = this.machineFor(request.machine, request.target)
+        if (!machine) return this.noMachine()
+        // Pin first, so the roster the human sees next time already has this box
+        // in it even if herdr turns out to be down. A saved machine that never
+        // connected is still a machine they meant to keep.
+        const saved = request.save ? this.ssh.save(machine) : null
+        const line = this.ssh.connectLine(machine)
+        return this.openSession({
+          title: machine.label,
+          cwd: request.cwd,
+          goal: line,
+          lines: [line],
+          code: saved ? 'connected' : 'connected-unsaved'
+        })
+      }
+      case 'setup': {
+        const machine = this.machineFor(request.machine, request.target)
+        if (!machine) return this.noMachine()
+        const lines = this.setupPlan(machine, request.key)
+        if (!request.run) {
+          return okResult<ProSshSetup>({ lines, key: this.ssh.defaultKey() }, '', 'setup-plan')
+        }
+        const opened = await this.openSession({
+          title: machine.label,
+          cwd: '',
+          goal: lines.join('\n'),
+          lines,
+          code: 'setup'
+        })
+        if (!opened.ok || !opened.data) return opened
+        return okResult<ProSshSetup & ProSessionOpened>(
+          { ...opened.data, lines, key: this.ssh.defaultKey() },
+          opened.detail,
+          opened.code
+        )
+      }
+      case 'terminal':
+        return this.openSession({
+          title: '',
+          cwd: request.cwd,
+          goal: '',
+          lines: [],
+          code: 'terminal'
+        })
+    }
+  }
+
+  /** What a session open produced; the renderer focuses the pane from it. */
+  private async openSession(input: {
+    title: string
+    cwd: string
+    goal: string
+    lines: readonly string[]
+    code: string
+  }): Promise<ProResult<ProSessionOpened>> {
+    const client = this.client()
+    if (!client || !this.online()) return this.offline()
+
+    // `~` and an empty field both mean home - the same rule the New task form
+    // uses, and the reason "open a terminal" needs no directory at all.
+    const workdir = resolveWorkdir(input.cwd, homeDir)
+    if (!workdir) return failResult('needs-workdir', 'no working directory and no home to fall back to')
+    if (!isDirectory(workdir)) return failResult('no-dir', `${workdir} is not a directory`)
+
+    const repoRoot = (await this.git.repoRoot(workdir).catch(() => '')) || workdir
+    const title = input.title.trim() || pathBase(workdir) || 'terminal'
+
+    let created: CreatedResult
+    try {
+      created = await client.createWorkspace({ cwd: workdir, label: title, focus: false })
+    } catch (error) {
+      this.host.log('warn', 'pro: cannot open a session workspace', { error: String(error) })
+      return failResult('no-workspace', String(error))
+    }
+    const workspaceId = created.workspace?.workspaceId ?? ''
+    const paneId = created.pane?.paneId ?? ''
+    if (!paneId) return failResult('no-pane', 'herdr opened a workspace with no pane in it')
+
+    const task = this.registry.create({
+      title,
+      goal: input.goal,
+      workdir,
+      repoRoot,
+      branch: '',
+      agentKind: '',
+      workspaceId,
+      paneIds: [paneId],
+      status: 'active',
+      origin: 'created'
+    })
+
+    let typed = 0
+    for (const line of input.lines) {
+      if (!line.trim()) continue
+      if (await this.typeLine(client, paneId, line)) typed += 1
+    }
+    if (input.lines.length && !typed) this.notice(this.text(SEND_FAILED_TEXT), 'error')
+
+    this.ledger.append(
+      {
+        taskId: task.id,
+        kind: 'session',
+        text: input.goal || title,
+        agent: '',
+        branch: '',
+        paneId,
+        workspaceId,
+        source: 'gui'
+      },
+      this.timers.now()
+    )
+    this.registry.save()
+    this.git.invalidate(workdir)
+    if (this.session) await this.session.refresh().catch(() => null)
+    this.invalidate()
+    // The human asked to be somewhere; landing them on the pane they just opened
+    // is the whole point, and it also attaches the bridge that draws it.
+    this.focusBench(task.id, paneId, input.code)
+    return okResult({ taskId: task.id, workspaceId, paneId, typed }, '', input.code)
+  }
+
+  /**
+   * Type one line into a bare shell and submit it.
+   *
+   * Deliberately not `sendToPane`: that path is agent-aware, and `agent.prompt`
+   * would wait for an agent that is not there. This is the raw half of it. The
+   * PTY buffers input, so typing the moment herdr hands the pane back is safe
+   * even while the shell is still reading its rc files.
+   */
+  private async typeLine(client: HerdrClientLike, paneId: string, line: string): Promise<boolean> {
+    const sent = await client.sendText(paneId, line).catch(() => false)
+    if (!sent) return false
+    return client.sendKeys(paneId, ['enter']).catch(() => false)
+  }
+
+  /**
+   * Which of the two the palette sent wins. A roster row has already been
+   * through `~/.ssh/config`, so it may carry the alias that makes
+   * `ssh <alias>` the correct line; a typed target has not, so it is parsed
+   * here, in the process that owns the same config file.
+   */
+  private machineFor(machine: SshMachine | null, target: string): SshMachine | null {
+    if (machine && machine.host.trim()) return machine
+    return target ? parseTarget(target) : null
+  }
+
+  /**
+   * The lines that make a machine passwordless, with keypair creation folded in
+   * when this box has no key at all - otherwise the first thing a fresh install
+   * sees is `ssh-copy-id` failing on a public key that does not exist.
+   */
+  private setupPlan(machine: SshMachine, key: string): string[] {
+    const lines = this.ssh.setup(machine, key)
+    return this.ssh.keys().length ? lines : [this.ssh.keygen(), ...lines]
+  }
+
+  private noMachine(): ProResult<never> {
+    return failResult('bad-machine', 'a machine or an ssh target is required')
+  }
+
   /** Widget, tray or HTTP -> bench. Parsed and resolved by the bridge. */
   command(payload: unknown): Promise<ProResult> {
     if (!this.running) return Promise.resolve(failResult('not-running', 'the bench is not running'))
@@ -2784,5 +3018,6 @@ export const proParsers = {
   ledger: parseProLedger,
   recovery: parseProRecovery,
   pane: parseProPane,
-  host: parseProHost
+  host: parseProHost,
+  ssh: parseProSsh
 }

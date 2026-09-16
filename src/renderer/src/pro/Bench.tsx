@@ -40,6 +40,7 @@ import type { Lang, RedactedConfig, RuntimeState } from '@shared/protocol'
 import type { ProFocusPush, ProResult } from '@shared/proIpc'
 import { proApi } from './api'
 import { AttentionQueue } from './AttentionQueue'
+import { ConnectDialog } from './ConnectDialog'
 import { ConversationPanel } from './ConversationPanel'
 import { ImportDialog } from './ImportDialog'
 import { InstallCard } from './InstallCard'
@@ -83,6 +84,7 @@ export function Bench(): ReactElement {
   const [rightOpen, setRightOpen] = useState(true)
   const [newTaskOpen, setNewTaskOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [connectOpen, setConnectOpen] = useState(false)
   /** Origin facet. Viewing state like the rest of it; main owns the facts. */
   const [treeFilter, setTreeFilter] = useState<TreeFilter>('all')
   const [removeId, setRemoveId] = useState('')
@@ -449,6 +451,21 @@ export function Bench(): ReactElement {
     [push, selectTask, t]
   )
 
+  /**
+   * `t`: a plain local shell, in the selected task's directory.
+   *
+   * One keystroke and there is a pane - no dialog, no form, nothing to fill in.
+   * An empty directory means home, which main resolves, so this works with no
+   * task selected at all. The focus push that follows the open is what brings
+   * the pane forward; this only has to say whether the open itself worked.
+   */
+  const openTerminal = useCallback((): void => {
+    void proApi.ssh.terminal(selectedTask?.workdir ?? '').then((result) => {
+      if (!report(result, t('sshTerminalOpened'))) return
+      bump()
+    })
+  }, [bump, report, selectedTask, t])
+
   /* ---- keyboard ------------------------------------------------------- */
 
   const move = (delta: number): void => {
@@ -489,7 +506,7 @@ export function Bench(): ReactElement {
         return
       }
       // NewTaskDialog owns its own Escape, on a capture-phase listener.
-      if (newTaskOpen) return
+      if (newTaskOpen || connectOpen) return
       if (!railOpen || !rightOpen) {
         setRailOpen(true)
         setRightOpen(true)
@@ -498,7 +515,7 @@ export function Bench(): ReactElement {
       return
     }
 
-    if (newTaskOpen || removeId || !view) return
+    if (newTaskOpen || connectOpen || removeId || !view) return
 
     switch (key) {
       case 'j':
@@ -543,6 +560,16 @@ export function Bench(): ReactElement {
         return
       case 'n':
         setNewTaskOpen(true)
+        event.preventDefault()
+        return
+      case 'c':
+        // The connect palette. `i` focuses a pane that already exists; this is
+        // how a new one gets made, locally or on another machine.
+        setConnectOpen(true)
+        event.preventDefault()
+        return
+      case 't':
+        openTerminal()
         event.preventDefault()
         return
       case 'a':
@@ -603,6 +630,8 @@ export function Bench(): ReactElement {
           onImport={() => setImportOpen(true)}
           onStage={toStage}
           onNewTask={() => setNewTaskOpen(true)}
+          onConnect={() => setConnectOpen(true)}
+          onTerminal={openTerminal}
           onRediscover={rediscover}
           onToggleRail={() => setRailOpen((value) => !value)}
           onToggleRight={() => setRightOpen((value) => !value)}
@@ -748,6 +777,15 @@ export function Bench(): ReactElement {
           now={now}
           onCancel={() => setImportOpen(false)}
           onImported={onImported}
+          onNotify={push}
+        />
+      )}
+
+      {connectOpen && (
+        <ConnectDialog
+          t={t}
+          cwd={selectedTask?.workdir ?? ''}
+          onCancel={() => setConnectOpen(false)}
           onNotify={push}
         />
       )}

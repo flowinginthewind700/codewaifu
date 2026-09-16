@@ -27,8 +27,14 @@ import type {
   ProFramesPush,
   ProNoticePush,
   ProResult,
+  ProSessionOpened,
+  ProSshKeys,
+  ProSshProbe,
+  ProSshRoster,
+  ProSshSetup,
   ImportCandidate
 } from '@shared/proIpc'
+import type { SshMachine } from '@shared/ssh'
 import type { Lang, RedactedConfig, RuntimeState, SteerResult, UiSnapshot } from '@shared/protocol'
 
 const bridge = window.codewaifu
@@ -207,6 +213,44 @@ export const proApi = {
     openPath: (path: string): Promise<ProResult> => call(CH.proHost, { op: 'openPath', path }),
     openExternal: (url: string): Promise<ProResult> =>
       call(CH.proHost, { op: 'openExternal', url })
+  },
+
+  /**
+   * SSH and local terminals. Every verb answers with an envelope, because
+   * "the roster is empty" and "herdr is not connected" have to render
+   * differently and only the code can tell them apart.
+   */
+  ssh: {
+    list: (query = ''): Promise<ProResult<ProSshRoster>> =>
+      call<ProSshRoster>(CH.proSsh, { op: 'list', query }),
+    keys: (): Promise<ProResult<ProSshKeys>> => call<ProSshKeys>(CH.proSsh, { op: 'keys' }),
+    probe: (machine: SshMachine | null, target = ''): Promise<ProResult<ProSshProbe>> =>
+      call<ProSshProbe>(CH.proSsh, { op: 'probe', machine, target }),
+    save: (machine: SshMachine | null, target = ''): Promise<ProResult<{ machine: SshMachine }>> =>
+      call<{ machine: SshMachine }>(CH.proSsh, { op: 'save', machine, target }),
+    remove: (id: string): Promise<ProResult> => call(CH.proSsh, { op: 'remove', id }),
+    /** Open a session: a pane, a task row, and the connect line typed into it. */
+    connect: (input: {
+      machine?: SshMachine | null
+      target?: string
+      save?: boolean
+      cwd?: string
+    }): Promise<ProResult<ProSessionOpened>> =>
+      call<ProSessionOpened>(CH.proSsh, { op: 'connect', save: true, ...input }),
+    /**
+     * Passwordless setup. `run: false` only asks what would be typed, which is
+     * what a tooltip or a confirmation line wants.
+     */
+    setup: (input: {
+      machine?: SshMachine | null
+      target?: string
+      key?: string
+      run?: boolean
+    }): Promise<ProResult<ProSshSetup & Partial<ProSessionOpened>>> =>
+      call<ProSshSetup & Partial<ProSessionOpened>>(CH.proSsh, { op: 'setup', run: true, ...input }),
+    /** A plain local shell. Empty `cwd` means home. */
+    terminal: (cwd = ''): Promise<ProResult<ProSessionOpened>> =>
+      call<ProSessionOpened>(CH.proSsh, { op: 'terminal', cwd })
   },
 
   companion: {

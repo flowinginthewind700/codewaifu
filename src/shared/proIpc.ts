@@ -28,6 +28,14 @@ import {
   type TaskStatus
 } from './pro'
 import type { BenchCommand } from './companionLink'
+import {
+  clampPort,
+  makeMachine,
+  parseTarget,
+  type MachineSource,
+  type ProbeStatus,
+  type SshMachine
+} from './ssh'
 
 /* ------------------------------------------------------------------ *
  * Primitives
@@ -130,6 +138,7 @@ export type ProRejectCode =
   | 'bad-pane'
   | 'bad-action'
   | 'bad-kind'
+  | 'bad-machine'
   | 'needs-text'
   | 'needs-workdir'
   | 'no-item'
@@ -618,6 +627,183 @@ export function parseProHost(payload: unknown): ProHostParse {
     }
     default:
       return reject('bad-op', `unknown host op ${str(raw.op, 20)}`)
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * SSH and local terminals
+ * ------------------------------------------------------------------ */
+
+/**
+ * One verb per thing the connect palette can do. `machine` and `target` travel
+ * together and either may be empty: a roster row sends the machine it was
+ * built from, the free-form row sends only what the human typed, and the
+ * service is the one that decides which wins (it owns `~/.ssh/config`, so it
+ * is also the only layer that can tell an alias from a hostname).
+ */
+export type ProSshRequest =
+  /** The ranked roster, filtered the way the palette's input filters. */
+  | { op: 'list'; query: string }
+  /** Public keys in `~/.ssh`, conventional first. */
+  | { op: 'keys' }
+  | { op: 'probe'; machine: SshMachine | null; target: string }
+  | { op: 'save'; machine: SshMachine | null; target: string }
+  | { op: 'remove'; id: string }
+  /**
+   * Open a session: a pane, a task record, and the connect line typed into it.
+   * `save` pins the machine as a side effect, which is what makes the second
+   * connect to the same box one keystroke.
+   */
+  | { op: 'connect'; machine: SshMachine | null; target: string; save: boolean; cwd: string }
+  /**
+   * Make a machine passwordless. `run` types the setup line into a pane (the
+   * human still answers the password prompt); without it we only hand back the
+   * lines, for a palette that wants to show what it would do.
+   */
+  | { op: 'setup'; machine: SshMachine | null; target: string; key: string; run: boolean }
+  /** A plain local shell. Empty `cwd` means home. */
+  | { op: 'terminal'; cwd: string }
+
+export type ProSshParse = ProSshRequest | ProReject
+
+/** The roster, plus the home an empty directory field will resolve to. */
+export interface ProSshRoster {
+  machines: SshMachine[]
+  home: string
+}
+
+/** One probe's verdict. `detail` is the last line ssh printed, for a tooltip. */
+export interface ProSshProbe {
+  machine: SshMachine
+  status: ProbeStatus
+  detail: string
+}
+
+/** Public keys in `~/.ssh`, and the one a setup would use by default. */
+export interface ProSshKeys {
+  keys: string[]
+  key: string
+}
+
+/**
+ * What opening a session produced. The renderer does not need the task record -
+ * the projection push that follows carries it - but it does need the ids to
+ * focus the right pane and to tell "typed" from "opened but silent".
+ */
+export interface ProSessionOpened {
+  taskId: string
+  workspaceId: string
+  paneId: string
+  /** How many of the requested lines actually reached the pane. */
+  typed: number
+}
+
+/** The passwordless plan: the lines that would run, and the key they publish. */
+export interface ProSshSetup {
+  lines: string[]
+  key: string
+}
+
+const MACHINE_SOURCES: readonly string[] = ['saved', 'config', 'herdr']
+
+function machineSourceOf(value: unknown): MachineSource {
+  const raw = str(value, 10).trim().toLowerCase()
+  return (MACHINE_SOURCES.includes(raw) ? raw : 'saved') as MachineSource
+}
+
+/**
+ * Narrow an untrusted `machine` blob. `makeMachine` is the same constructor the
+ * roster uses, so a machine that arrives over the wire is clamped, trimmed and
+ * labelled exactly like one that arrived from disk - and a hostile `port` or a
+ * `host` carrying shell metacharacters becomes a quoted single argument rather
+ * than something typed raw into a pane.
+ */
+export function machineOf(value: unknown): SshMachine | null {
+  const raw = record(value)
+  const host = str(raw.host, 200).trim()
+  const alias = str(raw.alias, 200).trim()
+  if (!host && !alias) return null
+  return makeMachine({
+    id: str(raw.id, 80).trim(),
+    label: str(raw.label, 200).trim(),
+    host: host || alias,
+    port: clampPort(raw.port),
+    user: str(raw.user, 100).trim(),
+    identityFile: str(raw.identityFile, 400).trim(),
+    proxyJump: str(raw.proxyJump, 400).trim(),
+    alias,
+    source: machineSourceOf(raw.source)
+  })
+}
+
+/**
+ * A free-form `user@host:port`, kept as typed; the service parses it.
+ *
+ * One whitespace-bearing shape is allowed through: a whole `ssh` command line,
+ * because that is how a machine arrives from a README or a shell history, and
+ * the palette is exactly where someone would paste it. It is admitted only when
+ * `parseTarget` can read it as tokens, and that parser refuses any line with a
+ * shell metacharacter in it - so `host; rm -rf ~` is dropped here the same as it
+ * ever was. A newline is never a target: one line, one destination.
+ */
+function targetOf(value: unknown): string {
+  const raw = str(value, 300)
+    .trim()
+    .replace(/[ \t]+/g, ' ')
+  if (!raw || /[\r\n]/.test(raw)) return ''
+  return /\s/.test(raw) && !parseTarget(raw) ? '' : raw
+}
+
+/** `~` and '' both mean home; anything else must be an absolute-ish path. */
+function cwdOf(value: unknown): string {
+  return str(value, 400).trim()
+}
+
+export function parseProSsh(payload: unknown): ProSshParse {
+  const raw = record(payload)
+  const op = str(raw.op, 20).trim().toLowerCase() || 'list'
+  switch (op) {
+    case 'list':
+      // Trimmed like every other field here. `rankMachines` trims again, so
+      // this is about the contract rather than the result: a filter that
+      // arrives with the palette's trailing space still on it is not the same
+      // string the palette thinks it sent.
+      return { op, query: str(raw.query ?? raw.q, 200).trim() }
+    case 'keys':
+      return { op }
+    case 'remove': {
+      const id = str(raw.id, 120).trim()
+      if (!id) return reject('bad-machine', 'a machine id is required')
+      return { op, id }
+    }
+    case 'terminal':
+      return { op, cwd: cwdOf(raw.cwd ?? raw.workdir ?? raw.path) }
+    case 'probe':
+    case 'save':
+    case 'connect':
+    case 'setup': {
+      const machine = machineOf(raw.machine)
+      const target = targetOf(raw.target)
+      if (!machine && !target) {
+        return reject('bad-machine', 'a machine or an ssh target is required')
+      }
+      if (op === 'save') return { op, machine, target }
+      if (op === 'connect') {
+        return {
+          op,
+          machine,
+          target,
+          save: bool(raw.save, true),
+          cwd: cwdOf(raw.cwd ?? raw.workdir)
+        }
+      }
+      if (op === 'setup') {
+        return { op, machine, target, key: str(raw.key, 400).trim(), run: bool(raw.run, true) }
+      }
+      return { op, machine, target }
+    }
+    default:
+      return reject('bad-op', `unknown ssh op ${str(raw.op, 20)}`)
   }
 }
 
