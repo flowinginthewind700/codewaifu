@@ -14,6 +14,12 @@
  * 3. `imported` and `adopted` are one bucket to the filter and two to the badge.
  *    Both mean "not made here"; only the row can say which.
  *
+ * The second half of the file is the other two promises the rail makes: a row
+ * only moves when it needs you (`compareTasks`), and a heading only ever moves
+ * when a directory is renamed (`deriveGroups`, `groupLabelFor`). Both are read
+ * through `buildBench` rather than from hand-written views, so a fixture here
+ * cannot describe a bench the projection could never produce.
+ *
  * Records come out of `parseTaskRecord` and groups out of `buildBench`, so a
  * fixture here cannot describe a bench the projection could never produce.
  */
@@ -21,18 +27,21 @@ import { describe, expect, it } from 'vitest'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
 import {
   buildBench,
+  deriveGroups,
   filterGroups,
   groupKeyFor,
+  groupLabelFor,
   originCounts,
   parseTaskRecord,
   provisionTasks,
   taskOriginOf,
   treeFilterOf,
+  type AttentionItem,
   type BenchView,
   type GroupView,
   type TaskRecord
 } from '../src/shared/pro'
-import { benchView } from './helpers/pro'
+import { attentionItem, benchView } from './helpers/pro'
 
 const NOW = 1_700_000_000_000
 const REPO = '/work/codewaifu'
@@ -59,16 +68,55 @@ function snapshotWith(workspaceId: string, cwd: string): Snapshot {
 }
 
 /**
+ * One live pane per entry, each with a status. The `working` rung of the tree
+ * order can only be reached from a real herdr pane, and the cwds are a
+ * directory no task claims so that binding happens by workspace rather than by
+ * the workdir fallback (which would quietly make every task in the fixture
+ * live, and the ladder untestable).
+ */
+function liveSnapshot(
+  panes: readonly { workspaceId: string; status: string }[]
+): Snapshot {
+  const parsed = parseSnapshot({
+    version: '0.0.0-test',
+    protocol: 1,
+    workspaces: panes.map((pane, index) => ({
+      workspace_id: pane.workspaceId,
+      number: index + 1,
+      label: pane.workspaceId
+    })),
+    panes: panes.map((pane, index) => ({
+      pane_id: `p-${index + 1}`,
+      workspace_id: pane.workspaceId,
+      tab_id: `tab-${index + 1}`,
+      cwd: `/tmp/live/${pane.workspaceId}`,
+      agent: 'codex',
+      agent_status: pane.status
+    }))
+  })
+  if (!parsed) throw new Error('snapshot fixture did not parse')
+  return parsed
+}
+
+/** A task pinned to one of `liveSnapshot`'s workspaces. */
+function liveTask(patch: Record<string, unknown>): TaskRecord {
+  return record({ workdir: REPO, repoRoot: REPO, status: 'active', updatedAt: NOW, ...patch })
+}
+
+/**
  * The projection, not a hand-written `GroupView[]`: grouping, labels and the
  * per-group counts all come from the same code the rail renders.
  */
-function bench(tasks: readonly TaskRecord[]): BenchView {
+function bench(
+  tasks: readonly TaskRecord[],
+  opts: { snapshot?: Snapshot | null; attention?: readonly AttentionItem[] } = {}
+): BenchView {
   return buildBench({
     now: NOW,
     herdr: benchView().herdr,
-    snapshot: null,
+    snapshot: opts.snapshot ?? null,
     tasks,
-    attention: []
+    attention: [...(opts.attention ?? [])]
   })
 }
 
@@ -204,5 +252,164 @@ describe('treeFilterOf', () => {
     expect(treeFilterOf('imported')).toBe('imported')
     expect(treeFilterOf('bogus')).toBe('all')
     expect(treeFilterOf(null)).toBe('all')
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Tree order
+ * ------------------------------------------------------------------ */
+
+/**
+ * Movement in a tree has to mean something. The ladder is: needs a decision,
+ * then active and working, then active and quiet, then lost, then everything
+ * the human put away - and only inside a rung does the title decide. Titles
+ * below are deliberately reverse-alphabetical, so an order that came out
+ * alphabetical would be an order that ignored the ranks.
+ */
+describe('the tree order', () => {
+  const ladder = (): BenchView =>
+    bench(
+      [
+        liveTask({ id: 't-a', title: 'aaa parked', status: 'parked' }),
+        liveTask({ id: 't-b', title: 'bbb lost', status: 'lost' }),
+        liveTask({ id: 't-c', title: 'ccc no live pane' }),
+        liveTask({ id: 't-d', title: 'ddd working', workspaceId: 'ws-work' }),
+        liveTask({ id: 't-e', title: 'eee wants a decision', status: 'done' })
+      ],
+      {
+        snapshot: liveSnapshot([{ workspaceId: 'ws-work', status: 'working' }]),
+        attention: [attentionItem({ taskId: 't-e' })]
+      }
+    )
+
+  it('ranks by need, and only then by name', () => {
+    expect(ladder().tasks.map((task) => task.id)).toEqual(['t-e', 't-d', 't-c', 't-b', 't-a'])
+  })
+
+  it('ranks the row needing a decision first even when it is finished', () => {
+    // `status: 'done'` is the human's filing; the queue item is the truth right
+    // now. A row that needs an answer must not hide under "put away".
+    const [first] = ladder().tasks
+    expect(first.id).toBe('t-e')
+    expect(first.needsMe).toBe(1)
+  })
+
+  it('breaks a tie on title, then on id, so the order never flickers', () => {
+    const view = bench([
+      liveTask({ id: 't-zzz', title: 'beta' }),
+      liveTask({ id: 't-aaa', title: 'alpha' }),
+      liveTask({ id: 't-b', title: 'same' }),
+      liveTask({ id: 't-a', title: 'same' })
+    ])
+    expect(view.tasks.map((task) => task.id)).toEqual(['t-aaa', 't-zzz', 't-a', 't-b'])
+  })
+
+  it('does not float a blocked task on its own: blocked is what the queue is for', () => {
+    const view = bench(
+      [
+        liveTask({ id: 't-blocked', title: 'zzz blocked', workspaceId: 'ws-blocked' }),
+        liveTask({ id: 't-working', title: 'aaa working', workspaceId: 'ws-working' }),
+        liveTask({ id: 't-quiet', title: 'mmm quiet' })
+      ],
+      {
+        snapshot: liveSnapshot([
+          { workspaceId: 'ws-blocked', status: 'blocked' },
+          { workspaceId: 'ws-working', status: 'working' }
+        ])
+      }
+    )
+    // `blocked` folds to the same rung as an active task with no live pane, so
+    // these two sort on title; the working row outranks both.
+    expect(view.tasks.map((task) => task.id)).toEqual(['t-working', 't-quiet', 't-blocked'])
+  })
+
+  it('floats the same blocked task once it is actually asking for something', () => {
+    const view = bench(
+      [
+        liveTask({ id: 't-blocked', title: 'zzz blocked', workspaceId: 'ws-blocked' }),
+        liveTask({ id: 't-working', title: 'aaa working', workspaceId: 'ws-working' })
+      ],
+      {
+        snapshot: liveSnapshot([
+          { workspaceId: 'ws-blocked', status: 'blocked' },
+          { workspaceId: 'ws-working', status: 'working' }
+        ]),
+        attention: [attentionItem({ taskId: 't-blocked' })]
+      }
+    )
+    expect(view.tasks.map((task) => task.id)).toEqual(['t-blocked', 't-working'])
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Groups
+ * ------------------------------------------------------------------ */
+
+describe('the group order', () => {
+  it('is alphabetical by label, then by path, and never by urgency', () => {
+    const view = bench(
+      [
+        liveTask({ id: 't-1', title: 'in zebra', workdir: '/work/zebra', repoRoot: '/work/zebra' }),
+        liveTask({ id: 't-2', title: 'in apple', workdir: '/work/apple', repoRoot: '/work/apple' }),
+        liveTask({ id: 't-3', title: 'other repo', workdir: '/other/place/repo', repoRoot: '/other/place/repo' }),
+        liveTask({ id: 't-4', title: 'work repo', workdir: '/work/shared/repo', repoRoot: '/work/shared/repo' })
+      ],
+      // The urgent row lives in the last directory alphabetically: a heading
+      // that jumps to the top is a tree nobody can read twice.
+      { attention: [attentionItem({ taskId: 't-1' })] }
+    )
+    expect(view.groups.map((group) => group.key)).toEqual([
+      '/work/apple',
+      '/other/place/repo',
+      '/work/shared/repo',
+      '/work/zebra'
+    ])
+    expect(view.groups.map((group) => group.label)).toEqual(['apple', 'repo', 'repo', 'zebra'])
+  })
+
+  it('keeps the rows it is handed, in the order it is handed them', () => {
+    const [a, b] = bench([
+      liveTask({ id: 't-quiet', title: 'mmm quiet' }),
+      liveTask({ id: 't-urgent', title: 'zzz urgent' })
+    ], { attention: [attentionItem({ taskId: 't-urgent' })] }).tasks
+    expect([a.id, b.id]).toEqual(['t-urgent', 't-quiet'])
+    // `deriveGroups` is the bucketing step, not a second sort: reversing its
+    // input reverses the group, which is what keeps the ladder above the only
+    // thing that decides order.
+    const reversed = deriveGroups([b, a])
+    expect(reversed[0].tasks.map((task) => task.id)).toEqual(['t-quiet', 't-urgent'])
+  })
+
+  it('carries the parent directory as a hint, for two checkouts of one repo', () => {
+    const [group] = bench([liveTask({ id: 't-1', title: 'here' })]).groups
+    expect(group.label).toBe('codewaifu')
+    expect(group.hint).toBe('work')
+  })
+
+  it('has no hint for a bare directory, and files a task with no path under unknown', () => {
+    const view = bench([
+      liveTask({ id: 't-bare', title: 'relative', workdir: 'repo', repoRoot: 'repo' }),
+      liveTask({ id: 't-homeless', title: 'nowhere', workdir: '', repoRoot: '' })
+    ])
+    const byKey = new Map(view.groups.map((group) => [group.key, group]))
+    expect(byKey.get('repo')?.hint).toBe('')
+    expect(byKey.get('')?.label).toBe('unknown')
+    expect(byKey.get('')?.tasks.map((task) => task.id)).toEqual(['t-homeless'])
+  })
+})
+
+describe('groupLabelFor', () => {
+  it('names a group after its last path segment', () => {
+    expect(groupLabelFor('/work/codewaifu')).toBe('codewaifu')
+  })
+
+  it('reads a Windows path and a UNC share the same way', () => {
+    expect(groupLabelFor('C:\\work\\codewaifu')).toBe('codewaifu')
+    expect(groupLabelFor('\\\\files\\team\\codewaifu')).toBe('codewaifu')
+  })
+
+  it('falls back to the key, then to unknown, rather than to an empty heading', () => {
+    expect(groupLabelFor('/')).toBe('/')
+    expect(groupLabelFor('')).toBe('unknown')
   })
 })

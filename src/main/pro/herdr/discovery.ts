@@ -133,6 +133,30 @@ export function sessionDataDir(configDir: string, session: string): string {
 }
 
 /**
+ * herdr writes its server log next to the socket it was going to take, and the
+ * install card quotes that path to a human, so it has to be a path that exists.
+ *
+ * The arithmetic is local rather than `node:path`: `dirname` and `join` follow
+ * the host platform, so the same socket string resolves to two different log
+ * paths depending on where the app runs - on Windows `dirname('/tmp/x.sock')`
+ * is `\tmp`, and the card ends up quoting `\tmp/herdr-server.log`. Everything
+ * else in this module means the same path on every platform; this is the one
+ * that gets read aloud, so it is held to the same rule.
+ */
+export function logPathForSocket(socket: string): string {
+  const target = String(socket || '').trim()
+  if (!target) return ''
+  const cut = Math.max(target.lastIndexOf('/'), target.lastIndexOf('\\'))
+  if (cut < 0) return 'herdr-server.log'
+  const separator = target[cut]
+  const dir = target.slice(0, cut)
+  // Cut at index 0 is the POSIX root, which has to survive: dropping it would
+  // turn an absolute hint into a relative one pointing somewhere else.
+  const base = dir === '' ? (separator === '\\' ? '' : '/') : dir + separator
+  return base + 'herdr-server.log'
+}
+
+/**
  * Sockets to try, best first. An explicit override short-circuits the list the
  * same way it does inside herdr; otherwise every config-dir spelling is tried
  * for the named session and then for the default one, because a user who ran

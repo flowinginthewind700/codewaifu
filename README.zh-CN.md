@@ -278,7 +278,7 @@ CodeWaifu 写的所有东西都在 `~/.codewaifu`(Windows:`%USERPROFILE%\.codewa
 ```bash
 npm install
 npm run dev          # electron-vite 热重载
-npm test             # vitest,1045 个测试:relay 测试台、Pro 桥接、真实 TTS
+npm test             # vitest,1105 个测试:relay 测试台、Pro 桥接、真实 TTS
 npm run test:e2e     # 需要显示器;先构建,约二十秒
 npm run typecheck
 npm run dist:mac     # 或 dist:win;产物在 release/

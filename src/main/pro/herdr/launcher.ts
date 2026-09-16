@@ -18,9 +18,8 @@
  * log file, because "we tried and it did not stay up" without a place to look
  * is the same dead end as not trying.
  */
-import { dirname, join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
-import { SESSION_ENV_VAR, SOCKET_ENV_VAR, type HerdrTarget } from './discovery'
+import { SESSION_ENV_VAR, SOCKET_ENV_VAR, logPathForSocket, type HerdrTarget } from './discovery'
 
 /** The subset of a detached child we touch. Structural so a test can fake it. */
 export interface ServerChild {
@@ -83,8 +82,7 @@ const DEFAULT_MAX_RETRY_MS = 30000
 
 /** herdr writes this next to the socket it was going to create. */
 function logHintFor(target: HerdrTarget): string {
-  const socket = target.triedSockets[0] || target.socketPath || ''
-  return socket ? join(dirname(socket), 'herdr-server.log') : ''
+  return logPathForSocket(target.triedSockets[0] || target.socketPath || '')
 }
 
 /**

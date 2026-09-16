@@ -29,6 +29,7 @@ import {
   discoverHerdr,
   fsListDir,
   fsPathExists,
+  logPathForSocket,
   normalizeSession,
   sessionDataDir,
   socketCandidates,
@@ -393,6 +394,34 @@ describeUnix('resolving a real herdr on a real disk', () => {
     expect(target.found).toBe(false)
     expect(target.socketPath).toBeNull()
     expect(target.triedSockets).toContain(path.join(home, '.config', 'herdr', 'herdr.sock'))
+  })
+})
+
+/**
+ * Pure string arithmetic, so it runs on every platform - which is the point:
+ * the hint has to describe the same file whether the app is on the machine
+ * that made the socket or not.
+ */
+describe('the server log hint, which the install card quotes to a human', () => {
+  it('sits next to the socket, in the spelling that socket arrived in', () => {
+    expect(logPathForSocket('/home/u/.config/herdr/herdr.sock')).toBe('/home/u/.config/herdr/herdr-server.log')
+    expect(logPathForSocket('C:\\Users\\u\\AppData\\Roaming\\herdr\\herdr.sock')).toBe(
+      'C:\\Users\\u\\AppData\\Roaming\\herdr\\herdr-server.log'
+    )
+    expect(logPathForSocket('\\\\host\\share\\herdr\\herdr.sock')).toBe(
+      '\\\\host\\share\\herdr\\herdr-server.log'
+    )
+  })
+
+  it('answers from the path, not from the platform it happens to run on', () => {
+    // What this pins: node:path's dirname turned '/tmp/herdr.sock' into '\tmp'
+    // on a Windows runner, so the same target described two different files and
+    // the card quoted one that does not exist.
+    expect(logPathForSocket('/tmp/herdr.sock')).toBe('/tmp/herdr-server.log')
+    expect(logPathForSocket('/herdr.sock')).toBe('/herdr-server.log')
+    expect(logPathForSocket('herdr.sock')).toBe('herdr-server.log')
+    expect(logPathForSocket('   ')).toBe('')
+    expect(logPathForSocket(undefined as unknown as string)).toBe('')
   })
 })
 

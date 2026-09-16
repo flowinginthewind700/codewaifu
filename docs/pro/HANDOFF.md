@@ -1,13 +1,14 @@
 # Pro handoff
 
-`main` @ the tray fix: the push route and `pro watch` (F9), the bundled
+`main` @ 0.4.0: the push route and `pro watch` (F9), the bundled
 terminal font, boot auto-resume, the RobotWorld palette, one app with two modes
 (the stage and the bench switch into each other), import of foreign
-codex/claude sessions into the tree, and a tray that works on Linux -
-typecheck, 1091 tests (plus the 12 Windows-only skips), `electron-vite build`
+codex/claude sessions into the tree, a tray that works on Linux, and a release
+pipeline that ships Linux and Windows from CI -
+typecheck, 1105 tests (plus the 12 Windows-only skips), `electron-vite build`
 and `npm run test:e2e` (10 cases, needs a display) all green on Linux (Ubuntu,
 node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built for but not
-yet run.
+yet run, and Windows is built by CI but not yet opened (section 6, gap 3).
 
 The spec is [MVP.md](./MVP.md) and it is still the authority: F1-F7, the
 acceptance criteria in section 6, the phases in section 7. This file is the
@@ -50,7 +51,12 @@ Both are written temp-file + fsync + rename + read-back, in `src/main/pro/env.ts
 
 herdr discovery order, in `src/main/pro/herdr/discovery.ts`: `pro.socketPath` /
 `HERDR_SOCKET_PATH`, then `pro.herdrSession` / `HERDR_SESSION`, then
-`~/.config/herdr[/sessions/<name>]/herdr.sock`, then a Windows named pipe. With no
+the platform config dir - `~/.config/herdr` on Linux, `~/Library/Application
+Support/herdr` on macOS, `%APPDATA%\herdr` on Windows, each in both app-dir
+spellings (`herdr`, `herdr-dev`) and each with and without `sessions/<name>/`.
+There is no named-pipe candidate in that list: a socket on Windows is still a
+file path, so a Windows herdr either answers on AF_UNIX or has to be named
+explicitly through `pro.socketPath`. With no
 herdr on the machine the Bench degrades to an install card rather than failing.
 Discovery never wildcards `sessions/`: an empty or whitespace `pro.herdrSession`
 falls through to `HERDR_SESSION`, while a config value that names something
@@ -116,7 +122,10 @@ a bundle, which is the only thing this gate is for.
 `npm run typecheck` runs **both** tsconfigs. `tsconfig.node.json` has
 `noUnusedLocals` and `noUnusedParameters`, so an unused import fails the build
 rather than warning. `tests/installWindows.test.ts` self-skips off Windows
-(that is the 12 skipped in the count).
+(that is the 12 skipped in the count). A Windows runner skips 26 instead: those
+12 plus the fourteen herdr cases inside `tests/proDiscovery.test.ts`'s
+`describeUnix` blocks, which bind a real AF_UNIX socket on a real disk. The
+reason is written down where `describeUnix` is declared.
 
 A `.tsx` test belongs to `tsconfig.web.json` and a `.ts` test to
 `tsconfig.node.json`, and neither project lists the other's sources. So a `.tsx`
@@ -135,7 +144,7 @@ now that both the widget and the bench import it.
 
 | Feature | Owner | Pinned by | State |
 |---------|-------|-----------|-------|
-| F1 tree rail | `renderer/src/pro/TreeRail.tsx` | `proClient`, `proSocket` | done |
+| F1 tree rail | `renderer/src/pro/TreeRail.tsx` | `proClient`, `proSocket`, `proTree` | done |
 | F2 create / adopt / park | `main/pro/bench.ts`, `NewTaskDialog.tsx` | `proCommand` | done |
 | F3 attention queue | `main/pro/triage.ts`, `AttentionQueue.tsx` | `proCommand`, `hookEvent` | done |
 | F4 pane grid | `main/pro/herdr/terminalBridge.ts`, `Pane.tsx`, `PaneGrid.tsx` | `proBridge`, `proNdjson`, `findQuery`, `termKeys`, `bridgeErrorText` | done |
@@ -475,14 +484,31 @@ without reading those first.
    menubar width), `alwaysOnTop` interplay with the Bench window, and the
    packaged binary's argv handling, which is now what `codewaifu pro` stands on.
    The Cmd/Ctrl chord table itself is pure and tested on both.
-3. **The tree projection has no test of its own.** `buildBench`, `deriveGroups`,
-   `groupKeyFor`, `groupLabelFor` and `compareTasks` in `shared/pro.ts` are the
-   grouping and ordering every surface reads through, and they are covered only
-   indirectly: `proCli.test.ts` builds its fixtures *with* `buildBench` and
-   asserts the rendered rows, so a change that moves a task between groups or
-   reorders two states arrives as a diff in somebody else's expectation. A
-   `proTree.test.ts` pinning the group key (repo root, else workdir), the label,
-   the ordering and the counts is the cheapest gap on this list.
+3. **Windows ships from CI and has never been opened there.** The release
+   workflow builds the nsis and portable artifacts and runs a packaged-binary
+   smoke (`--cli help`, `--cli status --json`), which is the only automated
+   check that a native dependency is really present and the asar layout is
+   right; past that, nothing on Windows has been seen by a human. Expect the
+   Bench to show the install card until herdr runs on that machine, and see
+   section 2 for what discovery will and will not try there. The suite itself is
+   honest about the split: the Windows conventions (`%APPDATA%`, `herdr.exe`,
+   `;`-split `PATH`) are pure path arithmetic and asserted on every platform,
+   while the fourteen cases that bind a real AF_UNIX socket skip, because a
+   Windows runner answers `EACCES` to a listener we are not allowed to bind and
+   cannot lay out a Linux-shaped `PATH` either.
+
+   The one Windows-only bug that survived the first round of test skips is
+   fixed and pinned, and it is a product bug rather than a test bug: 0.4.1
+   skipped its way to a green Linux job and still died on this one case.
+   `logHintFor` in `main/pro/herdr/launcher.ts` reached for `node:path`, so the
+   install card's log hint was computed by the *host's* rules out of a socket
+   string whose platform is the fixture's choice: on a Windows runner a POSIX
+   socket came back with a drive letter and mixed separators, and the card would
+   have quoted a file that does not exist. `logPathForSocket` in
+   `main/pro/herdr/discovery.ts` now does that arithmetic from the string
+   itself, with cases for POSIX, Windows, UNC, root, bare and empty. The general
+   rule it stands for: a path shown to a human has to mean the same file on
+   every platform, and `dirname`/`join` do not promise that.
 4. **`pro watch` does not reattach.** A stream that ends or breaks exits 3 with
    the reason on stderr, which is the right exit code and thin ergonomics for a
    terminal left open across a laptop suspend or an app restart: CodeWaifu comes
@@ -506,7 +532,9 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F9 都已实现并有单测（1045 passed / 12 skipped，skipped 是 Windows 专用）。
+- 状态：F1-F9 都已实现并有单测（Linux 上 1105 passed / 12 skipped，skipped 是 Windows 专用的
+  `installWindows`；Windows runner 上跳 26 个，多出来的 14 个是 `describeUnix` 里要真
+  AF_UNIX socket 的 herdr 用例）。
 - 面板桥接起不来时不再吐裸 errno：ENOENT 变成「装上 herdr，或把 pro.herdrPath
   指到可执行文件」，EACCES/EPERM 变成「chmod +x」，认不出的消息原文照抄；重试
   退避 1s→8s，一帧到达就把错误文案和连续计数一起清零。
@@ -631,11 +659,18 @@ without reading those first.
   `styles.css`、`pro/bench.css` 里粉/紫字面量清零（rg 可验），xterm 主题与搜索高亮用站点
   同一组语法色（注释灰/字符串琥珀/关键字紫/调用青），bench 窗口底色与 Linux 无合成器时的
   不透明底色同步换掉，首帧不闪紫。浮窗角色本身的腮红是角色设定，不动。
+- 树的投影有了自己的测试（`tests/proTree.test.ts`，26 例）：origin 分面、`groupKeyFor`，
+  以及这一轮补上的排序与分组——五行阶梯（要我拍板 > active 且在干活 > active 安静 > lost >
+  已收起）、同档比标题再比 id、**blocked 自己不上浮**（上浮的是注意力条目，不是状态）、
+  分组按 label 再按 key 字母序且**永不被紧急度带跑**、`deriveGroups` 只分桶不再排序、
+  label 取末段目录（Windows 与 UNC 路径同读）、没有路径的任务落到 `unknown` 组。
+  全部经 `buildBench` 读，所以 fixture 造不出投影造不出的 bench；每一条都用变异验过会红
+  （去掉 rank 比较、去掉分组排序、label 用整串 key、blocked 当 working、hint 少一段，
+  五次变异共红 13 例）。
 - 还没做：macOS 实机验证——darwin 侧能从这边核实的都核实了（语音运行时与 koffi 在
   registry 上按 pin 版本可解、`build/` 只有 `icon.png` 没有 `icon.icns`、并且**没有**
   macOS 自启动：`install.sh --autostart` 只写 `~/.config/autostart`，没有 LoginItems
-  这条路）；以及给树的投影（`buildBench` / `deriveGroups` / `groupKeyFor` /
-  `compareTasks`）补一个自己的 `proTree.test.ts`，现在它们只被 `proCli.test.ts` 当
-  fixture 工厂间接覆盖。
+  这条路）；Windows 则是 CI 构建 + 打包二进制冒烟过了、**没有人在 Windows 上打开过**，
+  第一次打 tag 的那次运行就是在这儿红的（第 6 节缺口 3，含那条 `node:path` 的真 bug）。
   还有一条是 `pro watch` **不重连**：流断了就是退出码 3 加原因，重开是 shell 的事，所以
   笔记本合盖再打开、或者 app 重启之后，那个终端窗口会安静地停在过去（第 6 节缺口 4）。
