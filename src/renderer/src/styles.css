@@ -219,6 +219,11 @@ a {
    row, tail flipped to point at her instead of down. */
 .stage[data-compact='1'] .bubble {
   top: 10px;
+  /* The cameo sits *beside* her, so the body anchor and its height cap do not
+     apply here: this bubble owns the rest of the row. */
+  bottom: auto;
+  max-height: none;
+  overflow-y: visible;
   left: 106px;
   right: 8px;
   max-width: none;
@@ -558,11 +563,28 @@ a {
 
 /* ---- bubble ----------------------------------------------------------- */
 
+/*
+ * Where she speaks from.
+ *
+ * The bubble is anchored to the *bottom* of the stage rather than the top, so
+ * it lands across her body and never across her face: a bubble that covers the
+ * mouth it came from hides the one thing that makes the line feel spoken.
+ * Bottom-anchored also means a long status report grows upward from a fixed
+ * edge instead of walking down over the status bar, and `max-height` keeps that
+ * growth inside the stage - `.card` clips at its own edge, so text past the
+ * stage would simply disappear. The 44px floor clears the stage-tools pill
+ * (bottom 8px, 28px tall) plus the tail, which still points down at the ground
+ * she stands on.
+ */
 .bubble {
   position: absolute;
-  top: 0;
+  top: auto;
+  bottom: 44px;
   right: 2px;
   max-width: 196px;
+  max-height: calc(100% - 52px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 7px 10px 8px;
   background: linear-gradient(180deg, rgba(30, 32, 36, 0.96), rgba(17, 18, 20, 0.96));
   border: 1px solid var(--line);
