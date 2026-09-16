@@ -99,6 +99,7 @@ import {
 } from './herdr/discovery'
 import { HerdrSession, type SessionChange, type SessionStatus } from './herdr/session'
 import type { ConnectFn } from './herdr/socket'
+import { HerdrLauncher, realServerSpawn } from './herdr/launcher'
 import {
   TerminalBridge,
   type BridgeState,
@@ -285,6 +286,19 @@ export interface ServiceIntervals {
   /** Recovery plans are memoized for this long; they cost a statSync per task. */
   recoveryTtlMs: number
   hydrateMs: number
+  /**
+   * How long to wait between "herdr is online with a snapshot" and acting on
+   * it. herdr restores its layout and resumes agents *after* the socket opens,
+   * so the first frame can describe a pane that is about to exist; relaunching
+   * what is already coming back is how you get two agents in one worktree.
+   */
+  bootResumeMs: number
+  /**
+   * Ceiling on unattended relaunches per connection. Not a guess about what a
+   * machine can take - a registry of forty stale tasks must not become forty
+   * agents - and the rest stay one click away in the recovery tab.
+   */
+  autoResumeMax: number
 }
 
 export interface ProServiceDeps {
@@ -304,6 +318,12 @@ export interface ProServiceDeps {
   /** Injected into `HerdrSession` and `HerdrClient`; a test fakes the socket. */
   connect?: ConnectFn
   spawn?: SpawnFn
+  /**
+   * Starts the headless herdr server when discovery finds a binary and no
+   * socket. Injected so a test can assert "we spawned, once, with this env"
+   * instead of leaving a daemon on the box.
+   */
+  launcher?: HerdrLauncher
   env?: () => Record<string, string | undefined>
   ensureDirs?: () => void
   registry?: RegistryLike
@@ -322,7 +342,9 @@ const DEFAULT_INTERVALS: ServiceIntervals = {
   pushMs: 32,
   announceMs: 250,
   recoveryTtlMs: 2000,
-  hydrateMs: 30000
+  hydrateMs: 30000,
+  bootResumeMs: 3000,
+  autoResumeMax: 12
 }
 
 /** Backoff while herdr is not installed: visible quickly, then quiet. */
@@ -382,6 +404,26 @@ const HOOK_FALLBACK_TEXT: Readonly<Record<string, string>> = {
 }
 
 /**
+ * What the companion says after the unattended boot recovery ran: how many
+ * interrupted tasks went back to work on their own, and how many are still
+ * waiting for a hand. Silence when nothing was attempted - a boot line about
+ * zero tasks is noise over a bench that merely came up clean.
+ */
+function autoResumeText(lang: Lang, ok: number, attempted: number, deferred: number): string {
+  const more = deferred > 0
+  if (lang === 'zh') {
+    if (!ok) return `开机自动恢复未成功（${attempted} 个任务），请在恢复计划里手动处理`
+    if (more) return `开机已自动恢复 ${ok} 个中断的任务，另有 ${deferred} 个需要在恢复计划里手动处理`
+    return `开机已自动恢复 ${ok} 个中断的任务`
+  }
+  if (!ok) return `boot auto-resume could not apply ${attempted} task(s); see Recovery`
+  if (more) {
+    return `resumed ${ok} interrupted task(s) on boot; ${deferred} more need a click in Recovery`
+  }
+  return `resumed ${ok} interrupted task(s) on boot`
+}
+
+/**
  * Why an action could not run, in both languages. Codes are stable and the
  * renderer may localize off them; these strings are for the toast and the log.
  */
@@ -410,6 +452,7 @@ export class ProService implements CompanionApi {
   private readonly listDirFn: ListDirFn
   private readonly connect: ConnectFn | undefined
   private readonly spawn: SpawnFn | undefined
+  private readonly launcher: HerdrLauncher
   private readonly env: () => Record<string, string | undefined>
   private readonly ensureDirs: () => void
   private readonly makeSession: SessionFactory
@@ -443,6 +486,10 @@ export class ProService implements CompanionApi {
   private armingAt = 0
   private recoveryAnnounced = false
   private wasOnline = false
+  /** A snapshot has been reconciled since the bridge came online. */
+  private bootSnapshot = false
+  /** One unattended recovery attempt per connection; see `autoResume`. */
+  private autoResumeDone = false
   private gitBusy = false
   private hydrating = false
   private rediscoverMs = 0
@@ -457,6 +504,7 @@ export class ProService implements CompanionApi {
   private pushTimer: ServiceTimer | null = null
   private announceTimer: ServiceTimer | null = null
   private rediscoverTimer: ServiceTimer | null = null
+  private autoResumeTimer: ServiceTimer | null = null
 
   constructor(deps: ProServiceDeps) {
     this.host = deps.host
@@ -467,6 +515,13 @@ export class ProService implements CompanionApi {
     this.discoverFn = deps.discover ?? ((input) => discoverHerdr(input))
     this.connect = deps.connect
     this.spawn = deps.spawn
+    this.launcher =
+      deps.launcher ??
+      new HerdrLauncher({
+        spawn: realServerSpawn,
+        timers: this.timers,
+        log: (level, message, meta) => this.host.log(level, message, meta)
+      })
     this.env = deps.env ?? (() => process.env as Record<string, string | undefined>)
 
     // Only touch disk when we are the ones owning it: a test that injects both
@@ -602,7 +657,8 @@ export class ProService implements CompanionApi {
       this.hydrateTimer,
       this.pushTimer,
       this.announceTimer,
-      this.rediscoverTimer
+      this.rediscoverTimer,
+      this.autoResumeTimer
     ]) {
       timer?.cancel()
     }
@@ -612,6 +668,7 @@ export class ProService implements CompanionApi {
     this.pushTimer = null
     this.announceTimer = null
     this.rediscoverTimer = null
+    this.autoResumeTimer = null
   }
 
   /* ---------------------------------------------------------------- *
@@ -670,6 +727,17 @@ export class ProService implements CompanionApi {
       // No server to talk to. Drop the session so the projection says offline
       // instead of showing a snapshot from a socket that is gone.
       this.detachSession()
+      // After a reboot this is the whole state of the world: a binary, no
+      // socket, and nothing else on the box that will start one. The loop below
+      // would otherwise keep re-announcing that fact instead of fixing it.
+      if (cfg.autoStartHerdr) {
+        this.launcher.ensure({
+          target,
+          session: cfg.herdrSession,
+          socketPath: cfg.socketPath,
+          env: this.env()
+        })
+      }
       this.rediscoverMs = this.rediscoverMs
         ? Math.min(MAX_REDISCOVER_MS, this.rediscoverMs * 2)
         : REDISCOVER_MS
@@ -678,6 +746,9 @@ export class ProService implements CompanionApi {
       return
     }
     this.rediscoverMs = 0
+    // It is up, whether we started it or a human did: the attempt history is
+    // about the outage that just ended, and the next one starts from zero.
+    this.launcher.reset()
     this.rediscoverTimer?.cancel()
     this.rediscoverTimer = null
     if (this.session && this.sessionSocket === target.socketPath) {
@@ -732,6 +803,10 @@ export class ProService implements CompanionApi {
     this.session = null
     this.sessionSocket = ''
     this.wasOnline = false
+    // A new connection earns a new unattended attempt; see armAutoResume.
+    this.bootSnapshot = false
+    this.autoResumeDone = false
+    this.cancelAutoResume()
   }
 
   private onSessionChange(change: SessionChange): void {
@@ -754,11 +829,15 @@ export class ProService implements CompanionApi {
           this.wasOnline = true
           this.git.invalidate()
           this.announceBoot()
+          this.armAutoResume()
         } else if (!online && this.wasOnline) {
           this.wasOnline = false
           // A herdr restart is exactly when "three tasks can be resumed"
           // matters, so the boot line is per-connection, not per-process.
           this.recoveryAnnounced = false
+          this.bootSnapshot = false
+          this.autoResumeDone = false
+          this.cancelAutoResume()
         }
         this.invalidate()
         return
@@ -771,6 +850,84 @@ export class ProService implements CompanionApi {
     this.recoveryAnnounced = true
     const text = this.companion.announceRecovery(this.rebuild())
     if (text) this.host.log('info', `pro: ${text}`)
+  }
+
+  /**
+   * Arm the one unattended recovery attempt this connection gets.
+   *
+   * herdr restores its own panes when it comes back and we adopt them, but a
+   * task whose pane did not survive - machine reboot, herdr upgrade, an agent
+   * that died with the old pane - stays `lost` until a human clicks Apply.
+   * "Open the app and it is already working again" needs a click without a
+   * hand: once per connection, once the bridge is online AND a snapshot has
+   * been reconciled (a status event alone proves nothing about panes), apply
+   * the actionable plans after a short settle.
+   *
+   * `actionable` is exactly "no live pane to reuse": planRecovery answers it
+   * false for `intact` (pane alive), `parked`, `done` and `offline`. That is
+   * the whole safety argument - a pane herdr restored with a live agent in
+   * it is never touched here, because herdr's agent detection reads screen
+   * content and a false negative would start a second agent in one worktree.
+   * Those tasks stay one click away in the recovery tab.
+   */
+  private armAutoResume(): void {
+    if (!this.running || this.autoResumeDone || this.autoResumeTimer) return
+    if (!this.proConfig().autoResumeOnBoot) return
+    if (!this.online() || !this.bootSnapshot) return
+    this.autoResumeTimer = this.timers.after(() => {
+      this.autoResumeTimer = null
+      void this.autoResume()
+    }, this.intervals.bootResumeMs)
+  }
+
+  private cancelAutoResume(): void {
+    this.autoResumeTimer?.cancel()
+    this.autoResumeTimer = null
+  }
+
+  private async autoResume(): Promise<void> {
+    if (this.autoResumeDone) return
+    this.autoResumeDone = true
+    if (!this.running || !this.online()) return
+    // The snapshot that armed this is seconds old by now; a pane herdr
+    // restored late would otherwise read as "no pane" and be given a second
+    // one. One refresh closes that window.
+    try {
+      const fresh = await this.session?.refresh()
+      if (fresh) this.onSnapshotArrived(fresh)
+    } catch (error) {
+      this.host.log('warn', 'pro: pre-resume refresh failed', { error: String(error) })
+    }
+    if (!this.online()) return
+    const plans = this.recoveryPlans(true).filter((plan) => plan.actionable)
+    if (!plans.length) return
+    const take = plans.slice(0, Math.max(1, this.intervals.autoResumeMax))
+    const results = await this.applyPlans(take, 'boot')
+    const ok = results.filter((result) => result.ok).length
+    const deferred = plans.length - take.length
+    const lang = this.host.lang()
+    this.companion.announceText(autoResumeText(lang, ok, take.length, deferred), lang)
+    this.host.log('info', 'pro: boot auto-resume applied', {
+      ok,
+      attempted: take.length,
+      deferred
+    })
+  }
+
+  /** Apply plans in order, recording each exactly the way a click does. */
+  private async applyPlans(
+    plans: RecoveryPlan[],
+    source: 'recovery' | 'boot'
+  ): Promise<ApplyResult[]> {
+    const results: ApplyResult[] = []
+    for (const plan of plans) {
+      const task = this.registry.get(plan.taskId)
+      if (!task) continue
+      const applied = await this.recovery.apply(plan, task)
+      this.afterApply(applied, task, source)
+      results.push(applied)
+    }
+    return results
   }
 
   /* ---------------------------------------------------------------- *
@@ -789,6 +946,10 @@ export class ProService implements CompanionApi {
     this.triage.onSnapshot(snapshot)
     this.triage.resync(new Set(this.registry.tasks().map((task) => task.id)))
     this.invalidate()
+    // A reconciled snapshot is the second half of the boot gate: it is what
+    // makes the recovery plans honest about which panes exist.
+    this.bootSnapshot = true
+    this.armAutoResume()
   }
 
   /**
@@ -1029,6 +1190,10 @@ export class ProService implements CompanionApi {
         // The install card text: what we looked for and what was missing.
         error = describeDiscovery(this.target, this.host.lang())
       }
+      // "herdr is not running" over a server we are starting right now is a card
+      // telling the human to do the thing already in flight, so say which it is.
+      const starting = this.launcher.describe(this.host.lang(), this.target)
+      if (starting) error = error ? `${error} (${starting})` : starting
     }
     return {
       online,
@@ -1704,14 +1869,7 @@ export class ProService implements CompanionApi {
       }
       case 'applyAll': {
         const plans = this.recoveryPlans(true).filter((plan) => plan.actionable)
-        const results: ApplyResult[] = []
-        for (const plan of plans) {
-          const task = this.registry.get(plan.taskId)
-          if (!task) continue
-          const applied = await this.recovery.apply(plan, task)
-          this.afterApply(applied, task)
-          results.push(applied)
-        }
+        const results = await this.applyPlans(plans, 'recovery')
         const ok = results.filter((result) => result.ok).length
         return okResult({ results, ok, total: results.length }, '', 'applied-all')
       }
@@ -1739,7 +1897,11 @@ export class ProService implements CompanionApi {
   }
 
   /** Bind the registry to whatever recovery just made, and write it down. */
-  private afterApply(result: ApplyResult, task: TaskRecord): void {
+  private afterApply(
+    result: ApplyResult,
+    task: TaskRecord,
+    source: 'recovery' | 'boot' = 'recovery'
+  ): void {
     const patch: RegistryPatch = {}
     if (result.workspaceId) patch.workspaceId = result.workspaceId
     if (result.paneId) patch.paneIds = [result.paneId]
@@ -1754,7 +1916,7 @@ export class ProService implements CompanionApi {
           text: clipText(`${step.kind} ${step.ok ? 'ok' : 'failed'}: ${step.detail}`, 400),
           paneId: result.paneId,
           workspaceId: result.workspaceId,
-          source: 'recovery'
+          source
         },
         this.timers.now()
       )

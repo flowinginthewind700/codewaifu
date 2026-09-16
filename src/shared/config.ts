@@ -127,6 +127,23 @@ export interface ProConfig {
   bench: { width: number; height: number; x: number; y: number }
   /** Open the Bench window on launch instead of waiting to be summoned. */
   openBenchOnLaunch: boolean
+  /**
+   * Start the herdr server ourselves when the binary is installed and no socket
+   * is listening. This is the reboot half of durability: herdr keeps panes
+   * alive across its own restarts, but nothing on the box starts it after one,
+   * and a bench that boots into an install card is a bench that stopped work.
+   */
+  autoStartHerdr: boolean
+  /**
+   * Once herdr is online and one snapshot has been reconciled, apply the
+   * recovery plans that need no live pane: recreate the workspace, relaunch the
+   * agent with its recorded session id, re-prompt from the ledger. One attempt
+   * per connection, and only for work with nothing running - a task whose pane
+   * herdr restored is left alone, because the only evidence we could act on is
+   * herdr's screen-based agent detection and a false negative means two agents
+   * editing one worktree.
+   */
+  autoResumeOnBoot: boolean
 }
 
 /**
@@ -151,7 +168,9 @@ export const DEFAULT_PRO: ProConfig = {
   stalledAfterMs: 300000,
   keys: {},
   bench: { width: 1180, height: 760, x: -1, y: -1 },
-  openBenchOnLaunch: false
+  openBenchOnLaunch: false,
+  autoStartHerdr: true,
+  autoResumeOnBoot: true
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -361,7 +380,9 @@ function parsePro(rawPro: Record<string, unknown>, rawBench: Record<string, unkn
       x: Math.trunc(num(rawBench.x, d.bench.x, -1, 100000)),
       y: Math.trunc(num(rawBench.y, d.bench.y, -1, 100000))
     },
-    openBenchOnLaunch: bool(rawPro.openBenchOnLaunch, d.openBenchOnLaunch)
+    openBenchOnLaunch: bool(rawPro.openBenchOnLaunch, d.openBenchOnLaunch),
+    autoStartHerdr: bool(rawPro.autoStartHerdr, d.autoStartHerdr),
+    autoResumeOnBoot: bool(rawPro.autoResumeOnBoot, d.autoResumeOnBoot)
   }
 }
 
