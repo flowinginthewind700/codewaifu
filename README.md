@@ -63,7 +63,11 @@ machine sleeping, and the app crashing.
 - **Terminals rented, not owned.** Each pane is a live
   `herdr terminal session control` connection: Unicode 11 widths, WebGL with a
   DOM fallback, OSC 8 links through a scheme allow-list, OSC 52 clipboard, and
-  find with regex and case modes. Closing the Bench kills nothing.
+  find with regex and case modes. History is herdr's, so the wheel and
+  `Shift+PageUp/Down` scroll what the pane actually ran - including what it ran
+  before the Bench attached - and a chip in the header jumps back to the live
+  edge, because a scrolled-back pane keeps showing a build that already finished.
+  Closing the Bench kills nothing.
 - **An attention queue.** Permission requests and blockers collect in one list
   with approve / deny / snooze, and the companion bubble can answer in words.
 - **A ledger and a recovery plan.** Every decision is append-only on disk, and a
@@ -77,7 +81,7 @@ machine sleeping, and the app crashing.
   exit code.
 - **Keyboard first.** `j/k` move, `Enter` opens, `i` hands the keyboard to a
   terminal, `Shift+Tab` takes it back, `a/d/s` decide, `1/2/3` switch panels,
-  `c` connects, `t` opens a shell.
+  `c` connects, `t` opens a shell, `Shift+PageUp/Down` scrolls a pane's history.
 
 Pro is Linux-first and needs herdr 0.9+ running; with no herdr the Bench shows
 an install card instead of crashing. Open it from the tray menu (the bench row

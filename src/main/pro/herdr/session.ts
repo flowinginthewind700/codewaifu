@@ -26,10 +26,12 @@
 import {
   LIFECYCLE_SUBSCRIPTIONS,
   isStateEvent,
+  isScrollEvent,
   isStatusEvent,
   isStructuralEvent,
   parseLayout,
   parsePane,
+  parseScrollChange,
   parseStatusChange,
   parseTab,
   parseWorkspace,
@@ -37,6 +39,7 @@ import {
   type HerdrEvent,
   type LayoutInfo,
   type PaneInfo,
+  type ScrollChange,
   type Snapshot,
   type StatusChange,
   type TabInfo,
@@ -406,6 +409,17 @@ export class HerdrSession {
     this.eventCount += 1
     this.lastEventAt = this.timers.now()
     const name = event.event
+    // Scroll position is patched into the cache but deliberately does *not*
+    // emit a snapshot: a wheel gesture can produce a dozen of these per second,
+    // and a snapshot each time would run the whole adopt/rebind reconcile in
+    // every bridge for a number that one pane header displays. The service
+    // reads the patched cache off the forwarded event instead.
+    if (isScrollEvent(name)) {
+      const change = parseScrollChange(event.data)
+      if (change) this.applyScroll(change)
+      this.emit({ type: 'event', event })
+      return
+    }
     let changed = false
     if (isStatusEvent(name)) {
       const change = parseStatusChange(event.data)
@@ -461,6 +475,25 @@ export class HerdrSession {
       )
     }
     return true
+  }
+
+  /** A scroll offset touches one number on one pane; nothing else observes it. */
+  private applyScroll(change: ScrollChange): void {
+    const cache = this.cache
+    if (!cache) return
+    const index = cache.panes.findIndex((pane) => pane.paneId === change.paneId)
+    if (index < 0) return
+    const pane = cache.panes[index]
+    if (
+      pane.scroll.offsetFromBottom === change.scroll.offsetFromBottom &&
+      pane.scroll.maxOffsetFromBottom === change.scroll.maxOffsetFromBottom &&
+      pane.scroll.viewportRows === change.scroll.viewportRows
+    ) {
+      return
+    }
+    const panes = cache.panes.slice()
+    panes[index] = { ...pane, scroll: change.scroll }
+    this.commit({ panes })
   }
 
   /**

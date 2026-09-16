@@ -395,6 +395,8 @@ const STRINGS = {
   },
   droppedFrames: { zh: '丢了 {n} 帧', en: '{n} frames dropped' },
   paneBell: { zh: '终端响铃', en: 'Terminal bell' },
+  paneScrollBack: { zh: '已回看 {n} 行', en: '{n} lines back' },
+  paneScrollBottom: { zh: '回到最新输出', en: 'Back to the live edge' },
   paneCopyFailed: { zh: '复制失败', en: 'Copy failed' },
   paneZoomOn: { zh: '放大此面板', en: 'Zoom this pane' },
   paneZoomOff: { zh: '退出放大', en: 'Unzoom' },

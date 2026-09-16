@@ -30,12 +30,16 @@
 import fs from 'node:fs'
 import { applyPatch, type AppConfig, type ProConfig } from '../../shared/config'
 import {
+  isScrollEvent,
   isStatusEvent,
+  parseScrollChange,
   parseStatusChange,
   type AgentInstance,
   type AgentStatus,
   type CreatedResult,
+  type PaneInfo,
   type PaneReadResult,
+  type PaneScroll,
   type Snapshot
 } from '../../shared/herdr'
 import { IPC } from '../../shared/ipcChannels'
@@ -270,6 +274,11 @@ export interface HerdrClientLike {
    * promise about the bench and becomes a fact about the machine.
    */
   closeWorkspace(workspaceId: string, closeGroup?: boolean): Promise<boolean>
+  /**
+   * Absolute scroll of one pane. `0` is the live edge; the returned pane
+   * carries herdr's own post-scroll offsets, which is what a pane header shows.
+   */
+  scrollPane(paneId: string, offsetFromBottom: number): Promise<PaneInfo | null>
 }
 
 export interface SessionLike {
@@ -883,6 +892,29 @@ export class ProService implements CompanionApi {
   private onSessionChange(change: SessionChange): void {
     switch (change.type) {
       case 'event': {
+        // A scroll offset is not triage material and not a snapshot: it changes
+        // many times a second while a wheel is moving. The session already
+        // patched its cache, so all that is left is telling the one pane header
+        // that is showing it - and only if we are bridging that pane, because
+        // an unattached pane has no scrollback view of ours to be stale about.
+        if (isScrollEvent(change.event.event)) {
+          const parsed = parseScrollChange(change.event.data)
+          if (!parsed) return
+          const bridge = this.bridges.get(parsed.paneId)
+          if (!bridge) return
+          const status = bridge.status()
+          this.host.emit(IPC.pushProBridge, {
+            paneId: parsed.paneId,
+            phase: status.phase,
+            live: status.live,
+            cols: status.cols,
+            rows: status.rows,
+            dropped: status.dropped,
+            error: status.error,
+            scroll: parsed.scroll
+          })
+          return
+        }
         if (!isStatusEvent(change.event.event)) return
         const parsed = parseStatusChange(change.event.data)
         if (!parsed) return
@@ -2392,9 +2424,21 @@ export class ProService implements CompanionApi {
       case 'scroll': {
         const bridge = this.bridges.get(request.paneId)
         if (!bridge) return this.noBridge(request.paneId)
-        return bridge.scroll(request.direction, request.lines, 'wheel')
+        return bridge.scroll(request.direction, request.lines, request.source)
           ? okResult(null, '', 'scrolled')
           : failResult('not-live', 'the terminal bridge is not live')
+      }
+      case 'scrollBottom': {
+        // Over the socket, not the bridge: the bridge's scroll is relative and
+        // `lines` is a u16, so a pane with a long history could not be told
+        // "go to the live edge" without stopping short. Absolute 0 always lands.
+        const client = this.client()
+        if (!client) return this.offline()
+        const pane = await client.scrollPane(request.paneId, 0).catch(() => null)
+        if (!pane) return failResult('scroll-failed', 'herdr would not scroll this pane')
+        // herdr's own answer is the number we show, so the chip clears on the
+        // same tick as the repaint instead of waiting for the event to come back.
+        return okResult({ paneId: request.paneId, scroll: pane.scroll }, '', 'scrolled')
       }
       case 'send': {
         const client = this.client()
@@ -2497,6 +2541,11 @@ export class ProService implements CompanionApi {
   }
 
   private onBridgeState(state: BridgeState): void {
+    // A bridge state change says nothing about scroll, so the last offset herdr
+    // reported rides along. Without it a respawn mid-scrollback would push a
+    // bridge with no `scroll` and the renderer would keep whatever it had -
+    // which, after a fresh attach, is "at the bottom" while the pane is not.
+    const scroll = this.paneScrollOf(state.paneId)
     this.host.emit(IPC.pushProBridge, {
       paneId: state.paneId,
       phase: state.phase,
@@ -2504,9 +2553,16 @@ export class ProService implements CompanionApi {
       cols: state.cols,
       rows: state.rows,
       dropped: state.dropped,
-      error: state.error
+      error: state.error,
+      ...(scroll ? { scroll } : {})
     })
     this.invalidate()
+  }
+
+  /** The scroll offsets the live session last heard for one pane. */
+  private paneScrollOf(paneId: string): PaneScroll | null {
+    const pane = this.snapshot()?.panes.find((candidate) => candidate.paneId === paneId)
+    return pane?.scroll ?? null
   }
 
   private startPump(): void {

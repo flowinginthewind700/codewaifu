@@ -195,6 +195,22 @@ export class HerdrClient {
   }
 
   /**
+   * Absolute scroll: `offset_from_bottom` 0 is the live edge. This exists
+   * because the bridge's `terminal.scroll` is relative and its `lines` is a
+   * `u16`, so "jump to the bottom" cannot be expressed as a large downward
+   * scroll - a pane with more than 65535 lines of history would stop short.
+   * The returned pane carries herdr's post-scroll offset, which is what the
+   * caller shows next.
+   */
+  async scrollPane(paneId: string, offsetFromBottom: number): Promise<PaneInfo | null> {
+    const result = await this.call('pane.scroll', {
+      pane_id: paneId,
+      offset_from_bottom: Math.max(0, Math.trunc(offsetFromBottom))
+    })
+    return parsePane(result.pane)
+  }
+
+  /**
    * Read a pane without focusing it. `detection` is the source herdr's own
    * agent detection uses, so it shows a permission prompt the way the agent
    * framed it; `visible` is what the user would see right now.

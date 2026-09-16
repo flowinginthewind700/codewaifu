@@ -31,6 +31,7 @@ import {
 import {
   okResult,
   type ImportCandidate,
+  type ProBridgePush,
   type ProCompanionPush,
   type ProSessionOpened,
   type ProSshProbe,
@@ -38,7 +39,8 @@ import {
   type ProSshSetup,
   type ProTaskRequest
 } from '../src/shared/proIpc'
-import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
+import { parseSnapshot, SCROLL_EVENT, type HerdrEvent, type Snapshot } from '../src/shared/herdr'
+import { IPC } from '../src/shared/ipcChannels'
 import type { ChatTranscript } from '../src/shared/chat'
 import type { SteerResult, ThreadInfo } from '../src/shared/protocol'
 import { FORGOTTEN_TTL_MS, TaskRegistry, type RegistryFile } from '../src/main/pro/bench'
@@ -59,6 +61,7 @@ import {
   type ServiceTimers,
   type SessionLike
 } from '../src/main/pro/service'
+import { fakeSpawner, type FakeSpawner } from './helpers/bridge'
 
 const SOCKET = '/tmp/codewaifu-proservice.sock'
 /** Deliberately absent: `dirExists` false is part of the shape being planned. */
@@ -157,6 +160,12 @@ interface FakeSession extends SessionLike {
   setOnline(online: boolean): void
   /** Push a snapshot the way a real bridge does after a reconnect. */
   pushSnapshot(snapshot: Snapshot): void
+  /**
+   * One subscription event, exactly as the socket delivered it. Scroll and
+   * agent status both arrive this way, and only one of them is allowed to
+   * leave the projection untouched.
+   */
+  pushEvent(event: HerdrEvent): void
   /** herdr client methods actually invoked, in order. Empty unless recording. */
   readonly calls: ClientCall[]
 }
@@ -214,6 +223,16 @@ function recordingClient(calls: ClientCall[], closeOk = true): HerdrClientLike {
           }
         }
         if (prop === 'startAgent' || prop === 'promptAgent') return { agentId: 'a-new' }
+        // An absolute scroll answers with the pane it moved, and the number the
+        // bench shows is herdr's own post-scroll offsets rather than the one we
+        // asked for. That is the whole reason `scrollBottom` reads the reply:
+        // assuming the request stuck is how a chip ends up lying about a pane.
+        if (prop === 'scrollPane') {
+          return {
+            paneId: String(args[0]),
+            scroll: { offsetFromBottom: 0, maxOffsetFromBottom: 412, viewportRows: 24 }
+          }
+        }
         return null
       }
     }
@@ -272,6 +291,10 @@ function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
     },
     pushSnapshot(next: Snapshot) {
       const change: SessionChange = { type: 'snapshot', snapshot: next }
+      for (const listener of [...listeners]) listener(change)
+    },
+    pushEvent(event: HerdrEvent) {
+      const change: SessionChange = { type: 'event', event }
       for (const listener of [...listeners]) listener(change)
     },
     calls
@@ -343,6 +366,8 @@ interface FakeHostOpts {
   steer?: SteerResult | null
   /** Window verbs the service asked for, in order. */
   calls?: string[]
+  /** Every main -> renderer push, as `{channel, payload}`; absent drops them. */
+  emits?: Array<{ channel: string; payload: unknown }>
 }
 
 function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
@@ -356,7 +381,9 @@ function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
   return {
     config: () => config,
     lang: () => opts.lang ?? 'en',
-    emit: () => {},
+    emit: (channel, payload) => {
+      opts.emits?.push({ channel, payload })
+    },
     bubble: () => {},
     speak: () => {},
     speaking: () => false,
@@ -558,6 +585,10 @@ interface Bench {
   announced: string[]
   /** Window verbs the service asked the app for, in order. */
   calls: string[]
+  /** Every push the service sent the window, in order. */
+  emits: Array<{ channel: string; payload: unknown }>
+  /** Terminal children the service spawned; stays empty without `terminal`. */
+  spawner: FakeSpawner
   /** Every ledger line written, so a case can ask what the task remembers. */
   ledgerTape: LedgerInput[]
   /** Every message the bench asked an agent to take, as `agent:id text`. */
@@ -652,6 +683,13 @@ interface BootOpts {
   realCompanion?: boolean
   /** The ssh roster the connect palette reads. Absent builds the real one. */
   ssh?: SshService
+  /**
+   * Spawn a fake `herdr terminal session control` child instead of the real
+   * binary. Only the cases that attach a pane want one, and the default has to
+   * stay "no spawner injected" so a case that reaches a real spawn by accident
+   * fails instead of quietly talking to a fake.
+   */
+  terminal?: boolean
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -664,6 +702,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
   const logs: string[] = []
   const announced: string[] = []
   const calls: string[] = []
+  const emits: Array<{ channel: string; payload: unknown }> = []
+  const spawner = fakeSpawner()
   const ledgerTape: LedgerInput[] = []
   const steers: string[] = []
   const registry = new TaskRegistry({
@@ -680,7 +720,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
       transcript: opts.transcript,
       steer: opts.steer,
       steers,
-      calls
+      calls,
+      emits
     }),
     timers: clock.timers,
     // Intervals an order of magnitude past any advance below: the tick, the git
@@ -707,6 +748,7 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
     // service default, which is the probe the shipped bench uses.
     ...(opts.gitRoots ? { git: fakeGit(clock, opts.gitRoots) } : {}),
     ...(opts.ssh ? { ssh: opts.ssh } : {}),
+    ...(opts.terminal ? { spawn: spawner.spawn } : {}),
     session: () => session
   })
   const planAllCalls = countPlanAll(service.recovery)
@@ -718,6 +760,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
     logs,
     announced,
     calls,
+    emits,
+    spawner,
     ledgerTape,
     steers,
     registry,
@@ -1985,3 +2029,178 @@ describe('ProService ssh', () => {
     expect(result.code).toBe('bad-machine')
   })
 })
+
+/* ------------------------------------------------------------------ *
+ * Terminal scrollback: what a scroll is allowed to touch
+ * ------------------------------------------------------------------ */
+
+/**
+ * A pane with history is read through two channels on purpose, and the split is
+ * the thing worth pinning down here rather than in either channel's own file.
+ *
+ * Wheel and page keys travel over the bridge's control stream, because that is
+ * the stream already carrying keystrokes and a relative nudge has to land in
+ * order with them. "Back to the live edge" travels over the socket instead: the
+ * control stream's `lines` is a u16, so a pane with a long history could not be
+ * told "all the way down" without stopping short, and a jump that stops short
+ * looks exactly like a jump that worked.
+ *
+ * What both share is the third leg. herdr answers with where the pane actually
+ * ended up, and only that answer is allowed to move the header chip. A scroll is
+ * also the one arrival that must not look like a snapshot: it lands many times a
+ * second while a wheel is moving, so it patches the cached pane, tells the one
+ * header showing it, and rebuilds nothing.
+ */
+describe('ProService terminal scrollback', () => {
+  /** One live pane, bridged the way the centre column bridges it. */
+  async function bridged(): Promise<Bench> {
+    const bench = await boot({
+      tasks: [liveTask()],
+      snapshot: liveSnapshot(),
+      record: true,
+      terminal: true
+    })
+    const result = await bench.service.paneOp({
+      op: 'attach',
+      paneId: LIVE_PANE,
+      cols: 80,
+      rows: 24,
+      takeover: false
+    })
+    expect(result.ok, 'every case below needs a bridge to talk about').toBe(true)
+    return bench
+  }
+
+  /** herdr reporting that the pane moved, as the subscription delivers it. */
+  function scrolled(offsetFromBottom: number, paneId = LIVE_PANE): HerdrEvent {
+    return {
+      event: SCROLL_EVENT,
+      data: {
+        pane_id: paneId,
+        workspace_id: LIVE_WORKSPACE,
+        scroll: {
+          offset_from_bottom: offsetFromBottom,
+          max_offset_from_bottom: 412,
+          viewport_rows: 24
+        }
+      }
+    }
+  }
+
+  /** The bridge pushes the service sent the window, newest last. */
+  function pushes(bench: Bench): ProBridgePush[] {
+    return bench.emits
+      .filter((emit) => emit.channel === IPC.pushProBridge)
+      .map((emit) => emit.payload as ProBridgePush)
+  }
+
+  it('hands the bridged pane herdr own offsets, and nothing else', async () => {
+    const bench = await bridged()
+    const before = pushes(bench).length
+
+    bench.session.pushEvent(scrolled(12))
+
+    const sent = pushes(bench).slice(before)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.paneId).toBe(LIVE_PANE)
+    // herdr's numbers, not the ones we asked for: the chip says where the pane
+    // is, and only the pane's own server knows that.
+    expect(sent[0]?.scroll).toEqual({
+      offsetFromBottom: 12,
+      maxOffsetFromBottom: 412,
+      viewportRows: 24
+    })
+  })
+
+  it('says nothing about a pane nobody is looking at', async () => {
+    // Not bridged, so there is no header to be stale - and a push for it would
+    // be a frame the renderer has to reason about for a view it never opened.
+    const bench = await boot({ tasks: [liveTask()], snapshot: liveSnapshot(), record: true })
+
+    bench.session.pushEvent(scrolled(30))
+
+    expect(pushes(bench)).toHaveLength(0)
+  })
+
+  it('is not a snapshot: sixty wheel notches must not rebuild the bench', async () => {
+    const bench = await bridged()
+    const frames: unknown[] = []
+    bench.service.onChange((view) => frames.push(view))
+    bench.clock.advance(PUSH_MS * 4)
+    // Then past the recovery memo's window. A rebuild inside that window is
+    // invisible - the memo answers from cache either way - so the clock moves
+    // first and a wasted re-plan becomes something a case can assert on. The
+    // tick, the git sweep and the hydrate are all an order of magnitude further
+    // out, so nothing else moves with it.
+    bench.clock.advance(RECOVERY_TTL_MS)
+    const settled = frames.length
+    const plans = bench.planAllCalls()
+    const before = pushes(bench).length
+
+    for (let offset = 1; offset <= 60; offset += 1) bench.session.pushEvent(scrolled(offset))
+    bench.clock.advance(PUSH_MS * 4)
+
+    // The header hears every one of them - that is what the per-pane push buys -
+    // while the projection the whole window renders does not move at all.
+    const sent = pushes(bench).slice(before)
+    expect(sent).toHaveLength(60)
+    expect(sent[59]?.scroll?.offsetFromBottom).toBe(60)
+    expect(frames, 'a scroll rebuilt the projection').toHaveLength(settled)
+    expect(bench.planAllCalls(), 'a scroll re-planned recovery').toBe(plans)
+  })
+
+  it('jumps to the live edge over the socket, because the control stream cannot count that high', async () => {
+    const bench = await bridged()
+
+    const result = await bench.service.paneOp({ op: 'scrollBottom', paneId: LIVE_PANE })
+
+    expect(result.ok).toBe(true)
+    expect(bench.session.calls.find((call) => call.method === 'scrollPane')?.args).toEqual([
+      LIVE_PANE,
+      0
+    ])
+    // herdr's answer rides back, so the chip clears on the same tick as the
+    // repaint instead of waiting for the subscription to come around.
+    const data = result.data as { paneId: string; scroll: { offsetFromBottom: number } }
+    expect(data.paneId).toBe(LIVE_PANE)
+    expect(data.scroll.offsetFromBottom).toBe(0)
+    // The relative channel stays quiet. A u16 nudge is the wrong verb for "all
+    // the way down", which is the entire reason this op exists.
+    expect(scrollCommands(bench)).toHaveLength(0)
+  })
+
+  it('keeps a page key a page key, because herdr treats the two gestures differently', async () => {
+    const bench = await bridged()
+
+    await bench.service.paneOp({
+      op: 'scroll',
+      paneId: LIVE_PANE,
+      direction: 'up',
+      lines: 3,
+      source: 'wheel'
+    })
+    await bench.service.paneOp({
+      op: 'scroll',
+      paneId: LIVE_PANE,
+      direction: 'down',
+      lines: 24,
+      source: 'page_key'
+    })
+
+    // Read off the child's stdin rather than off the bridge: the wire spelling
+    // is what herdr parses, and a `source` dropped on the way out is invisible
+    // to every layer above it.
+    expect(scrollCommands(bench)).toEqual([
+      { type: 'terminal.scroll', direction: 'up', lines: 3, source: 'wheel' },
+      { type: 'terminal.scroll', direction: 'down', lines: 24, source: 'page_key' }
+    ])
+  })
+})
+
+/** What the bridged child was actually told to scroll, in order. */
+function scrollCommands(bench: Bench): Array<Record<string, unknown>> {
+  return bench.spawner
+    .child()
+    .commands()
+    .filter((command) => command.type === 'terminal.scroll')
+}

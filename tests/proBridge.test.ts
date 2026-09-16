@@ -15,7 +15,7 @@ import {
   type BridgeOptions,
   type BridgeState
 } from '../src/main/pro/herdr/terminalBridge'
-import { ansiBytes } from '../src/shared/herdr'
+import { ansiBytes, TERMINAL_SCROLL_LINES_MAX } from '../src/shared/herdr'
 import { FakeChild, fakeClock, fakeSpawner } from './helpers/bridge'
 
 const BINARY = '/usr/local/bin/herdr'
@@ -588,6 +588,20 @@ describe('commands on the way back to herdr', () => {
     // bridge validates strictly and would drop the command entirely.
     expect(child.commands()).toEqual([
       { type: 'terminal.scroll', direction: 'down', lines: 2, source: 'wheel' }
+    ])
+  })
+
+  it('clamps to the u16 herdr deserializes instead of being silently dropped', () => {
+    const { bridge, child } = harness()
+    bridge.scroll('up', TERMINAL_SCROLL_LINES_MAX + 5000)
+    bridge.scroll('down', Number.MAX_SAFE_INTEGER)
+    // Measured against herdr 0.9.0: `lines` is a u16 and an over-ceiling value
+    // is not clamped by the child but rejected on stderr, so the pane does not
+    // move at all. Saturating here is the difference between a jump that stops
+    // short and a gesture that looks like a dead terminal.
+    expect(child.commands()).toEqual([
+      { type: 'terminal.scroll', direction: 'up', lines: TERMINAL_SCROLL_LINES_MAX, source: 'wheel' },
+      { type: 'terminal.scroll', direction: 'down', lines: TERMINAL_SCROLL_LINES_MAX, source: 'wheel' }
     ])
   })
 

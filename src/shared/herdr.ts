@@ -515,6 +515,11 @@ export function isStateEvent(name: string): boolean {
  * That is why the live session keeps two connections open: a stable lifecycle
  * one and a status one that is re-subscribed on pane-set changes.
  *
+ * Scroll position rides the same per-pane connection for the same reason: it is
+ * stateful, it is not on the lifecycle stream, and the pane header that says
+ * "you are 130 lines back" is only honest if it hears about a scroll somebody
+ * else started - in herdr's own TUI, say - rather than about our own requests.
+ *
  * A subscription carrying a `pane_id` for an event that takes none is rejected
  * outright (`invalid_request`), so the two sets are never mixed.
  */
@@ -527,6 +532,7 @@ export function statusSubscriptions(
     if (!paneId || seen.has(paneId)) continue
     seen.add(paneId)
     out.push({ type: 'pane.agent_status_changed', pane_id: paneId })
+    out.push({ type: SCROLL_EVENT, pane_id: paneId })
   }
   return out
 }
@@ -535,6 +541,13 @@ export const STATUS_EVENT = 'pane.agent_status_changed'
 
 export function isStatusEvent(name: string): boolean {
   return name === STATUS_EVENT || name === 'pane_agent_status_changed'
+}
+
+export const SCROLL_EVENT = 'pane.scroll_changed'
+
+/** Both spellings, per the file header: lifecycle is snake_case, stateful is dotted. */
+export function isScrollEvent(name: string): boolean {
+  return name === SCROLL_EVENT || name === 'pane_scroll_changed'
 }
 
 /* ------------------------------------------------------------------ *
@@ -641,6 +654,24 @@ export function parseStatusChange(data: unknown): StatusChange | null {
   }
 }
 
+export interface ScrollChange {
+  paneId: string
+  workspaceId: string
+  scroll: PaneScroll
+}
+
+/**
+ * A `pane.scroll_changed` payload. herdr puts the whole `PaneScrollInfo` on the
+ * event, so a pane header never has to ask twice: the number it shows and the
+ * number herdr has are the same number.
+ */
+export function parseScrollChange(data: unknown): ScrollChange | null {
+  const raw = obj(data)
+  const paneId = str(raw.pane_id)
+  if (!paneId) return null
+  return { paneId, workspaceId: str(raw.workspace_id), scroll: scrollOf(raw.scroll) }
+}
+
 /* ------------------------------------------------------------------ *
  * Terminal bridge (`herdr terminal session control <target>`)
  * ------------------------------------------------------------------ */
@@ -707,6 +738,18 @@ export type TerminalCommand =
   | { type: 'terminal.release' }
 
 /**
+ * The ceiling on a relative scroll, and it is herdr's, not ours: `lines` is a
+ * `u16` on the control stream, and a larger value is not clamped but dropped -
+ * the child prints "invalid value: integer 1000000, expected u16" on stderr and
+ * the pane simply does not move. Measured against herdr 0.9.0.
+ *
+ * "Jump to the bottom" therefore cannot be a very large relative scroll: a pane
+ * with more history than this would stop short and look pinned when it is not.
+ * That jump goes over the socket as an absolute `pane.scroll` instead.
+ */
+export const TERMINAL_SCROLL_LINES_MAX = 65535
+
+/**
  * Serialize one bridge command. The bridge is strict about mutually exclusive
  * fields (`terminal.input` accepts text *or* bytes, not both) and rejects
  * non-positive sizes, so the encoder clamps instead of letting a zero-height
@@ -730,7 +773,10 @@ export function encodeTerminalCommand(command: TerminalCommand): string {
       return JSON.stringify({
         type: 'terminal.scroll',
         direction: command.direction === 'up' ? 'up' : 'down',
-        lines: Math.max(1, Math.trunc(command.lines)),
+        // Clamped, not passed through: over the u16 ceiling herdr drops the
+        // command silently, and a wheel gesture that quietly does nothing is
+        // indistinguishable from a dead pane.
+        lines: Math.min(TERMINAL_SCROLL_LINES_MAX, Math.max(1, Math.trunc(command.lines))),
         source: command.source === 'page_key' ? 'page_key' : 'wheel'
       })
     case 'terminal.release':

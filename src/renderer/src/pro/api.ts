@@ -35,6 +35,7 @@ import type {
   ImportCandidate
 } from '@shared/proIpc'
 import type { SshMachine } from '@shared/ssh'
+import type { PaneScroll } from '@shared/herdr'
 import type { Lang, RedactedConfig, RuntimeState, SteerResult, UiSnapshot } from '@shared/protocol'
 
 const bridge = window.codewaifu
@@ -204,6 +205,23 @@ export const proApi = {
       call(CH.proPane, { op: 'input', paneId, text }),
     resize: (paneId: string, cols: number, rows: number): Promise<ProResult> =>
       call(CH.proPane, { op: 'resize', paneId, cols, rows }),
+    /**
+     * Relative scroll, the way herdr's own TUI scrolls: the pane moves and
+     * herdr repaints the viewport back over the bridge. `source` only affects
+     * herdr's own logging, so a wheel and a page key are told apart there.
+     */
+    scroll: (
+      paneId: string,
+      direction: 'up' | 'down',
+      lines: number,
+      source: 'wheel' | 'page_key' = 'wheel'
+    ): Promise<ProResult> => call(CH.proPane, { op: 'scroll', paneId, direction, lines, source }),
+    /**
+     * Jump to the live edge. Answered with herdr's own post-scroll offsets so
+     * the "n lines back" chip clears on the same tick as the repaint.
+     */
+    scrollBottom: (paneId: string): Promise<ProResult<{ paneId: string; scroll?: PaneScroll }>> =>
+      call<{ paneId: string; scroll?: PaneScroll }>(CH.proPane, { op: 'scrollBottom', paneId }),
     focus: (paneId: string): Promise<ProResult> => call(CH.proPane, { op: 'focus', paneId }),
     zoom: (paneId: string, mode: 'toggle' | 'on' | 'off' = 'toggle'): Promise<ProResult> =>
       call(CH.proPane, { op: 'zoom', paneId, mode }),

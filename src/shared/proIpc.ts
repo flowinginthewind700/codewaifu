@@ -28,6 +28,7 @@ import {
   type TaskStatus
 } from './pro'
 import type { BenchCommand } from './companionLink'
+import { TERMINAL_SCROLL_LINES_MAX, type PaneScroll } from './herdr'
 import {
   clampPort,
   makeMachine,
@@ -524,7 +525,14 @@ export type ProPaneRequest =
   | { op: 'detach'; paneId: string }
   | { op: 'input'; paneId: string; text: string }
   | { op: 'resize'; paneId: string; cols: number; rows: number }
-  | { op: 'scroll'; paneId: string; direction: 'up' | 'down'; lines: number }
+  | {
+      op: 'scroll'
+      paneId: string
+      direction: 'up' | 'down'
+      lines: number
+      source: 'wheel' | 'page_key'
+    }
+  | { op: 'scrollBottom'; paneId: string }
   | { op: 'send'; paneId: string; text: string; enter: boolean }
   | { op: 'keys'; paneId: string; keys: string[] }
   | { op: 'focus'; paneId: string }
@@ -539,6 +547,9 @@ const PANE_OPS: readonly string[] = [
   'input',
   'resize',
   'scroll',
+  // Lower-cased on the wire like every other op; `parseProPane` returns the
+  // camelCase spelling callers switch on. Same dance as `applyall` above.
+  'scrollbottom',
   'send',
   'keys',
   'focus',
@@ -564,8 +575,15 @@ export function parseProPane(payload: unknown): ProPaneParse {
         op,
         paneId,
         direction: raw.direction === 'up' ? 'up' : 'down',
-        lines: int(raw.lines, 3, 1, 200)
+        // 200 was a guess from before this was measured: herdr's `lines` is a
+        // u16, so the real ceiling is its own. A page key on a tall pane and a
+        // trackpad flick both want more than 200, and clamping here would make
+        // the pane crawl while the gesture said "go".
+        lines: int(raw.lines, 3, 1, TERMINAL_SCROLL_LINES_MAX),
+        source: raw.source === 'page_key' ? 'page_key' : 'wheel'
       }
+    case 'scrollbottom':
+      return { op: 'scrollBottom', paneId }
     case 'send':
       return { op, paneId, text: str(raw.text, 8000), enter: bool(raw.enter, true) }
     case 'keys':
@@ -915,6 +933,13 @@ export interface ProBridgePush {
   /** Frames herdr sent that we dropped because the renderer fell behind. */
   dropped: number
   error: string
+  /**
+   * Where the pane is scrolled, when herdr told us. Absent means "unchanged
+   * since the last push", not "at the bottom": a bridge push happens on every
+   * phase flip and resize too, and re-sending a stale 0 would clear an honest
+   * "you are 400 lines back" chip.
+   */
+  scroll?: PaneScroll
 }
 
 /**

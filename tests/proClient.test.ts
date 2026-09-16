@@ -188,6 +188,34 @@ describe('HerdrClient reads and keystrokes', () => {
     const wrong = client({ type: 'ok' })
     expect(await wrong.herdr.zoomPane('wA:p1')).toBe(false)
   })
+
+  it('scrolls a pane absolutely, which is the only way to say "the live edge"', async () => {
+    const { herdr, server } = client({
+      type: 'pane_info',
+      pane: {
+        pane_id: 'wA:p1',
+        workspace_id: 'wA',
+        scroll: { offset_from_bottom: 0, max_offset_from_bottom: 1296, viewport_rows: 24 }
+      }
+    })
+    const pane = await herdr.scrollPane('wA:p1', 0)
+    expect(server.socket().method()).toBe('pane.scroll')
+    expect(server.socket().params()).toEqual({ pane_id: 'wA:p1', offset_from_bottom: 0 })
+    // herdr's own answer, so the pane header shows the offset herdr has rather
+    // than the one we hoped for.
+    expect(pane?.scroll).toEqual({ offsetFromBottom: 0, maxOffsetFromBottom: 1296, viewportRows: 24 })
+  })
+
+  it('never sends a negative or fractional offset to pane.scroll', async () => {
+    const { herdr, server } = client({ type: 'pane_info', pane: { pane_id: 'wA:p1' } })
+    await herdr.scrollPane('wA:p1', -40.7)
+    expect(server.socket().params()).toEqual({ pane_id: 'wA:p1', offset_from_bottom: 0 })
+  })
+
+  it('answers null when pane.scroll names no pane, so the caller can say it failed', async () => {
+    const { herdr } = client({ type: 'ok' })
+    expect(await herdr.scrollPane('wA:p1', 0)).toBeNull()
+  })
 })
 
 describe('HerdrClient agents', () => {

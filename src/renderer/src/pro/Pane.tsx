@@ -28,6 +28,7 @@ import {
   ChevronDown,
   ChevronUp,
   Crosshair,
+  ArrowDownToLine,
   Maximize2,
   Minimize2,
   Plug,
@@ -38,8 +39,10 @@ import {
 } from 'lucide-react'
 import { planFind, type FindFault } from '@shared/findQuery'
 import type { PaneView } from '@shared/pro'
+import type { PaneScroll } from '@shared/herdr'
 import type { ProBridgePush, ProFramePush } from '@shared/proIpc'
 import { clipboardAction, searchAction } from '@shared/termKeys'
+import { flushLines, pageScroll, wheelLines, wheelRequest } from '@shared/termScroll'
 import { agentClass } from './agentTag'
 import { platform, proApi } from './api'
 import { bridgeErrorText, fill, type Translate } from './i18n'
@@ -88,6 +91,23 @@ function b64ToBytes(b64: string): Uint8Array {
 
 /** How long the bell lights the pane header before it stops claiming attention. */
 const BELL_MS = 2500
+
+/**
+ * How long a wheel gesture is allowed to accumulate before it becomes one
+ * scroll request. Roughly one display frame: short enough that scrolling feels
+ * immediate, long enough that a trackpad's sixty events a second collapse into
+ * a handful of requests instead of sixty repaints.
+ */
+const SCROLL_COALESCE_MS = 16
+
+/**
+ * How long the wheel has to stay still before the next movement counts as a new
+ * gesture. A gesture's first flush is allowed to borrow a line so the pane
+ * answers immediately, and that allowance is per gesture rather than per attach:
+ * without a gap, one flick would spend it and every later gentle flick would
+ * have to accumulate a whole line before anything moved at all.
+ */
+const SCROLL_GESTURE_GAP_MS = 200
 
 /**
  * Match colours for the search addon.
@@ -204,6 +224,21 @@ export function Pane({
   const [phase, setPhase] = useState<ProBridgePush['phase']>(bridgeOf(pane.paneId)?.phase ?? 'idle')
   const [dropped, setDropped] = useState(0)
   const [error, setError] = useState('')
+  /**
+   * How far back herdr is showing this pane. Local state, not a prop: the pane
+   * is the only thing that reads it, and the value changes many times a second
+   * while a wheel moves, which is exactly the traffic the frame path at the top
+   * of this file promises to keep out of the React tree.
+   */
+  const [scroll, setScroll] = useState<PaneScroll | null>(bridgeOf(pane.paneId)?.scroll ?? null)
+  /**
+   * The same offset for the wheel handler, which is installed once per attach
+   * and would otherwise close over the value from that render. Without this the
+   * "already at the bottom, do not ask herdr for nothing" check goes stale
+   * after the first scroll and starts dropping the wrong gestures.
+   */
+  const scrollRef = useRef<PaneScroll | null>(scroll)
+  scrollRef.current = scroll
   /** Transient: the agent rang the bell and the header should say so. */
   const [bell, setBell] = useState(false)
   /** True when the human released this pane on purpose; no auto re-attach. */
@@ -457,6 +492,10 @@ export function Pane({
         setPhase(push.phase)
         setDropped(push.dropped)
         setError(push.error)
+        // Absent means "herdr did not say", not "back at the bottom": bridge
+        // pushes also carry phase flips and resizes, and clearing the offset on
+        // those would drop the chip while the pane is still scrolled back.
+        if (push.scroll) setScroll(push.scroll)
         // herdr may have resized the PTY under us while we were away.
         if (push.phase === 'live' && push.cols && push.rows) measure()
       },
@@ -499,6 +538,15 @@ export function Pane({
         openSearch()
         return false
       }
+      // Checked before the clipboard table for the same reason: Shift+PageUp is
+      // not a clipboard chord anywhere, but it *is* how every terminal user
+      // reaches history, and plain PageUp/PageDown stay with the pane because a
+      // pager or a TUI is listening for them.
+      const page = pageScroll(event, term.rows || 24)
+      if (page) {
+        sendScroll(page.direction, page.lines, page.source)
+        return false
+      }
       const action = clipboardAction(platform, event, term.hasSelection())
       if (action === 'ignore') return true
       if (action === 'copy') {
@@ -508,6 +556,64 @@ export function Pane({
         return false
       }
       void pasteInto(term)
+      return false
+    })
+
+    /**
+     * One scroll request, coalescing what a gesture produced.
+     *
+     * herdr answers a scroll with a repaint of the whole viewport, so every
+     * request costs a frame of ANSI. A trackpad emits a wheel event per pixel
+     * row - dozens per second - and forwarding each one would put more repaints
+     * on the wire than the pane can consume and drop frames at the bridge. So
+     * lines accumulate here and leave on a short timer: one request per frame of
+     * human gesture, in order, with the remainder kept for the next batch.
+     */
+    let pending = 0
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null
+    /**
+     * True until the gesture has produced one request. The first flush of a
+     * flick is allowed to borrow a line so the pane answers immediately instead
+     * of waiting to accumulate a whole one; see `flushLines`.
+     */
+    let gestureStarted = false
+    let gestureAt = 0
+    const sendScroll = (direction: 'up' | 'down', lines: number, source: 'wheel' | 'page_key'): void => {
+      if (!lines) return
+      void proApi.pane.scroll(paneId, direction, lines, source)
+    }
+    const flushScroll = (): void => {
+      scrollTimer = null
+      const { lines, rest } = flushLines(pending, !gestureStarted)
+      pending = rest
+      if (!lines) return
+      gestureStarted = true
+      sendScroll(lines > 0 ? 'down' : 'up', Math.abs(lines), 'wheel')
+    }
+    const queueScroll = (delta: number): void => {
+      pending += delta
+      if (scrollTimer) return
+      scrollTimer = setTimeout(flushScroll, SCROLL_COALESCE_MS)
+    }
+
+    // The wheel is ours, entirely. xterm's viewport only holds bytes that
+    // arrived since this pane attached, so letting it scroll would move through
+    // a nearly empty buffer while the history the user is after sits in herdr -
+    // which is what made scrollback look broken rather than merely short.
+    // Returning false is xterm's "consumed"; true would hand the event back and
+    // scroll the local buffer too, so one flick moves two viewports.
+    term.attachCustomWheelEventHandler((event) => {
+      // Shift+wheel is a horizontal scroll in every other app and is not ours
+      // to invent a meaning for; leave it to xterm.
+      if (event.shiftKey) return true
+      const lines = wheelLines(event, term.rows || 24)
+      if (!lines) return true
+      // Already at the live edge and scrolling further down: nothing to ask for.
+      if (!wheelRequest(lines, scrollRef.current)) return true
+      const now = Date.now()
+      if (now - gestureAt > SCROLL_GESTURE_GAP_MS) gestureStarted = false
+      gestureAt = now
+      queueScroll(lines)
       return false
     })
 
@@ -529,6 +635,7 @@ export function Pane({
     return () => {
       if (timer) clearTimeout(timer)
       if (bellTimer) clearTimeout(bellTimer)
+      if (scrollTimer) clearTimeout(scrollTimer)
       // A scan armed a moment before unmount would fire against a terminal that
       // is already disposed, and its match decorations go with it.
       if (searchTimer.current) clearTimeout(searchTimer.current)
@@ -558,6 +665,30 @@ export function Pane({
   const label = pane.title || pane.cwd || pane.paneId
   const live = phase === 'live'
   const agent = pane.displayAgent || pane.agent || 'sh'
+  /**
+   * How far back the pane is, for the header chip. `0` - pinned to the live
+   * edge - hides the chip entirely, because a control that says "you are where
+   * you already are" is noise in a header that is already the narrowest thing on
+   * screen.
+   */
+  const scrolledBack = Math.max(0, scroll?.offsetFromBottom ?? 0)
+
+  /**
+   * Back to the live edge, over the socket rather than the bridge: the bridge's
+   * scroll is relative and herdr's `lines` is a `u16`, so a pane with more
+   * history than that would stop short and look pinned when it is not.
+   *
+   * This is not a convenience. A scrolled-back pane is *frozen*: herdr keeps
+   * repainting the old viewport while the agent writes underneath it, so without
+   * a visible way back the user reads a finished build that finished ten minutes
+   * ago and has no idea the pane moved on.
+   */
+  const jumpToBottom = useCallback(() => {
+    void proApi.pane.scrollBottom(paneId).then((result) => {
+      if (result.data?.scroll) setScroll(result.data.scroll)
+      else if (!result.ok) onNotify(result.detail || t('phaseError'), 'error')
+    })
+  }, [paneId, onNotify, t])
   /**
    * The counter doubles as the bar's error line. It is the only text the find
    * bar owns, so a refused pattern has nowhere else to go - and a toast would
@@ -592,6 +723,18 @@ export function Pane({
           <span className="pane-bell" title={t('paneBell')} aria-label={t('paneBell')}>
             <Bell size={12} />
           </span>
+        )}
+        {scrolledBack > 0 && (
+          <button
+            type="button"
+            className="pane-scroll-chip"
+            title={t('paneScrollBottom')}
+            aria-label={t('paneScrollBottom')}
+            onClick={jumpToBottom}
+          >
+            <ArrowDownToLine size={11} />
+            <span>{fill(t, 'paneScrollBack', { n: scrolledBack })}</span>
+          </button>
         )}
         <span className="pane-flag" data-live={live} data-phase={phase} title={errorText || undefined}>
           {dropped > 0 && <span>{fill(t, 'droppedFrames', { n: dropped })}</span>}

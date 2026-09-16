@@ -1274,6 +1274,34 @@ textarea {
   }
 }
 
+/* "You are 400 lines back, click to return." Mounted only while the pane is
+   scrolled off the live edge, in the same transient slot the bell uses, so a
+   pinned pane pays nothing for it. A button rather than a badge on purpose: a
+   scrolled-back pane is frozen while the agent keeps writing underneath it, and
+   the way out of that state must not depend on a shortcut nobody remembers. */
+.pane-scroll-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  height: 14px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  animation: pane-bell-in 160ms ease-out;
+}
+
+.pane-scroll-chip:hover {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
 .pane-flag[data-live='true'] {
   color: var(--ok);
 }
@@ -1287,8 +1315,10 @@ textarea {
   color: var(--warn);
 }
 
-/* Absolutely positioned so xterm's own viewport owns the scroll and the flex
-   parent never has to know the terminal's pixel height. */
+/* Absolutely positioned so the flex parent never has to know the terminal's
+   pixel height. Scrolling is not xterm's: herdr keeps this pane's scrollback
+   and repaints the viewport it is showing, so a wheel here becomes a request
+   (see `@shared/termScroll`) and xterm's own viewport is switched off. */
 .pane-body {
   position: relative;
   flex: 1 1 auto;

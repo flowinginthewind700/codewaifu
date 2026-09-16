@@ -177,6 +177,17 @@ xterm keeps three 32-bit words per cell in a circular buffer, and only the
 selected task's panes are mounted at all. The keyboard reaches a terminal on `i`
 and comes back on Shift+Tab; the bench never hands it over unasked.
 
+The 10 000 rows above are xterm's *local* buffer, and it is worth being precise
+about what that means: it holds the bytes that arrived since this pane attached,
+which makes it the corpus the find bar searches and not the pane's history. The
+history lives in herdr's terminal, so reaching it is a message rather than a
+property of a buffer. The wheel and `Shift+PageUp/Down` leave as a relative
+`terminal.scroll` over the bridge's control stream, herdr answers by repainting
+the viewport it is now showing, and the pane header grows a chip the moment the
+offset leaves zero. Plain `PageUp`/`PageDown` stay with the pane, because a
+`less` session and every TUI pager is listening for them; Shift is the chord
+that says "the terminal, not the program".
+
 What the pane deliberately does not carry is written down with its reasons in
 `thirdparty/README.md` under "Read and refused": no OSC 133 prompt marks (herdr
 owns PTY spawn, so "jump to the last prompt" is not ours to build), no kitty
@@ -434,6 +445,41 @@ without reading those first.
   empty, and with WebGL active its DOM rows are empty too (two canvases carry
   the pixels) - neither is a bug. Proven live by typing `echo ...` into the pane
   with trusted CDP key events and watching the find bar count the matches.
+
+  Not replaying is not the same as not having it. Measured against herdr 0.9.0
+  with 300 lines printed into a pane nobody was attached to: the control stream
+  paints the live screen on attach (rows 278..300 and nothing older), one
+  relative `terminal.scroll up 200` then repaints around row 101, and
+  `pane.scroll` reports `max_offset_from_bottom: 1083` for the same pane. The
+  backlog is on the server the whole time, which is why the wheel is answered by
+  a request instead of by xterm's buffer (section 4).
+- **A scroll goes out on two channels, and only one of them can count high.**
+  Wheel and page keys travel over the bridge's control stream, in order with the
+  keystrokes already on it. "Back to the live edge" cannot: `terminal.scroll`'s
+  `lines` is a `u16`, and herdr does not clamp a larger value but drops the
+  command outright - the child prints `invalid value: integer 1000000, expected
+  u16` on stderr and the pane simply does not move. So the jump goes over the
+  socket as an absolute `pane.scroll {offset_from_bottom: 0}`, which
+  always lands however long the history is, and `shared/herdr.ts` clamps the
+  relative path at `TERMINAL_SCROLL_LINES_MAX` for the gestures that stay on it.
+  A jump that stops short is worse than no jump: the pane looks pinned while the
+  agent keeps writing underneath it.
+- **A scroll is not a snapshot.** The offset changes many times a second while a
+  wheel moves, so `pane.scroll_changed` patches the session's cached pane and
+  pushes one per-pane `cw-pro:bridge` message to the header that is showing it -
+  for a pane that is bridged, and only that one. It never reaches `invalidate`,
+  which is the difference between a chip that tracks the wheel and a whole bench
+  re-projected sixty times a second. Pinned by `tests/proService.test.ts`, where
+  the case that asserts it first advances past the recovery memo's 2s window: a
+  rebuild inside that window is invisible, so the naive version of the test
+  passes against the regression it exists to catch.
+- **herdr's answer is the number shown, never the number asked for.** The chip
+  reads the offsets out of the event and out of `pane.scroll`'s reply, so a
+  refused or short scroll cannot leave the header claiming a position the pane is
+  not in. The same reply rides along on a bridge state change
+  (`service.ts::paneScrollOf`), because a respawn mid-scrollback would otherwise
+  push a bridge with no `scroll` at all and the renderer would keep showing
+  "at the bottom" over a pane that is 400 rows back.
 - **Terminal output is untrusted.** It is the only string in the app we do not
   author, so links leave through the `openExternal` host op behind an
   http/https/mailto allow-list that runs in main.
@@ -586,6 +632,20 @@ without reading those first.
   OSC 8 超链接改走主进程白名单（不再弹 xterm 自带的 confirm）、scrollback 4000 ->
   10000 行（只挂载选中任务的 pane，所以这是上限不是增长速率）、`i` 把键盘交给终端、
   Shift+Tab 交回来。早先还修掉一个真 bug：resync 之后桥接进程以每秒 4 次无限重启。
+- 面板能往回翻了，而且翻的是 herdr 那侧的真历史：xterm 本地那 10000 行只装得上
+  **挂上来之后**到达的字节，它是搜索的语料，不是这个面板的过去。滚轮与
+  `Shift+PageUp/Down` 走桥接控制流发相对 `terminal.scroll`，herdr 用它当前该显示的
+  那一屏重画回来；offset 一离开 0，面板头就长出一个 chip，点它走 socket 的绝对
+  `pane.scroll {offset_from_bottom: 0}` 回到实时末端——**不能**用「相对滚很多行」代替：
+  控制流的 `lines` 是 u16，超了不截断而是整条丢弃（子进程 stderr 打
+  `invalid value: integer 1000000, expected u16`，面板一动不动），而停在半路的跳转
+  比不跳更坏，因为它看着像已经贴底、agent 却还在下面继续写。往回翻的面板是冻住的，
+  所以这个 chip 不是装饰。300 行实测：挂上来只画 278..300，`scroll up 200` 画到 101 附近，
+  同一个 pane 的 `max_offset_from_bottom` 是 1083。
+  另外两条口径：chip 上的数字永远取 herdr 的回答（事件与 `pane.scroll` 的返回），
+  不取我们请求的值；`pane.scroll_changed` **不是** snapshot——它只补 session 缓存里那个
+  pane、只推一条 per-pane 的 `cw-pro:bridge` 给正在显示它的面板头（没桥接就一个字都不发），
+  绝不进 `invalidate`，否则滚轮一秒六十次就等于整个 bench 一秒重投影六十次。
 - 问题能用文字回答了（F7 收尾）：浮窗气泡多一个「回答」chip + 单行输入框，Bench 队列里
   原有的回答框修掉了中文输入法（Enter 选词不再把半截拼音当答案发出去）。chip 只在
   `routeCanAnswer` 认可时出现——它读的是主进程已按 `attentionActions` 校验过的 action
