@@ -318,7 +318,7 @@ own entries.
 ```bash
 npm install
 npm run dev          # electron-vite dev with hot reload
-npm test             # vitest, 1045 tests: relay harness, Pro bridge, live TTS
+npm test             # vitest, 1105 tests: relay harness, Pro bridge, live TTS
 npm run test:e2e     # needs a display; builds first, about 20s
 npm run typecheck
 npm run dist:mac     # or dist:win; artifacts land in release/
