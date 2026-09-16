@@ -20,6 +20,15 @@
  *    before the card existed; see `FaultBoundary.tsx`.
  */
 import { createRoot } from 'react-dom/client'
+// The bundled coding face, before anything that paints text: the terminal and
+// every code block measure against it, and a face declared after first paint
+// is a face the first pane was measured without. Weights are the three xterm
+// and the bench chrome actually request (regular, bold, italic); the rest of
+// the family stays in node_modules. See pro/terminalFont.ts for why the app
+// ships its own mono instead of trusting the host.
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/700.css'
+import '@fontsource/jetbrains-mono/400-italic.css'
 import '@xterm/xterm/css/xterm.css'
 import './bench.css'
 import { Bench } from './Bench'

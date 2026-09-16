@@ -66,6 +66,9 @@
     'Hiragino Sans GB', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
   /* Keep in sync with MONO_FALLBACK in pro/terminalFont.ts: the terminal reads
      this property back at runtime because canvas cannot resolve var(). */
-  --mono: ui-monospace, 'JetBrains Mono', 'Fira Code', 'Cascadia Mono', 'SF Mono', Menlo,
-    Consolas, 'Noto Sans Mono CJK SC', 'DejaVu Sans Mono', monospace;
+  /* JetBrains Mono first: it is bundled with the app (@fontsource, see the
+     renderer entries), so the face does not depend on what the host happens
+     to have installed. Keep in sync with MONO_FALLBACK. */
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
+    'Noto Sans Mono CJK SC', 'DejaVu Sans Mono', monospace;
 }

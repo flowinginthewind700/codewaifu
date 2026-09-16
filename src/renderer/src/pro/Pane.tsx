@@ -43,7 +43,7 @@ import { clipboardAction, searchAction } from '@shared/termKeys'
 import { platform, proApi } from './api'
 import { bridgeErrorText, fill, type Translate } from './i18n'
 import { bridgeOf, registerPane } from './paneBus'
-import { monoStack } from './terminalFont'
+import { monoStack, terminalFontsReady } from './terminalFont'
 import type { Tone } from './toast'
 
 /** The bench's terminal palette: the shared accents, mapped onto ANSI. */
@@ -210,6 +210,13 @@ export function Pane({
   const [bell, setBell] = useState(false)
   /** True when the human released this pane on purpose; no auto re-attach. */
   const [released, setReleased] = useState(false)
+  /**
+   * The bundled face is parsed and measurable. xterm sizes every cell at
+   * `open()` (see terminalFont.ts), so a pane waits one woff2 fetch on a cold
+   * start and one microtask on a warm cache - both invisible, where opening
+   * early would leave the pane on fallback metrics for its whole life.
+   */
+  const [fontsReady, setFontsReady] = useState(false)
   /** Scrollback find. Overlaid, so opening it never resizes the PTY. */
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -323,8 +330,18 @@ export function Pane({
   }, [searchOpen])
 
   useEffect(() => {
+    let cancelled = false
+    void terminalFontsReady().then(() => {
+      if (!cancelled) setFontsReady(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     const host = hostRef.current
-    if (!host || released) return
+    if (!host || released || !fontsReady) return
 
     const term = new Terminal({
       // A literal family list, never `var(--mono)`: see terminalFont.ts. The
@@ -530,7 +547,7 @@ export function Pane({
     // `active` and `zoomed` are read by the parent's CSS, not by us: re-running
     // this effect on a selection change would detach and repaint for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId, released])
+  }, [paneId, released, fontsReady])
 
   const release = useCallback(() => {
     setReleased(true)

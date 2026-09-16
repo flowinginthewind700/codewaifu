@@ -9,7 +9,11 @@
  * and never hand a `var(` reference to a canvas, from any path.
  */
 import { describe, expect, it } from 'vitest'
-import { MONO_FALLBACK, monoStack } from '../src/renderer/src/pro/terminalFont'
+import {
+  MONO_FALLBACK,
+  monoStack,
+  terminalFontsReady
+} from '../src/renderer/src/pro/terminalFont'
 
 describe('monoStack', () => {
   it('falls back when there is no stylesheet to read', () => {
@@ -18,8 +22,8 @@ describe('monoStack', () => {
   })
 
   it('uses the stack the UI declares, so terminal and code blocks agree', () => {
-    expect(monoStack("ui-monospace, 'JetBrains Mono', monospace")).toBe(
-      "ui-monospace, 'JetBrains Mono', monospace"
+    expect(monoStack("'JetBrains Mono', ui-monospace, monospace")).toBe(
+      "'JetBrains Mono', ui-monospace, monospace"
     )
   })
 
@@ -33,9 +37,26 @@ describe('monoStack', () => {
 })
 
 describe('MONO_FALLBACK', () => {
+  it('leads with the bundled face: rendering must not depend on the host', () => {
+    // A host-only stack silently degrades: on a stock Linux box every modern
+    // face is absent and `ui-monospace` falls through fontconfig to DejaVu
+    // Sans Mono, which is the "weird font" a human sees. The shipped face has
+    // to be first, on every machine.
+    expect(MONO_FALLBACK.startsWith("'JetBrains Mono'")).toBe(true)
+  })
+
   it('is a literal list: no var(), a CJK mono, and the generic keyword last', () => {
     expect(MONO_FALLBACK).not.toContain('var(')
     expect(MONO_FALLBACK).toContain('Noto Sans Mono CJK SC')
     expect(MONO_FALLBACK.trimEnd().endsWith('monospace')).toBe(true)
+  })
+})
+
+describe('terminalFontsReady', () => {
+  it('resolves without a document instead of rejecting', async () => {
+    // The vitest environment here is node: no document at all. A pane that
+    // awaited a rejecting gate would never open, which on screen is
+    // indistinguishable from herdr having died.
+    await expect(terminalFontsReady()).resolves.toBeUndefined()
   })
 })
