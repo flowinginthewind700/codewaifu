@@ -7,7 +7,8 @@
  *
  *   config dir = $XDG_CONFIG_HOME/herdr        (or the platform default)
  *              | %APPDATA%\herdr               (Windows)
- *              | ~/Library/Application Support/herdr  (macOS)
+ *              | ~/.config/herdr               (macOS, what 0.9.0 actually writes)
+ *              | ~/Library/Application Support/herdr  (macOS convention, kept as a fallback)
  *   session    = $HERDR_SESSION, where "default" means *no* session subdir
  *   socket     = <config>/sessions/<name>/herdr.sock   (named session)
  *              | <config>/herdr.sock                  (default session)
@@ -85,6 +86,16 @@ function homeOf(deps: DiscoveryDeps): string {
 /**
  * herdr honours `XDG_CONFIG_HOME` on every platform when it is set, then falls
  * back to the platform convention. One entry per app-dir spelling.
+ *
+ * On macOS the convention in the docs and the one in the shipping binary are not
+ * the same: `herdr status` on a Mac with no `XDG_CONFIG_HOME` reports
+ * `socket: ~/.config/herdr/herdr.sock`, and `~/Library/Application Support/herdr`
+ * is never created. So `~/.config` is probed first there and Application Support
+ * stays behind it as the fallback for a build that follows the platform rule -
+ * order only matters when both exist, and then the live one is the XDG path.
+ * Reading only Application Support was not a wrong guess about a rare machine:
+ * it made the Bench sit on its install card on every Mac with herdr installed
+ * and running, which is the one state the card exists to explain away.
  */
 export function configDirCandidates(deps: DiscoveryDeps = {}): string[] {
   const env = deps.env ?? {}
@@ -97,6 +108,7 @@ export function configDirCandidates(deps: DiscoveryDeps = {}): string[] {
       const appData = env.APPDATA || join(home, 'AppData', 'Roaming')
       out.push(join(appData, name))
     } else if (platform === 'darwin') {
+      out.push(join(home, '.config', name))
       out.push(join(home, 'Library', 'Application Support', name))
     } else {
       out.push(join(home, '.config', name))

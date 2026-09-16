@@ -109,13 +109,24 @@ describe('the config dir, per platform and per spelling', () => {
     ])
   })
 
-  it('uses the macOS and Windows conventions, since the Mac build is next', () => {
-    expect(configDirCandidates({ platform: 'darwin', home: '/Users/u' })[0]).toBe(
-      '/Users/u/Library/Application Support/herdr'
-    )
+  it('probes ~/.config first on macOS, which is where herdr really writes', () => {
+    // `herdr status` on a Mac with no XDG_CONFIG_HOME reports
+    // socket: ~/.config/herdr/herdr.sock, and never creates Application Support.
+    expect(configDirCandidates({ platform: 'darwin', home: '/Users/u' })).toEqual([
+      '/Users/u/.config/herdr',
+      '/Users/u/Library/Application Support/herdr',
+      '/Users/u/.config/herdr-dev',
+      '/Users/u/Library/Application Support/herdr-dev'
+    ])
     expect(configDirCandidates({ platform: 'win32', env: { APPDATA: 'C:\\Users\\u\\App' } })[0]).toBe(
       'C:\\Users\\u\\App\\herdr'
     )
+  })
+
+  it('still lets XDG_CONFIG_HOME win on macOS, the way it does inside herdr', () => {
+    expect(
+      configDirCandidates({ platform: 'darwin', home: '/Users/u', env: { XDG_CONFIG_HOME: '/xdg' } }).slice(0, 2)
+    ).toEqual(['/xdg/herdr', '/Users/u/.config/herdr'])
   })
 })
 
@@ -158,6 +169,15 @@ describe('socket candidates', () => {
     const tried = socketCandidates({ ...LINUX, home: '/home/u' })
     expect(tried.some((candidate) => candidate.includes('/sessions/'))).toBe(false)
     expect(tried).toEqual(['/home/u/.config/herdr/herdr.sock', '/home/u/.config/herdr-dev/herdr.sock'])
+  })
+
+  it('finds a running Mac herdr, the socket the install card used to miss', () => {
+    // The regression this pins: discovery looked only at Application Support on
+    // darwin, so a Mac with herdr installed *and serving* reported `no-socket`
+    // and the Bench showed the install card over a working runtime.
+    const tried = socketCandidates({ platform: 'darwin', home: '/Users/u', env: {} })
+    expect(tried[0]).toBe('/Users/u/.config/herdr/herdr.sock')
+    expect(tried).toContain('/Users/u/Library/Application Support/herdr/herdr.sock')
   })
 
   it('reads the session from the environment when config did not name one', () => {
