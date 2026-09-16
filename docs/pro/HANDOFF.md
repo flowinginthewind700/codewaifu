@@ -1,6 +1,6 @@
 # Pro handoff
 
-`main` @ 0.4.0: the push route and `pro watch` (F9), the bundled
+`main` @ 0.4.2: the push route and `pro watch` (F9), the bundled
 terminal font, boot auto-resume, the RobotWorld palette, one app with two modes
 (the stage and the bench switch into each other), import of foreign
 codex/claude sessions into the tree, a tray that works on Linux, and a release
