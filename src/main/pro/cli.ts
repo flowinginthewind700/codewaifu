@@ -24,6 +24,7 @@ import {
   renderProLedger,
   renderProRecovery,
   renderProResult,
+  renderProSsh,
   renderProState,
   renderProWatchStart,
   type ProAttentionPayload,
@@ -100,13 +101,15 @@ export async function runProCli(args: readonly string[]): Promise<number> {
 
 /**
  * The one place the CLI knows where it is standing: `pro new` with no `--dir`
- * means the directory the command was typed in, and only this process can say
- * what that is.
+ * means the directory the command was typed in, and `pro term` with no `--dir`
+ * means a shell there rather than one in the home directory. Only this process
+ * can say where that is, so the field is filled on this side of the socket.
  */
 function bodyFor(parsed: ProCliCall): Record<string, unknown> | undefined {
   if (parsed.body === null) return undefined
   const body = { ...parsed.body }
   if (parsed.verb === 'new' && !String(body.workdir ?? '').trim()) body.workdir = process.cwd()
+  if (parsed.verb === 'term' && !String(body.cwd ?? '').trim()) body.cwd = process.cwd()
   return body
 }
 
@@ -121,6 +124,12 @@ function render(parsed: ProCliCall, json: unknown, width: number): string {
       return renderProRecovery(json as ProStatePayload, width)
     case 'log':
       return renderProLedger(json)
+    case 'ssh':
+    case 'term':
+      // One route, many ops, and every one of them answers with a payload this
+      // renderer reads by shape - so the subcommand does not have to be carried
+      // through the call just to be able to print the reply.
+      return renderProSsh(json, width)
     default:
       return renderProResult(json, parsed.verb)
   }

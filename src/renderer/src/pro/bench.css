@@ -2657,6 +2657,80 @@ button.plan-title:focus-visible {
   color: var(--coral);
 }
 
+/* ------------------------------------------------- edit form + hidden list
+
+   The edit view reuses the dialog skeleton, and the two new pieces both exist
+   to stop the form lying: the preview is the line main will actually type into
+   the pane, and the note announces a fork or a detached alias *before* the
+   human saves instead of in a toast afterwards. */
+
+.connect-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  flex: 0 0 auto;
+}
+
+.note-pills {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.connect-alias {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+}
+
+/* The alias this edit is about to drop. Warn, not danger: nothing is broken,
+   and the config block itself is still exactly as the human left it. */
+.connect-detached {
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
+/* What ssh will be asked to do, quoted the way main quotes it. One truncated
+   line on purpose: this is a confirmation, not a code block, and the whole
+   string is in the title attribute. */
+.connect-preview {
+  padding: 4px 7px;
+  border: 1px solid var(--bench-line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bench-bg);
+  color: var(--muted);
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-line {
+  margin: 0;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: 1.45;
+}
+
+.note-line[data-tone='warn'] {
+  color: var(--warn);
+}
+
+/* A hidden identity no source reports any more. Dimmed rather than struck
+   through: restoring it still does something (drops the entry), and reading as
+   broken would suggest the click does nothing at all. */
+.connect-row[data-stale] .connect-name,
+.connect-row[data-stale] .connect-detail {
+  opacity: 0.62;
+}
+
+/* The one field-level error the form raises inline. Marked on the input as
+   well as in the foot, because the foot is where the eye is not. */
+.input[data-invalid] {
+  border-color: rgba(var(--danger-rgb), 0.55);
+}
+
 .connect-keys {
   color: var(--faint);
   font-size: 10.5px;

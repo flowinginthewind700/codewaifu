@@ -16,9 +16,18 @@
  * The normalisation cases matter for the same reason: a machine that arrives
  * over the wire is rebuilt through the same `makeMachine` the roster uses, so a
  * string `port` or a `source` nobody defined cannot reach the connect line.
+ *
+ * The mutating ops carry one more rule each. `edit` is the only op whose payload
+ * has two readings of a field - absent means "leave it alone", present-and-empty
+ * means "clear it" - and the tests below pin that distinction, because losing it
+ * would turn a form that looks editable into one that cannot undo a field.
+ * `hide` is a refusal to pretend: it takes the same machine-or-target argument
+ * as `save`, and whether "deleted" or "hidden" happened is the service's answer,
+ * not the parser's.
  */
 import { describe, expect, it } from 'vitest'
 import { isProReject, machineOf, parseProSsh, type ProSshRequest } from '../src/shared/proIpc'
+import type { MachineEdit } from '../src/shared/ssh'
 
 /** Narrow a parse to a request, failing the test if it was rejected. */
 function parsed(payload: unknown): ProSshRequest {
@@ -34,6 +43,25 @@ function refused(payload: unknown): { code: string; error: string } {
   const result = parseProSsh(payload)
   if (!isProReject(result)) throw new Error(`expected a rejection, got ${JSON.stringify(result)}`)
   return { code: result.code, error: result.error }
+}
+
+/** An `edit` parse narrowed to its request, failing the test if it was refused. */
+function editRequest(payload: unknown): Extract<ProSshRequest, { op: 'edit' }> {
+  const request = parsed(payload)
+  if (request.op !== 'edit') throw new Error(`expected an edit, got ${request.op}`)
+  return request
+}
+
+/** The patch inside one, which is the part an edit test is usually about. */
+function edited(payload: unknown): MachineEdit {
+  return editRequest(payload).patch
+}
+
+/** A `hide` parse narrowed the same way. */
+function hideRequest(payload: unknown): Extract<ProSshRequest, { op: 'hide' }> {
+  const request = parsed(payload)
+  if (request.op !== 'hide') throw new Error(`expected a hide, got ${request.op}`)
+  return request
 }
 
 describe('the ops that need nothing', () => {
@@ -99,7 +127,7 @@ describe('terminal', () => {
 })
 
 describe('the machine-or-target rule', () => {
-  const ops = ['probe', 'save', 'connect', 'setup'] as const
+  const ops = ['probe', 'save', 'edit', 'hide', 'connect', 'setup'] as const
 
   it.each(ops)('%s refuses a payload with neither a machine nor a target', (op) => {
     const bad = refused({ op })
@@ -129,7 +157,13 @@ describe('the machine-or-target rule', () => {
     }
   })
 
-  it.each(ops)('%s keeps a pasted ssh command line, spaces and all', (op) => {
+  // `edit` is out of this one, not out of the rule: it refuses a payload with no
+  // patch before it ever reads the target, which is the right order (an edit with
+  // nothing to change is a no-op the caller should hear about). Its pasted-command
+  // case lives in the `edit` block below, where a patch comes with it.
+  const dialing = ops.filter((op) => op !== 'edit')
+
+  it.each(dialing)('%s keeps a pasted ssh command line, spaces and all', (op) => {
     // The string a user copies out of a README. Refusing it would send them to a
     // terminal to take it apart by hand, which is the exact step the palette
     // exists to remove.
@@ -137,6 +171,8 @@ describe('the machine-or-target rule', () => {
     if (
       request.op !== 'probe' &&
       request.op !== 'save' &&
+      request.op !== 'edit' &&
+      request.op !== 'hide' &&
       request.op !== 'connect' &&
       request.op !== 'setup'
     ) {
@@ -191,6 +227,122 @@ describe('setup', () => {
     const request = parsed({ op: 'setup', target: 'box', key: '  ~/.ssh/id_ed25519.pub  ' })
     if (request.op !== 'setup') throw new Error('expected setup')
     expect(request.key).toBe('~/.ssh/id_ed25519.pub')
+  })
+})
+
+describe('edit', () => {
+  const machine = { host: 'box', user: 'alice' }
+
+  it('trims what it takes, and leaves the machine blob it was handed alone', () => {
+    // The parser normalises, it does not apply. `machine.label` is still the one
+    // the caller built, because merging a patch into a machine is `editMachine`'s
+    // job in main - doing it here as well would leave two places to get it wrong.
+    const request = editRequest({ op: 'edit', machine, patch: { label: '  lab  ' } })
+    expect(request.patch).toEqual({ label: 'lab' })
+    expect(request.machine?.label).toBe('alice@box')
+    expect(request.target).toBe('')
+  })
+
+  it('reads an absent field as "leave it" and an empty one as "clear it"', () => {
+    // The reason `edit` is not `{ ...machine, ...patch }` on the wire: ProxyJump
+    // has to be blank-able, and `host` has to stay out of the patch when nobody
+    // touched the field. A truthiness test collapses both readings into one, and
+    // what is left is a form that looks editable and cannot undo anything.
+    const patch = edited({ op: 'edit', machine, patch: { proxyJump: '', user: ' root ' } })
+    expect(patch).toEqual({ proxyJump: '', user: 'root' })
+    expect('host' in patch).toBe(false)
+    expect('identityFile' in patch).toBe(false)
+  })
+
+  it('keeps a pasted ssh command line as the target, patch and all', () => {
+    // Renaming a row that only ever existed as a typed line: there is no machine
+    // blob to send, so the target is what the edit forks from, and it is held to
+    // the same one-destination rule as every other machine op.
+    const request = editRequest({
+      op: 'edit',
+      target: 'ssh wanlian@172.18.29.206 -p 2222',
+      patch: { label: 'ubuntu box' }
+    })
+    expect(request.target).toBe('ssh wanlian@172.18.29.206 -p 2222')
+    expect(request.machine).toBeNull()
+  })
+
+  it('clamps a port to a port, including the empty one that means no port', () => {
+    expect(edited({ op: 'edit', machine, patch: { port: '2222' } })).toEqual({ port: 2222 })
+    expect(edited({ op: 'edit', machine, patch: { port: '' } })).toEqual({ port: 0 })
+    expect(edited({ op: 'edit', machine, patch: { port: 99999 } })).toEqual({ port: 0 })
+    expect(edited({ op: 'edit', machine, patch: { port: 'lots' } })).toEqual({ port: 0 })
+  })
+
+  it('will not take `source` from a caller, since where a row came from is a fact', () => {
+    const patch = edited({ op: 'edit', machine, patch: { source: 'saved', label: 'x' } })
+    expect(patch).toEqual({ label: 'x' })
+    expect('source' in patch).toBe(false)
+  })
+
+  it('caps a field, so a pasted blob cannot become a stored machine', () => {
+    expect(edited({ op: 'edit', machine, patch: { label: 'a'.repeat(5000) } }).label).toHaveLength(
+      200
+    )
+  })
+
+  it('refuses an empty patch rather than reporting an edit that changed nothing', () => {
+    const bad = refused({ op: 'edit', machine, patch: {} })
+    expect(bad.code).toBe('bad-machine')
+    expect(bad.error).toContain('at least one field')
+  })
+
+  it('reads the flat form too, which is what a one-line command sends', () => {
+    // `pro ssh edit box --label lab` has no reason to invent a nested object, and
+    // the palette's form is not the only caller this parser answers to.
+    expect(edited({ op: 'edit', machine, label: 'lab' })).toEqual({ label: 'lab' })
+    expect(edited({ op: 'edit', target: 'alice@box', host: '  10.0.0.9 ' })).toEqual({
+      host: '10.0.0.9'
+    })
+  })
+})
+
+describe('hide, unhide and the restore list', () => {
+  it('hides by machine, and asks for nothing else', () => {
+    const request = hideRequest({ op: 'hide', machine: { host: 'box', user: 'alice' } })
+    expect(request.machine?.host).toBe('box')
+    expect(request.target).toBe('')
+  })
+
+  it('hides by target, folding the string the way every other machine op does', () => {
+    // The row a human dismisses may be one they typed a minute ago, so there is no
+    // machine blob to send back - only the line still sitting in the input.
+    expect(parsed({ op: 'hide', target: 'alice@box:2222' })).toEqual({
+      op: 'hide',
+      machine: null,
+      target: 'alice@box:2222'
+    })
+  })
+
+  it('restores by key, trimmed, with `id` accepted as an alias for it', () => {
+    expect(parsed({ op: 'unhide', key: '  alias:prod  ' })).toEqual({
+      op: 'unhide',
+      key: 'alias:prod'
+    })
+    expect(parsed({ op: 'unhide', id: 'host:box:2222:alice' })).toEqual({
+      op: 'unhide',
+      key: 'host:box:2222:alice'
+    })
+  })
+
+  it('needs a key to restore, because a guessed one unhides the wrong row', () => {
+    expect(refused({ op: 'unhide' }).code).toBe('bad-machine')
+    expect(refused({ op: 'unhide', key: '   ' }).code).toBe('bad-machine')
+  })
+
+  it('caps the key, since it is a stored string and not a query', () => {
+    const request = parsed({ op: 'unhide', key: `alias:${'p'.repeat(400)}` })
+    if (request.op !== 'unhide') throw new Error('expected unhide')
+    expect(request.key).toHaveLength(160)
+  })
+
+  it('takes `hidden` with no arguments and drops whatever else came along', () => {
+    expect(parsed({ op: 'hidden', key: 'ignored' })).toEqual({ op: 'hidden' })
   })
 })
 

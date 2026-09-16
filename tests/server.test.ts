@@ -439,6 +439,49 @@ describe('pro api (F6)', () => {
     const pane = await relay.post('/pro/pane', { op: 'send', paneId: 'pane-1', text: 'ls' }, TOKEN)
     expect(pane.status).toBe(404)
   })
+
+  it('reads the roster on GET /pro/ssh, taking the filter from the query', async () => {
+    const { relay, pro } = await startPro()
+    const res = await relay.get('/pro/ssh', TOKEN)
+    expect(res.status).toBe(200)
+    expect(pro.recorded.ssh).toEqual([{ op: 'list', query: '' }])
+
+    await relay.get('/pro/ssh?q=prod', TOKEN)
+    expect(pro.recorded.ssh[1]).toEqual({ op: 'list', query: 'prod' })
+  })
+
+  it('opens a session on POST /pro/ssh, recording the typed request', async () => {
+    const { relay, pro } = await startPro()
+    const res = await relay.post('/pro/ssh', { op: 'connect', target: 'prod' }, TOKEN)
+    expect(res.status).toBe(200)
+    expect(pro.recorded.ssh[0]).toMatchObject({ op: 'connect', target: 'prod', save: true })
+  })
+
+  it('400s an ssh op the parser refuses, before the bench is asked', async () => {
+    const { relay, pro } = await startPro()
+    // An edit with no field to change is the parser's to refuse, not the bench's:
+    // a route that forwarded it would record a request the service then rejects.
+    const res = await relay.post('/pro/ssh', { op: 'edit', target: 'prod' }, TOKEN)
+    expect(res.status).toBe(400)
+    expect(res.json).toMatchObject({ code: 'bad-machine' })
+    expect(pro.recorded.ssh).toHaveLength(0)
+  })
+
+  it('maps a bench failure to its status, and answers 503 while the bench is off', async () => {
+    const { relay, pro } = await startPro()
+    pro.setResult(failResult('offline', 'herdr went away'))
+    expect((await relay.post('/pro/ssh', { op: 'keys' }, TOKEN)).status).toBe(503)
+
+    const off = await startRelay()
+    expect((await off.get('/pro/ssh', TOKEN)).status).toBe(503)
+    expect((await off.post('/pro/ssh', { op: 'keys' }, TOKEN)).status).toBe(503)
+  })
+
+  it('keeps /pro/ssh behind the token, read and write alike', async () => {
+    const { relay } = await startPro()
+    expect((await relay.get('/pro/ssh')).status).toBe(401)
+    expect((await relay.post('/pro/ssh', { op: 'keys' })).status).toBe(401)
+  })
 })
 
 /* ------------------------------------------------------------------ *

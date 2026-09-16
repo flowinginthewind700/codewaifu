@@ -633,6 +633,152 @@ export function dedupeMachines(list: readonly SshMachine[]): SshMachine[] {
 }
 
 /* ------------------------------------------------------------------ *
+ * Editing
+ * ------------------------------------------------------------------ */
+
+/**
+ * The fields an edit form owns. Every one is optional, and `undefined` means
+ * "leave it alone" while `''` (or `0` for the port) means "clear it" - the
+ * difference between not touching ProxyJump and saying this box has none.
+ */
+export interface MachineEdit {
+  label?: string
+  host?: string
+  port?: number | string
+  user?: string
+  identityFile?: string
+  proxyJump?: string
+  alias?: string
+}
+
+/** True when a patch changes anything ssh would dial differently. */
+export function changesConnection(machine: SshMachine, patch: MachineEdit): boolean {
+  if (patch.host !== undefined && patch.host.trim() !== machine.host) return true
+  if (patch.user !== undefined && patch.user.trim() !== machine.user) return true
+  if (patch.identityFile !== undefined && patch.identityFile.trim() !== machine.identityFile) {
+    return true
+  }
+  if (patch.proxyJump !== undefined && patch.proxyJump.trim() !== machine.proxyJump) return true
+  if (patch.port !== undefined && clampPort(patch.port) !== machine.port) return true
+  return false
+}
+
+/**
+ * Apply an edit, and return the machine that should be stored.
+ *
+ * Two rules carry the weight here:
+ *
+ * - **The result is always `saved`.** An edit is ours to own: `~/.ssh/config` is
+ *   a file we were asked to read, and rewriting a block in somebody's ssh
+ *   config from a desktop app is not a surprise worth springing. So editing a
+ *   config alias *forks* it into our own roster; the original stays on disk
+ *   untouched and can be hidden from the palette if the fork is meant to
+ *   replace it.
+ * - **Editing the connection drops the alias.** `sshArgv` short-circuits on
+ *   `alias` (`ssh <alias>` and nothing else), so keeping it while the human
+ *   retypes the port would silently throw the port away - a form that accepts
+ *   your input and then does not use it. Only a label-only edit keeps the
+ *   alias, because there the config block is still the truth.
+ *
+ * The id is kept when it is a durable one (the service's `m...` ids), so an edit
+ * upserts the row instead of leaving the old one behind beside the new one.
+ */
+export function editMachine(machine: SshMachine, patch: MachineEdit): SshMachine {
+  const keep = machine.alias && !changesConnection(machine, patch)
+  const alias = patch.alias !== undefined ? patch.alias.trim() : keep ? machine.alias : ''
+  return makeMachine({
+    id: machine.id,
+    label: patch.label !== undefined ? patch.label : machine.label,
+    host: patch.host !== undefined ? patch.host : machine.host,
+    port: patch.port !== undefined ? patch.port : machine.port,
+    user: patch.user !== undefined ? patch.user : machine.user,
+    identityFile:
+      patch.identityFile !== undefined ? patch.identityFile : machine.identityFile,
+    proxyJump: patch.proxyJump !== undefined ? patch.proxyJump : machine.proxyJump,
+    alias,
+    source: 'saved'
+  })
+}
+
+/**
+ * What an edit form starts from: the machine's own values, so the fields are
+ * pre-filled rather than empty, plus the private-key path the roster knows
+ * (`identityFile` is the private key; `keys()` lists the public ones).
+ */
+export function machineEditOf(machine: SshMachine): Required<MachineEdit> {
+  return {
+    label: machine.label,
+    host: machine.host,
+    port: machine.port,
+    user: machine.user,
+    identityFile: machine.identityFile,
+    proxyJump: machine.proxyJump,
+    alias: machine.alias
+  }
+}
+
+/**
+ * Whether hiding is the right verb for this row.
+ *
+ * A `saved` machine is ours, so removing it deletes the record. A config or
+ * herdr row is *reported* to us from somewhere we do not own: there is nothing
+ * to delete, and pretending otherwise would either lie or edit the user's
+ * files. Hiding is the honest dismissal - it stops the row appearing, keeps the
+ * source intact, and can be undone from one list.
+ */
+export function isHiddenRemoval(machine: SshMachine): boolean {
+  return machine.source !== 'saved'
+}
+
+/**
+ * Filter a deduped roster by the hidden keys, and keep the list a UI can
+ * restore from.
+ *
+ * Hiding only ever applies to rows we do not own. A `saved` machine with the
+ * same identity is an explicit decision made after the hide, and dropping it
+ * would mean the pin button appears to do nothing - so `save()` unhides, and
+ * this filter is the second half of that rule.
+ */
+export function filterHidden(
+  list: readonly SshMachine[],
+  hidden: readonly string[]
+): SshMachine[] {
+  if (!hidden.length) return list.slice()
+  const keys = new Set(hidden.map((key) => String(key).toLowerCase()))
+  return list.filter(
+    (machine) => machine.source === 'saved' || !keys.has(machineKey(machine).toLowerCase())
+  )
+}
+
+/** Dedupe + normalise a stored hidden list: lowercased, non-empty, in order. */
+export function normalizeHidden(list: readonly unknown[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const entry of list) {
+    const key = String(entry ?? '').trim().toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(key)
+  }
+  return out
+}
+
+/**
+ * One dismissed row, as the restore list shows it.
+ *
+ * The key travels beside the machine rather than being recomputed from it: a
+ * hidden identity can outlive the thing it named (the `Host` block gets deleted
+ * from `~/.ssh/config`), and the list still has to offer a way to drop it.
+ * Recomputing `machineKey` from a placeholder row would produce a different
+ * string and make that entry unrestorable - stuck in the list forever.
+ */
+export interface HiddenMachine {
+  key: string
+  machine: SshMachine
+  /** True when no source reports this identity any more. */
+  stale: boolean
+}
+/* ------------------------------------------------------------------ *
  * Passwordless setup
  * ------------------------------------------------------------------ */
 

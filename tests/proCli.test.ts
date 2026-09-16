@@ -68,6 +68,7 @@ import {
   renderProLedger,
   renderProRecovery,
   renderProResult,
+  renderProSsh,
   renderProState,
   renderProWatchStart,
   tokenText,
@@ -77,6 +78,7 @@ import {
   type ProCliVerb,
   type ProStatePayload
 } from '../src/shared/proCli'
+import { sshLine, type SshMachine } from '../src/shared/ssh'
 import { attentionItem, benchView, fakePro } from './helpers/pro'
 import { createTestRelay, occupyPort, type TestRelay, type TestStream } from './helpers/relay'
 
@@ -655,7 +657,19 @@ const REJECTS: Array<[string, string[], string]> = [
   ['new with no title', ['pro', 'new'], 'needs-title'],
   ['park with no task', ['pro', 'park'], 'needs-target'],
   ['log with no task', ['pro', 'log'], 'needs-target'],
-  ['rm with no task', ['pro', 'rm'], 'needs-target']
+  ['rm with no task', ['pro', 'rm'], 'needs-target'],
+  // A machine op with no machine, and the two ways to name fields that have
+  // nowhere to go: silently dropping either would print a success that did not
+  // happen.
+  ['ssh add with no target', ['pro', 'ssh', 'add'], 'needs-target'],
+  ['ssh edit with no target', ['pro', 'ssh', 'edit'], 'needs-target'],
+  ['ssh rm with no target', ['pro', 'ssh', 'rm'], 'needs-target'],
+  ['ssh restore with no key', ['pro', 'ssh', 'restore'], 'needs-target'],
+  ['ssh edit with nothing to change', ['pro', 'ssh', 'edit', 'prod'], 'needs-field'],
+  ['ssh ls with two filters', ['pro', 'ssh', 'ls', 'a', 'b'], 'bad-arg'],
+  ['ssh ls --hidden with a filter', ['pro', 'ssh', 'ls', '--hidden', 'a'], 'bad-arg'],
+  ['ssh keys with a machine field', ['pro', 'ssh', 'keys', '--port', '22'], 'bad-arg'],
+  ['ssh rm with a machine field', ['pro', 'ssh', 'rm', 'prod', '--label', 'x'], 'bad-arg']
 ]
 
 describe('parseProCli: refusing', () => {
@@ -1088,6 +1102,176 @@ describe('renderProResult', () => {
       'no-herdr-binary: herdr not found'
     )
     expect(renderProResult(null, 'park')).toContain('unreadable')
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * ssh: the rendered line, shape by shape
+ * ------------------------------------------------------------------ */
+
+/**
+ * `renderProSsh` dispatches on the shape of `data`, not on the subcommand that
+ * asked, so one renderer answers the CLI, a `curl` against the same route, and
+ * any future spelling of the same op. These two fixtures are the rows that
+ * matter: one we pinned (ours to rename), one read out of `~/.ssh/config`
+ * (renaming it forks it). The dial line is computed by the same `sshLine` the
+ * renderer uses, so the assertions pin the layout - header words, source tags,
+ * footers, the unsent warning - rather than re-typing ssh's argument order.
+ */
+describe('renderProSsh', () => {
+  const BOX: SshMachine = {
+    id: 'box',
+    label: 'box',
+    host: '172.18.29.206',
+    port: 2222,
+    user: 'wanlian',
+    identityFile: '',
+    proxyJump: '',
+    source: 'saved',
+    alias: ''
+  }
+  const ALIAS: SshMachine = {
+    id: 'prod',
+    label: 'prod',
+    host: '10.0.0.9',
+    port: 22,
+    user: 'root',
+    identityFile: '',
+    proxyJump: '',
+    source: 'config',
+    alias: 'prod'
+  }
+  const boxLine = sshLine(BOX, {})
+  const aliasLine = sshLine(ALIAS, {})
+
+  it('renders the roster in rank order, each row tagged with who owns it', () => {
+    const lines = renderProSsh(okResult({ machines: [BOX, ALIAS], hidden: [], home: '' })).split(
+      '\n'
+    )
+    expect(lines[0]).toBe('2 machines')
+    expect(lines[1]).toContain('box')
+    expect(lines[1]).toContain('pinned')
+    expect(lines[1]).toContain(boxLine)
+    expect(lines[2]).toContain('prod')
+    expect(lines[2]).toContain('config')
+    expect(lines[2]).toContain(aliasLine)
+  })
+
+  it('counts one machine without the plural', () => {
+    expect(renderProSsh(okResult({ machines: [BOX] })).split('\n')[0]).toBe('1 machine')
+  })
+
+  it('puts the hidden count in the footer, with the command that lists them', () => {
+    const lines = renderProSsh(
+      okResult({ machines: [BOX], hidden: [{ key: 'alias:prod', machine: ALIAS, stale: false }] })
+    ).split('\n')
+    expect(lines[lines.length - 1]).toBe('1 hidden   codewaifu pro ssh ls --hidden')
+  })
+
+  it('says there is nothing to connect to, and how to pin the first one', () => {
+    const text = renderProSsh(okResult({ machines: [], configPath: '/home/dev/.ssh/config' }))
+    expect(text).toContain('nothing to connect to')
+    expect(text).toContain('codewaifu pro ssh add user@host')
+    expect(text).toContain('/home/dev/.ssh/config')
+  })
+
+  it('leads the restore list with the key, because the key is the argument', () => {
+    const lines = renderProSsh(
+      okResult({ hidden: [{ key: 'alias:prod', machine: ALIAS, stale: true }] })
+    ).split('\n')
+    expect(lines[0]).toBe('1 hidden')
+    expect(lines[1]).toContain('alias:prod')
+    expect(lines[1]).toContain('stale')
+    expect(lines[lines.length - 1]).toBe('restore: codewaifu pro ssh restore <key>')
+  })
+
+  it('stars the default key, the one setup publishes unless told otherwise', () => {
+    const text = renderProSsh(
+      okResult({ keys: ['id_ed25519.pub', 'id_rsa.pub'], key: 'id_ed25519.pub' })
+    )
+    expect(text.split('\n')[0]).toBe('2 public keys')
+    expect(text).toContain('* id_ed25519.pub')
+    expect(text).toContain('  id_rsa.pub')
+  })
+
+  it('offers to create a key when there is none yet', () => {
+    expect(renderProSsh(okResult({ keys: [] }))).toContain('no public key in ~/.ssh yet')
+  })
+
+  it('prints a green probe as one line, and an auth refusal with its one-command fix', () => {
+    const ok = renderProSsh(okResult({ machine: BOX, status: 'ok', home: '' }))
+    expect(ok.split('\n')).toHaveLength(1)
+    expect(ok).toContain(boxLine)
+
+    const auth = renderProSsh(okResult({ machine: BOX, status: 'auth', home: '' }))
+    expect(auth).toContain('refused the key')
+    expect(auth).toContain('codewaifu pro ssh setup box')
+  })
+
+  it('prints the passwordless plan whole, and says so when it ran nothing', () => {
+    const plan = renderProSsh(
+      okResult({ lines: ['ssh-copy-id -i ~/.ssh/id_ed25519.pub wanlian@box'], key: '' })
+    )
+    expect(plan).toContain('would run, publishing the default key - and has run nothing:')
+    expect(plan).toContain('  ssh-copy-id -i ~/.ssh/id_ed25519.pub wanlian@box')
+  })
+
+  it('reports a write with the word for what it did to the roster', () => {
+    expect(renderProSsh(okResult({ machine: BOX }, '', 'saved'))).toContain('pinned')
+    expect(renderProSsh(okResult({ machine: BOX }, '', 'edited'))).toContain('edited')
+  })
+
+  it('tells a hidden config row from a removed one, because only one is gone', () => {
+    const hidden = renderProSsh(okResult({ machine: ALIAS }, '', 'hidden'))
+    expect(hidden).toContain('we read and never rewrite')
+    expect(hidden).toContain('codewaifu pro ssh restore alias:prod')
+
+    const removed = renderProSsh(okResult({ machine: BOX }, '', 'removed'))
+    expect(removed).toContain('it was a row of ours, so it is gone')
+  })
+
+  it('says a forked row is now ours', () => {
+    expect(renderProSsh(okResult({ machine: ALIAS }, '', 'forked'))).toContain('the row is now ours')
+  })
+
+  it('renders an unhide as a restore of the key', () => {
+    expect(renderProSsh(okResult({ key: 'alias:prod' }, '', 'unhidden'))).toBe(
+      'restored  alias:prod'
+    )
+  })
+
+  it('shows the pane and task a session landed in', () => {
+    const lines = renderProSsh(
+      okResult({ paneId: 'w2:p1', taskId: 'task-9', typed: 12, title: 'box' }, '', 'connected')
+    ).split('\n')
+    expect(lines[0]).toBe('connected  box')
+    expect(lines[1]).toContain('pane w2:p1')
+    expect(lines[1]).toContain('task task-9')
+  })
+
+  it('warns when a verb that types reached a silent pane, which reads as a hang', () => {
+    expect(renderProSsh(okResult({ paneId: 'w2:p1', typed: 0 }, '', 'connected'))).toContain(
+      'nothing reached the pane, so the line is unsent'
+    )
+  })
+
+  it('does not warn for a plain shell, which types nothing by design', () => {
+    const text = renderProSsh(okResult({ paneId: 'w2:p1', typed: 0 }, '', 'terminal'))
+    expect(text.split('\n')[0]).toBe('shell')
+    expect(text).not.toContain('unsent')
+  })
+
+  it('prints a refusal as its code and reason', () => {
+    expect(renderProSsh(failResult('refused', 'herdr said no'))).toBe('refused: herdr said no')
+  })
+
+  it('falls back to the service words for a payload it does not recognise', () => {
+    expect(renderProSsh(null)).toContain('unreadable')
+    expect(renderProSsh(okResult({}, '', 'mystery'))).toBe('mystery')
+  })
+
+  it('keeps the label when the terminal is narrow, clipping the dial instead', () => {
+    expect(renderProSsh(okResult({ machines: [BOX] }), 30)).toContain('box')
   })
 })
 
@@ -1897,5 +2081,218 @@ describe('cliArgsFrom', () => {
   it('leaves install to the flag, since bare "codewaifu install" reads as "install the app"', () => {
     expect(cliArgsFrom([BIN, 'install'])).toEqual({ cli: false, args: [] })
     expect(cliArgsFrom([BIN, 'status'])).toEqual({ cli: false, args: [] })
+  })
+})
+/* ------------------------------------------------------------------ *
+ * ssh: the short path to a machine
+ * ------------------------------------------------------------------ */
+
+/**
+ * Name, argv, the method, the route, the body (null for a GET), and `--json`.
+ *
+ * Every row lands on the one route the connect palette uses, with the one op
+ * shape `parseProSsh` already validates, so this table pins spellings rather
+ * than a second protocol: a body here that the palette could not send is a body
+ * the relay would refuse, and the round trip below proves it.
+ */
+const SSH: Array<
+  [string, string[], 'GET' | 'POST', string, Record<string, unknown> | null, boolean?]
+> = [
+  // A bare verb is the read, not a connect to nothing.
+  // A bare verb is the read, not a connect to nothing.
+  ['a bare ssh reads the roster', ['pro', 'ssh'], 'GET', '/pro/ssh', null],
+  ['ls reads the roster', ['pro', 'ssh', 'ls'], 'GET', '/pro/ssh', null],
+  ['list is an alias', ['pro', 'ssh', 'list'], 'GET', '/pro/ssh', null],
+  ['a filter rides in the query', ['pro', 'ssh', 'ls', 'prod'], 'GET', '/pro/ssh?q=prod', null],
+  ['a filter is url-encoded', ['pro', 'ssh', 'ls', 'a b'], 'GET', '/pro/ssh?q=a%20b', null],
+  [
+    'the restore list is its own op',
+    ['pro', 'ssh', 'ls', '--hidden'],
+    'POST',
+    '/pro/ssh',
+    { op: 'hidden' }
+  ],
+  ['keys', ['pro', 'ssh', 'keys'], 'POST', '/pro/ssh', { op: 'keys' }],
+
+  // Anything that is not a subcommand is a destination, which is ssh's own rule.
+  [
+    'a name connects',
+    ['pro', 'ssh', 'prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'prod', save: true, cwd: '' }
+  ],
+  [
+    'connect is the spelled-out form',
+    ['pro', 'ssh', 'connect', 'prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'prod', save: true, cwd: '' }
+  ],
+  [
+    'go and open are aliases',
+    ['pro', 'ssh', 'go', 'prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'prod', save: true, cwd: '' }
+  ],
+  [
+    'a user@host:port target is passed through whole',
+    ['pro', 'ssh', 'root@10.0.0.5:2222'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'root@10.0.0.5:2222', save: true, cwd: '' }
+  ],
+  [
+    'a pasted ssh line, quoted, is one target',
+    ['pro', 'ssh', 'ssh wanlian@172.18.29.206 -p 2222'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'ssh wanlian@172.18.29.206 -p 2222', save: true, cwd: '' }
+  ],
+  [
+    'a pasted ssh line, unquoted, keeps its -p as the patch',
+    ['pro', 'ssh', 'ssh', 'wanlian@172.18.29.206', '-p', '2222'],
+    'POST',
+    '/pro/ssh',
+    {
+      op: 'connect',
+      target: 'ssh wanlian@172.18.29.206',
+      save: true,
+      cwd: '',
+      patch: { port: '2222' }
+    }
+  ],
+  [
+    '--no-pin is the opt-out of the default',
+    ['pro', 'ssh', 'prod', '--no-pin'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'prod', save: false, cwd: '' }
+  ],
+  [
+    '--dir becomes cwd, empty for the runner to fill',
+    ['pro', 'ssh', 'prod', '--dir', '/tmp'],
+    'POST',
+    '/pro/ssh',
+    { op: 'connect', target: 'prod', save: true, cwd: '/tmp' }
+  ],
+  ['--json rides along', ['pro', 'ssh', 'prod', '--json'], 'POST', '/pro/ssh', { op: 'connect', target: 'prod', save: true, cwd: '' }, true],
+
+  [
+    'add pins, with the fields named beside it',
+    ['pro', 'ssh', 'add', 'prod', '--label', 'lab'],
+    'POST',
+    '/pro/ssh',
+    { op: 'save', target: 'prod', patch: { label: 'lab' } }
+  ],
+  [
+    'pin is an alias',
+    ['pro', 'ssh', 'pin', 'prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'save', target: 'prod' }
+  ],
+  [
+    '-l is user and -J is jump, as they are to ssh',
+    ['pro', 'ssh', 'add', 'box', '-l', 'root', '-J', 'bastion'],
+    'POST',
+    '/pro/ssh',
+    { op: 'save', target: 'box', patch: { user: 'root', proxyJump: 'bastion' } }
+  ],
+  [
+    'edit renames',
+    ['pro', 'ssh', 'edit', 'prod', '--label', 'lab'],
+    'POST',
+    '/pro/ssh',
+    { op: 'edit', target: 'prod', patch: { label: 'lab' } }
+  ],
+  [
+    'rename is an alias',
+    ['pro', 'ssh', 'rename', 'prod', '--host', '10.0.0.9'],
+    'POST',
+    '/pro/ssh',
+    { op: 'edit', target: 'prod', patch: { host: '10.0.0.9' } }
+  ],
+  [
+    'an empty field clears it, which is why has() is the test',
+    ['pro', 'ssh', 'edit', 'prod', '--jump', ''],
+    'POST',
+    '/pro/ssh',
+    { op: 'edit', target: 'prod', patch: { proxyJump: '' } }
+  ],
+  ['rm hides', ['pro', 'ssh', 'rm', 'prod'], 'POST', '/pro/ssh', { op: 'hide', target: 'prod' }],
+  [
+    'remove and hide are aliases',
+    ['pro', 'ssh', 'hide', 'prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'hide', target: 'prod' }
+  ],
+  [
+    'restore takes the hidden key',
+    ['pro', 'ssh', 'restore', 'alias:prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'unhide', key: 'alias:prod' }
+  ],
+  ['test probes', ['pro', 'ssh', 'test', 'prod'], 'POST', '/pro/ssh', { op: 'probe', target: 'prod' }],
+  [
+    'a probe takes the same override a connect does',
+    ['pro', 'ssh', 'probe', 'prod', '-p', '2222'],
+    'POST',
+    '/pro/ssh',
+    { op: 'probe', target: 'prod', patch: { port: '2222' } }
+  ],
+  [
+    'setup publishes the default key and runs',
+    ['pro', 'ssh', 'setup', 'prod'],
+    'POST',
+    '/pro/ssh',
+    { op: 'setup', target: 'prod', key: '', run: true }
+  ],
+  [
+    'setup --plan runs nothing',
+    ['pro', 'ssh', 'setup', 'prod', '--plan'],
+    'POST',
+    '/pro/ssh',
+    { op: 'setup', target: 'prod', key: '', run: false }
+  ],
+  [
+    'under setup, --key is the public key and no patch rides along with it',
+    ['pro', 'ssh', 'setup', 'prod', '--key', '~/.ssh/id_ed25519.pub'],
+    'POST',
+    '/pro/ssh',
+    { op: 'setup', target: 'prod', key: '~/.ssh/id_ed25519.pub', run: true }
+  ],
+  [
+    'setup still takes the fields that are not the key',
+    ['pro', 'ssh', 'setup', 'prod', '--key', 'k.pub', '--port', '2222'],
+    'POST',
+    '/pro/ssh',
+    { op: 'setup', target: 'prod', key: 'k.pub', run: true, patch: { port: '2222' } }
+  ],
+
+  ['term opens a shell, with the directory left to the runner', ['pro', 'term'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '' }],
+  ['shell is an alias', ['pro', 'shell'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '' }],
+  ['term --dir', ['pro', 'term', '--dir', '/tmp'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '/tmp' }]
+]
+
+/**
+ * The verb a row reports. Every `ssh` spelling is one verb whatever it does, and
+ * a local shell is the other one: that pairing is what lets one renderer answer
+ * for both without the subcommand being carried through the call.
+ */
+function verbOf(argv: readonly string[]): ProCliVerb {
+  return argv[1] === 'term' || argv[1] === 'shell' ? 'term' : 'ssh'
+}
+
+describe('parseProCli: machines and terminals', () => {
+  it.each(SSH)('%s', (_name, argv, method, path, body, json) => {
+    expect(parseProCli(argv)).toEqual(call(verbOf(argv), method, path, body, json ?? false))
+  })
+
+  it('leaves the terminal directory empty for the runner, which is the only layer that knows cwd', () => {
+    expect(parsedCall(['pro', 'term']).body).toMatchObject({ cwd: '' })
   })
 })

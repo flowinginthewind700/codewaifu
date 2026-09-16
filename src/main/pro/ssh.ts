@@ -28,14 +28,20 @@ import {
   joinFor,
   keygenLine,
   makeMachine,
+  editMachine,
+  filterHidden,
+  machineKey,
+  normalizeHidden,
   parseSshConfig,
   parseTarget,
   probeArgv,
   rankMachines,
   setupLines,
   sshLine,
+  type MachineEdit,
   type MachineInput,
   type ProbeStatus,
+  type HiddenMachine,
   type SshMachine
 } from '../../shared/ssh'
 import { proDir, readJson, writeJsonAtomic } from './env'
@@ -49,6 +55,13 @@ export interface MachinesFile {
   version: number
   updatedAt: number
   machines: SshMachine[]
+  /**
+   * Identities (`machineKey` strings) the human dismissed from the palette.
+   * Only rows we do not own land here - a `~/.ssh/config` alias or a herdr
+   * report - because there is nothing of ours to delete and rewriting their
+   * file was never asked for. Restoring is one list away.
+   */
+  hidden?: string[]
 }
 
 /**
@@ -227,17 +240,68 @@ export class SshService {
   }
 
   /**
+   * The config file this roster reads, so the palette can offer "open it"
+   * instead of only offering to work around it. Empty when there is no home to
+   * build a path from.
+   */
+  configFile(): string {
+    return this.sshConfigPath
+  }
+
+  /** The home an empty `~` resolves against; '' when this service has none. */
+  homeDir(): string {
+    return this.home
+  }
+  /**
    * The merged, deduped, ranked roster the palette shows. `query` filters it the
    * way the palette's input does, so the renderer never re-implements ranking.
    */
   async roster(query = ''): Promise<SshMachine[]> {
     const herdr = await this.herdrMachines().catch(() => [] as SshMachine[])
-    const merged = dedupeMachines([...this.saved(), ...this.config(), ...herdr])
+    const merged = filterHidden(
+      dedupeMachines([...this.saved(), ...this.config(), ...herdr]),
+      this.hidden()
+    )
     return rankMachines(merged, query)
   }
 
+  /** The dismissed identities, as stored. Never throws. */
+  hidden(): string[] {
+    return normalizeHidden(this.read(this.file)?.hidden ?? [])
+  }
+
+  /** Every hidden identity resolved back to a row, for the restore list. */
+  async hiddenMachines(): Promise<HiddenMachine[]> {
+    const keys = this.hidden()
+    if (!keys.length) return []
+    const herdr = await this.herdrMachines().catch(() => [] as SshMachine[])
+    const wanted = new Set(keys.map((key) => key.toLowerCase()))
+    const rows: HiddenMachine[] = []
+    const seen = new Set<string>()
+    for (const machine of [...this.config(), ...herdr]) {
+      const key = machineKey(machine).toLowerCase()
+      if (!wanted.has(key) || seen.has(key)) continue
+      seen.add(key)
+      rows.push({ key, machine, stale: false })
+    }
+    // An identity no source reports any more (the `Host` block was deleted, or
+    // herdr stopped knowing the box) still has to be droppable, so it gets a
+    // placeholder row rather than disappearing with no way back.
+    for (const key of keys) {
+      const lower = key.toLowerCase()
+      if (seen.has(lower)) continue
+      seen.add(lower)
+      rows.push({
+        key: lower,
+        machine: makeMachine({ id: `hidden:${lower}`, host: lower, label: lower, source: 'config' }),
+        stale: true
+      })
+    }
+    return rows.sort((a, b) => a.machine.label.localeCompare(b.machine.label))
+  }
+
   /* ---------------------------------------------------------------- *
-  * Save / remove
+  * Save / edit / remove / hide
   * ---------------------------------------------------------------- */
 
   /**
@@ -261,8 +325,32 @@ export class SshService {
     const stored: SshMachine = { ...machine, id }
     const list = this.saved().filter((entry) => entry.id !== id)
     list.push(stored)
-    const file: MachinesFile = { version: MACHINES_VERSION, updatedAt: this.now(), machines: list }
+    // Pinning is an explicit decision made after any hide of the same box, so it
+    // wins: leaving the key hidden would make the pin button look broken.
+    const file: MachinesFile = {
+      version: MACHINES_VERSION,
+      updatedAt: this.now(),
+      machines: list,
+      hidden: this.hidden().filter((key) => key !== machineKey(stored).toLowerCase())
+    }
     return this.write(this.file, file) ? stored : null
+  }
+
+  /**
+   * Edit a roster row, which for anything we do not own means *fork* it: the
+   * stored copy is ours, the `~/.ssh/config` block stays exactly as it was.
+   * The original identity is hidden when the fork is meant to replace it, so
+   * the palette does not grow a second row for one box.
+   */
+  edit(machine: SshMachine, patch: MachineEdit): SshMachine | null {
+    const next = editMachine(machine, patch)
+    if (!next.host && !next.alias) return null
+    const stored = this.save(next)
+    if (!stored) return null
+    const from = machineKey(machine).toLowerCase()
+    const to = machineKey(stored).toLowerCase()
+    if (machine.source !== 'saved' && from !== to) this.hide(machine)
+    return stored
   }
 
   /** Unpin a machine. Config and herdr entries are not ours to remove. */
@@ -270,7 +358,46 @@ export class SshService {
     const list = this.saved()
     const next = list.filter((entry) => entry.id !== id)
     if (next.length === list.length) return false
-    const file: MachinesFile = { version: MACHINES_VERSION, updatedAt: this.now(), machines: next }
+    const file: MachinesFile = {
+      version: MACHINES_VERSION,
+      updatedAt: this.now(),
+      machines: next,
+      hidden: this.hidden()
+    }
+    return this.write(this.file, file)
+  }
+
+  /**
+   * Dismiss a row we do not own. Returns false when there was nothing to do -
+   * an unknown machine, or one already hidden - so the caller can say "already
+   * hidden" instead of pretending to have changed something.
+   */
+  hide(machine: SshMachine): boolean {
+    if (machine.source === 'saved') return this.remove(machine.id)
+    const key = machineKey(machine).toLowerCase()
+    const hidden = this.hidden()
+    if (hidden.includes(key)) return false
+    return this.writeHidden([...hidden, key])
+  }
+
+  /** Bring a dismissed row back. `key` may be a `machineKey` or a machine id. */
+  unhide(key: string): boolean {
+    const wanted = String(key || '').trim().toLowerCase()
+    if (!wanted) return false
+    const hidden = this.hidden()
+    const next = hidden.filter((entry) => entry !== wanted)
+    if (next.length === hidden.length) return false
+    return this.writeHidden(next)
+  }
+
+  /** The only writer of the hidden list, so machines are never dropped by it. */
+  private writeHidden(hidden: readonly string[]): boolean {
+    const file: MachinesFile = {
+      version: MACHINES_VERSION,
+      updatedAt: this.now(),
+      machines: this.saved(),
+      hidden: normalizeHidden(hidden)
+    }
     return this.write(this.file, file)
   }
 

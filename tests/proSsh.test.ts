@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { SshService, type MachinesFile, type SshDeps, type SshRunResult } from '../src/main/pro/ssh'
-import type { SshMachine } from '../src/shared/ssh'
+import { machineKey, type SshMachine } from '../src/shared/ssh'
 
 const HOME = '/home/tester'
 
@@ -233,5 +233,170 @@ describe('setup + connect lines', () => {
   it('builds the interactive connect line', () => {
     const svc = service(world())
     expect(svc.connectLine(svc.save({ host: 'box', user: 'alice', port: 2222 })!)).toBe('ssh -p 2222 alice@box')
+  })
+})
+
+/* The two verbs that let a human fix a wrong row. Both have a boundary worth
+   pinning down: `~/.ssh/config` is read and never written, and a hide has to
+   survive every other write to the same file. */
+
+/** The `prod` alias from CONFIG, as the roster sees it. */
+function prodAlias(svc: SshService): SshMachine {
+  const alias = svc.config().find((machine) => machine.alias === 'prod')
+  if (!alias) throw new Error('the fixture config has no prod alias')
+  return alias
+}
+
+describe('edit', () => {
+  it('upserts a saved machine instead of leaving the old row beside the new', () => {
+    const svc = service(world())
+    const saved = svc.save({ host: 'box', user: 'alice', label: 'old' })!
+    const next = svc.edit(saved, { label: 'new', port: 2222 })!
+    expect(svc.saved()).toHaveLength(1)
+    expect(next.id).toBe(saved.id)
+    expect(next.label).toBe('new')
+    expect(next.port).toBe(2222)
+  })
+
+  it('forks a config alias into our roster and hides the original', async () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const alias = prodAlias(svc)
+    const next = svc.edit(alias, { port: 22 })!
+    expect(next.source).toBe('saved')
+    // The new port is only reachable because the alias went with it.
+    expect(next.alias).toBe('')
+    expect(svc.connectLine(next)).toBe('ssh -p 22 deploy@10.0.0.5')
+    // Their file is untouched, and the palette shows one row for the box
+    // rather than the fork sitting next to the thing it forked from.
+    expect(w.config).toBe(CONFIG)
+    expect(svc.hidden()).toEqual([machineKey(alias).toLowerCase()])
+    const roster = await svc.roster()
+    expect(roster.map((machine) => machine.id)).toEqual([next.id])
+  })
+
+  it('renames a config alias without forking its identity away', async () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const next = svc.edit(prodAlias(svc), { label: 'production' })!
+    // A label is not a connection field, so the alias stays and `ssh prod` is
+    // still what gets dialled - the config block remains the truth.
+    expect(next.alias).toBe('prod')
+    expect(svc.connectLine(next)).toBe('ssh prod')
+    expect(await svc.roster()).toHaveLength(1)
+  })
+
+  it('refuses an edit that would leave nothing to dial', () => {
+    const svc = service(world())
+    const saved = svc.save({ host: 'box' })!
+    expect(svc.edit(saved, { host: '', alias: '' })).toBeNull()
+    expect(svc.saved()).toEqual([saved])
+  })
+})
+
+describe('hide / unhide', () => {
+  it('deletes a machine we own, and hides nothing for it', () => {
+    const svc = service(world())
+    const saved = svc.save({ host: 'box' })!
+    expect(svc.hide(saved)).toBe(true)
+    expect(svc.saved()).toHaveLength(0)
+    expect(svc.hidden()).toEqual([])
+  })
+
+  it('records a config row instead of touching the file, and says so twice', async () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const alias = prodAlias(svc)
+    expect(svc.hide(alias)).toBe(true)
+    expect(await svc.roster()).toEqual([])
+    expect(w.config).toBe(CONFIG)
+    // Already hidden is not a second change, and claiming one would be a lie.
+    expect(svc.hide(alias)).toBe(false)
+  })
+
+  it('brings a hidden row back, and reports a key it never held', async () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const alias = prodAlias(svc)
+    svc.hide(alias)
+    expect(svc.unhide(machineKey(alias))).toBe(true)
+    expect(await svc.roster()).toHaveLength(1)
+    expect(svc.unhide('alias:never-hidden')).toBe(false)
+    expect(svc.unhide('  ')).toBe(false)
+  })
+
+  it('lets a later pin win over an earlier hide', async () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const alias = prodAlias(svc)
+    svc.hide(alias)
+    // Pinning the same box afterwards is an explicit decision made later;
+    // leaving the key hidden would make the pin button look broken.
+    svc.save({ host: '10.0.0.5', user: 'deploy', alias: 'prod', label: 'prod' })
+    expect(svc.hidden()).toEqual([])
+    expect(await svc.roster()).toHaveLength(1)
+  })
+
+  it('keeps the hidden list through an unrelated remove', () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const alias = prodAlias(svc)
+    svc.hide(alias)
+    const saved = svc.save({ host: 'other' })!
+    expect(svc.remove(saved.id)).toBe(true)
+    expect(svc.hidden()).toEqual([machineKey(alias).toLowerCase()])
+  })
+
+  it('reports the config it reads, so the palette can offer to open it', () => {
+    expect(service(world()).configFile()).toMatch(/\.ssh[/\\]config$/)
+    expect(service(world({})).homeDir()).toBe(HOME)
+  })
+})
+
+describe('hiddenMachines', () => {
+  it('resolves a hidden key back to the row that reported it', async () => {
+    const w = world({ config: CONFIG })
+    const svc = service(w)
+    const alias = prodAlias(svc)
+    svc.hide(alias)
+    const rows = await svc.hiddenMachines()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].stale).toBe(false)
+    expect(rows[0].key).toBe(machineKey(alias).toLowerCase())
+    expect(rows[0].machine.host).toBe('10.0.0.5')
+  })
+
+  it('keeps an identity no source reports any more, so it can still be dropped', async () => {
+    const svc = service(
+      world({ machines: { version: 1, updatedAt: 1000, machines: [], hidden: ['alias:gone'] } })
+    )
+    const rows = await svc.hiddenMachines()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].stale).toBe(true)
+    // The key travels with the row rather than being recomputed from it: a
+    // placeholder would produce a different key and be stuck in the list.
+    expect(rows[0].key).toBe('alias:gone')
+    expect(svc.unhide(rows[0].key)).toBe(true)
+    expect(await svc.hiddenMachines()).toEqual([])
+  })
+
+  it('folds a herdr report in too, and is empty when nothing was hidden', async () => {
+    const herdr: SshMachine = {
+      id: 'herdr:1',
+      label: 'herdr-box',
+      host: '10.9.9.9',
+      port: 0,
+      user: '',
+      identityFile: '',
+      proxyJump: '',
+      source: 'herdr',
+      alias: ''
+    }
+    const svc = service(world(), { herdrMachines: () => Promise.resolve([herdr]) })
+    expect(await svc.hiddenMachines()).toEqual([])
+    svc.hide(herdr)
+    const rows = await svc.hiddenMachines()
+    expect(rows.map((row) => row.machine.label)).toEqual(['herdr-box'])
+    expect(rows[0].stale).toBe(false)
   })
 })

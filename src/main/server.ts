@@ -11,10 +11,12 @@ import {
   isProReject,
   parseProAnswer,
   parseProLedger,
+  parseProSsh,
   parseProTask,
   type ProActionRequest,
   type ProLedgerRequest,
   type ProResult,
+  type ProSshRequest,
   type ProTaskRequest
 } from '../shared/proIpc'
 import {
@@ -50,7 +52,10 @@ export const PRO_STREAM_HEARTBEAT_MS = 20_000
  *
  * Deliberately narrow: there is no `paneOp`, so a script can drive tasks, intent
  * and attention decisions but can never become a second keyboard for a terminal
- * (MVP section 9).
+ * that is already open (MVP section 9). `sshOp` belongs here because a session
+ * it opens types one known connect line into a pane it just created, which is
+ * provisioning; addressing keystrokes at somebody's live pane is not, and stays
+ * out.
  */
 export interface ProApi {
   online(): boolean
@@ -58,6 +63,8 @@ export interface ProApi {
   act(request: ProActionRequest): Promise<ProResult>
   taskOp(request: ProTaskRequest): Promise<ProResult>
   ledgerOp(request: ProLedgerRequest): ProResult
+  /** The machine roster and the sessions opened from it (`/pro/ssh`). */
+  sshOp(request: ProSshRequest): Promise<ProResult>
   /**
    * Subscribe to the projection; `/pro/stream` hands one listener per watcher
    * to the bench and unsubscribes when that watcher's socket closes.
@@ -399,7 +406,7 @@ export class HookServer {
     }
 
     if (route === 'pro') {
-      await this.handlePro(req, res, parts, method, url.pathname)
+      await this.handlePro(req, res, parts, method, url)
       return
     }
 
@@ -407,7 +414,7 @@ export class HookServer {
   }
 
   /**
-   * F6, the bench as an API. Five routes and no policy: each one validates with
+   * F6, the bench as an API. Six routes and no policy: each one validates with
    * the same parser the IPC channels use and hands the typed request to the same
    * `ProService` the window talks to, so a script and a click cannot disagree
    * about what is legal, or about what needs the human.
@@ -420,8 +427,11 @@ export class HookServer {
     res: http.ServerResponse,
     parts: string[],
     method: string,
-    pathname: string
+    // The parsed request target, not just its path: `/pro/ssh?q=` carries its
+    // filter in the query, so this handler needs the whole URL.
+    url: URL
   ): Promise<void> {
+    const pathname = url.pathname
     const sub = parts[1] || ''
     const pro = this.deps.pro?.() ?? null
     if (!pro) {
@@ -452,6 +462,22 @@ export class HookServer {
 
     if (method === 'GET' && sub === 'stream') {
       this.streamPro(req, res, pro)
+      return
+    }
+
+    if (method === 'GET' && sub === 'ssh') {
+      // The roster as a read, because "which machines does this box know" is a
+      // question a script asks on its own. The filter rides in the query so
+      // `curl` is enough to search, and the payload still goes through the same
+      // parser a POST does - one place decides what a legal filter is.
+      const query = url.searchParams.get('q') ?? url.searchParams.get('query') ?? ''
+      const request = parseProSsh({ op: 'list', query })
+      if (isProReject(request)) {
+        sendJson(res, 400, { ok: false, code: request.code, error: request.error })
+        return
+      }
+      const result = await pro.sshOp(request)
+      sendJson(res, proStatus(result), result)
       return
     }
 
@@ -501,6 +527,17 @@ export class HookServer {
         return
       }
       const result = pro.ledgerOp(request)
+      sendJson(res, proStatus(result), result)
+      return
+    }
+
+    if (sub === 'ssh') {
+      const request = parseProSsh(body)
+      if (isProReject(request)) {
+        sendJson(res, 400, { ok: false, code: request.code, error: request.error })
+        return
+      }
+      const result = await pro.sshOp(request)
       sendJson(res, proStatus(result), result)
       return
     }
@@ -609,6 +646,10 @@ const PRO_STATUS: Record<string, number> = {
   'bad-task': 400,
   'unknown-action': 400,
   'no-dir': 400,
+  // A machine the caller failed to name is their argument, not a decision the
+  // bench declined: exit 2 (usage) sends them back to the command line, exit 5
+  // would send them looking for a policy.
+  'bad-machine': 400,
   'write-failed': 500,
   internal: 500
 }

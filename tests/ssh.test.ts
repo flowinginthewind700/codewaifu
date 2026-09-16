@@ -9,13 +9,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyProbe,
+  changesConnection,
   clampPort,
   dedupeMachines,
+  editMachine,
   expandHome,
+  filterHidden,
+  isHiddenRemoval,
   baseName,
   joinFor,
+  machineEditOf,
+  machineKey,
   makeMachine,
   machineSlug,
+  normalizeHidden,
   parseSshConfig,
   parseSshCommand,
   parseTarget,
@@ -428,5 +435,156 @@ describe('baseName', () => {
   it('ignores a trailing separator, and answers empty for empty', () => {
     expect(baseName('/home/t/.ssh/')).toBe('.ssh')
     expect(baseName('')).toBe('')
+  })
+})
+
+/* Editing and dismissing a row are the two verbs the palette grew, and both
+   have a rule that is invisible until it bites: an edit that keeps a config
+   alias silently discards every other field, and a hide that followed a saved
+   row would delete a record we do not own. */
+
+describe('editMachine', () => {
+  const config = makeMachine({
+    id: 'config:prod',
+    host: '10.0.0.5',
+    port: 2200,
+    user: 'deploy',
+    alias: 'prod',
+    source: 'config'
+  })
+
+  it('keeps the durable id, so an edit upserts instead of duplicating', () => {
+    const next = editMachine(config, { label: 'prod (via bastion)' })
+    expect(next.id).toBe('config:prod')
+    expect(next.label).toBe('prod (via bastion)')
+  })
+
+  it('always yields a machine we own, because the edit is ours', () => {
+    // `~/.ssh/config` is a file we were asked to read; rewriting a block in it
+    // from a desktop app is not a surprise worth springing.
+    expect(editMachine(config, { port: 22 }).source).toBe('saved')
+    expect(editMachine(makeMachine({ host: 'h', source: 'herdr' }), { label: 'x' }).source).toBe(
+      'saved'
+    )
+  })
+
+  it('keeps a config alias through a rename, where the block is still the truth', () => {
+    expect(editMachine(config, { label: 'prod box' }).alias).toBe('prod')
+    expect(editMachine(config, { host: '10.0.0.5', user: 'deploy', port: '2200' }).alias).toBe(
+      'prod'
+    )
+  })
+
+  it('drops the alias the moment anything ssh dials changes', () => {
+    // `sshArgv` short-circuits on the alias, so keeping it while the human
+    // retypes the port would dial `ssh prod` and throw the port away: a form
+    // that accepts your input and then does not use it.
+    for (const patch of [
+      { port: 22 },
+      { host: '10.0.0.9' },
+      { user: 'root' },
+      { identityFile: '~/.ssh/other' },
+      { proxyJump: 'bastion' }
+    ]) {
+      expect(editMachine(config, patch).alias).toBe('')
+    }
+    expect(editMachine(config, { port: 22 }).port).toBe(22)
+  })
+
+  it('treats an absent field as untouched and an empty one as cleared', () => {
+    const jumped = makeMachine({ host: 'h', proxyJump: 'bastion', identityFile: '~/.ssh/k' })
+    expect(editMachine(jumped, {}).proxyJump).toBe('bastion')
+    expect(editMachine(jumped, { label: 'x' }).identityFile).toBe('~/.ssh/k')
+    expect(editMachine(jumped, { proxyJump: '' }).proxyJump).toBe('')
+    // An empty port is not a missing one: it means "let ssh use 22".
+    expect(editMachine(config, { port: '' }).port).toBe(0)
+  })
+
+  it('lets an explicit alias win, since that is the human overriding the rule', () => {
+    expect(editMachine(config, { port: 2222, alias: ' prod2 ' }).alias).toBe('prod2')
+  })
+})
+
+describe('changesConnection', () => {
+  const machine = makeMachine({
+    host: '10.0.0.5',
+    port: 2200,
+    user: 'deploy',
+    alias: 'prod',
+    source: 'config'
+  })
+
+  it('is false for a rename, and for retyping what is already there', () => {
+    expect(changesConnection(machine, { label: 'whatever' })).toBe(false)
+    expect(changesConnection(machine, {})).toBe(false)
+    expect(changesConnection(machine, { host: ' 10.0.0.5 ', user: 'deploy ', port: '2200' })).toBe(
+      false
+    )
+  })
+
+  it('is true for anything ssh would dial differently', () => {
+    expect(changesConnection(machine, { host: '10.0.0.6' })).toBe(true)
+    expect(changesConnection(machine, { port: 22 })).toBe(true)
+    expect(changesConnection(machine, { port: '' })).toBe(true)
+    expect(changesConnection(machine, { user: 'root' })).toBe(true)
+    expect(changesConnection(machine, { identityFile: '~/.ssh/id_rsa' })).toBe(true)
+    expect(changesConnection(machine, { proxyJump: 'bastion' })).toBe(true)
+  })
+})
+
+describe('machineEditOf', () => {
+  it('pre-fills every field the form owns, so it opens filled rather than empty', () => {
+    const machine = makeMachine({
+      host: 'h',
+      port: 2222,
+      user: 'u',
+      identityFile: '~/.ssh/k',
+      proxyJump: 'j',
+      alias: 'a',
+      label: 'L'
+    })
+    expect(machineEditOf(machine)).toEqual({
+      label: 'L',
+      host: 'h',
+      port: 2222,
+      user: 'u',
+      identityFile: '~/.ssh/k',
+      proxyJump: 'j',
+      alias: 'a'
+    })
+  })
+})
+
+describe('dismissing a row', () => {
+  it('hides what we were only told about and deletes what we own', () => {
+    expect(isHiddenRemoval(makeMachine({ host: 'h', source: 'config' }))).toBe(true)
+    expect(isHiddenRemoval(makeMachine({ host: 'h', source: 'herdr' }))).toBe(true)
+    expect(isHiddenRemoval(makeMachine({ host: 'h', source: 'saved' }))).toBe(false)
+  })
+
+  it('filters a roster by identity, case-insensitively', () => {
+    const prod = makeMachine({ host: '10.0.0.5', alias: 'prod', source: 'config' })
+    const other = makeMachine({ host: '10.0.0.6', source: 'config' })
+    expect(filterHidden([prod, other], [machineKey(prod).toUpperCase()]).map((m) => m.host)).toEqual(
+      ['10.0.0.6']
+    )
+    // No hidden list is the common case, and it must not copy or reorder.
+    expect(filterHidden([prod, other], [])).toEqual([prod, other])
+  })
+
+  it('never hides a saved row, because a later pin is the later decision', () => {
+    const saved = makeMachine({ host: '10.0.0.5', user: 'deploy', source: 'saved' })
+    const key = machineKey(makeMachine({ host: '10.0.0.5', user: 'deploy', source: 'config' }))
+    expect(key).toBe(machineKey(saved))
+    expect(filterHidden([saved], [key])).toHaveLength(1)
+  })
+
+  it('normalises a stored list: lowercased, deduped, in order, no blanks', () => {
+    expect(normalizeHidden([' A@B ', 'a@b', '', null, undefined, 42, 'c'])).toEqual([
+      'a@b',
+      '42',
+      'c'
+    ])
+    expect(normalizeHidden([])).toEqual([])
   })
 })

@@ -22,6 +22,7 @@
  * drawing character is a mojibake risk on a console we cannot see.
  */
 import { attentionActions, needsRecovery, recoveryStepText, waitedMs } from './pro'
+import { machineKey, sshLine } from './ssh'
 import type {
   AttentionItem,
   AttentionKind,
@@ -34,6 +35,7 @@ import type {
   TaskRecord,
   TaskView
 } from './pro'
+import type { HiddenMachine, MachineEdit, SshMachine } from './ssh'
 import type { ProResult } from './proIpc'
 
 export type ProCliVerb =
@@ -50,6 +52,8 @@ export type ProCliVerb =
   | 'remove'
   | 'adopt'
   | 'purge'
+  | 'ssh'
+  | 'term'
 
 /** One parsed command: exactly what the relay needs, and nothing else. */
 export interface ProCliCall {
@@ -75,6 +79,8 @@ export type ProCliCode =
   | 'needs-target'
   | 'needs-text'
   | 'needs-title'
+  | 'needs-field'
+  | 'bad-arg'
 
 export interface ProCliReject {
   kind: 'reject'
@@ -146,7 +152,18 @@ const VALUE_FLAGS = new Set([
   'base',
   'prompt',
   'title',
-  'limit'
+  'limit',
+  // The fields an ssh destination can be named with. They ride beside the
+  // target (`pro ssh add box --port 2222`) exactly as they ride beside it in the
+  // connect palette, and the service is still the layer that decides what a
+  // legal value is.
+  'label',
+  'host',
+  'port',
+  'user',
+  'key',
+  'jump',
+  'alias'
 ])
 
 const SHORT_FLAGS: Record<string, string> = {
@@ -155,7 +172,13 @@ const SHORT_FLAGS: Record<string, string> = {
   a: 'action',
   d: 'dir',
   C: 'dir',
-  n: 'limit'
+  n: 'limit',
+  // Only the shorts that mean the same thing to ssh(1): `-p` port, `-l` user,
+  // `-J` jump. `-i` stays `--item` (it was here first, and a task id is not a
+  // key), so the identity file is spelled `--key`.
+  p: 'port',
+  l: 'user',
+  J: 'jump'
 }
 
 export const PRO_CLI_USAGE = `CodeWaifu Pro on the command line
@@ -196,6 +219,34 @@ Task state:
     --close                   and close the shell under it (default: keep it running)
   purge                       close every workspace a removal left running
   log <taskId>                the audit trail; --digest for goal / plan / next
+
+Machines:
+  ssh                         the roster: what this box knows how to reach
+  ssh ls [filter]             the same, filtered; --hidden lists dismissed rows
+  ssh keys                    the public keys in ~/.ssh, and the default one
+  ssh <target>                open a pane and connect; --no-pin to not save it
+    <target>                  a roster name, user@host[:port], or a whole
+                              pasted "ssh ..." line
+    --dir <path>              where the pane starts (default: here)
+  ssh add <target>            pin it to the roster without connecting
+  ssh edit <target>           rename it, or change what ssh dials
+  ssh rm <target>             dismiss it: a pinned row is deleted, a row read
+                              from ~/.ssh/config is only hidden (that file is
+                              ours to read, never to rewrite)
+  ssh restore <key>           bring a hidden row back (keys: ssh ls --hidden)
+  ssh test <target>           can we get in without typing a password?
+  ssh setup <target>          make it passwordless
+    --key <path.pub>          publish this public key instead of the default
+    --plan                    print the lines it would type, and type nothing
+
+  Fields beside any target: --label --host --port|-p --user|-l --key --jump|-J
+  --alias. Naming a field beside a target overrides it for that one command;
+  an empty value clears it. Under setup, --key is the public key to publish,
+  as it is to ssh-copy-id; everywhere else it is the identity file ssh dials
+  with, as it is to ssh.
+
+Terminal:
+  term                        a plain local shell; --dir <path> (default: here)
 
 Text after -- is taken literally, so a prompt may start with a dash.
 Exits: 0 ok, 2 bad arguments, 3 bench or herdr not running, 4 no such task or
@@ -291,6 +342,246 @@ function str(value: unknown): string {
 function num(value: unknown): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+/* ------------------------------------------------------------------ *
+ * ssh: argv -> the one request shape the palette also sends
+ * ------------------------------------------------------------------ */
+
+/**
+ * The subcommands `pro ssh` answers to. Everything else is a destination, which
+ * is ssh(1)'s own rule and the reason `pro ssh prod` and
+ * `pro ssh wanlian@172.18.29.206 -p 2222` both just work: no flag says "this is
+ * a machine", and nothing has to be quoted to be pasted.
+ */
+const SSH_SUBS = new Set([
+  'ls',
+  'list',
+  'hidden',
+  'keys',
+  'add',
+  'pin',
+  'edit',
+  'rename',
+  'rm',
+  'remove',
+  'hide',
+  'unhide',
+  'restore',
+  'test',
+  'probe',
+  'setup',
+  'connect',
+  'go',
+  'open'
+])
+
+/**
+ * Flag -> the field it names, in the service's own vocabulary. This table is a
+ * mapping and never a second idea about what a machine is: the patch it builds
+ * goes through `editOf` on the far side exactly like the connect palette's, so
+ * the CLI cannot name a field the bench would refuse.
+ */
+const SSH_FIELDS: ReadonlyArray<readonly [flag: string, field: keyof MachineEdit]> = [
+  ['label', 'label'],
+  ['host', 'host'],
+  ['port', 'port'],
+  ['user', 'user'],
+  ['key', 'identityFile'],
+  ['jump', 'proxyJump'],
+  ['alias', 'alias']
+]
+
+/** Which machine fields this command line actually named, as flags. */
+function namedFields(flags: Map<string, string>): string[] {
+  return SSH_FIELDS.filter(([flag]) => flags.has(flag)).map(([flag]) => `--${flag}`)
+}
+
+/**
+ * The fields named beside a destination.
+ *
+ * `flags.has` is the test, not truthiness, and that distinction is the feature:
+ * `--port 2222` overrides the port for this one command and `--port ''` clears
+ * it, so a command can undo what a row says instead of only adding to it.
+ *
+ * `setup` skips `key`. Under `setup` the same flag names the *public* key being
+ * published, as `-i` does to ssh-copy-id, and folding that into the patch would
+ * quietly change what ssh dials with on the way to changing what it copies.
+ */
+function sshPatch(flags: Map<string, string>, publish = false): MachineEdit {
+  const patch: MachineEdit = {}
+  for (const [flag, field] of SSH_FIELDS) {
+    if (!flags.has(flag)) continue
+    if (publish && flag === 'key') continue
+    patch[field] = flags.get(flag) ?? ''
+  }
+  return patch
+}
+
+/** An empty patch is left out, so "no override" stays a distinct shape. */
+function over(patch: MachineEdit): Record<string, unknown> {
+  return Object.keys(patch).length ? { patch } : {}
+}
+
+function needsTarget(sub: string): ProCliReject {
+  return reject(
+    'needs-target',
+    `${sub} needs a machine: codewaifu pro ssh ${sub} prod, or user@host`
+  )
+}
+
+/**
+ * Ops that name no machine have nowhere to put the fields beside one, and this
+ * module's rule is that a flag is never quietly ignored: `ssh keys --port 22`
+ * has to say so instead of printing keys and leaving the human believing the
+ * port mattered.
+ */
+function strayFields(sub: string, flags: Map<string, string>): ProCliReject | null {
+  const named = namedFields(flags)
+  if (!named.length) return null
+  return reject('bad-arg', `${sub} names no machine, so ${named.join(' ')} has nothing to apply to`)
+}
+
+/**
+ * `pro ssh ...`. One route (`/pro/ssh`) and one parser (`parseProSsh`) on the
+ * far side, so every subcommand here is a spelling and none of them is a
+ * capability the connect palette does not already have.
+ */
+function parseSsh(
+  positional: readonly string[],
+  flags: Map<string, string>,
+  switches: Set<string>,
+  json: boolean
+): ProCliParse {
+  const head = (positional[0] ?? '').toLowerCase()
+  const known = SSH_SUBS.has(head)
+  // A bare `pro ssh` reads the roster rather than connecting nowhere: the verb
+  // with nothing after it is the question "what can I reach from here".
+  const sub = known ? head : positional.length ? 'connect' : 'ls'
+  const rest = known ? positional.slice(1) : positional
+  // Joined, so a pasted `ssh user@host -p 2222` survives the shell having split
+  // it: `targetOf` reads a whitespace-bearing target as a command line, and the
+  // flags that made it into our own table ride along as the patch.
+  const target = rest.join(' ').trim()
+  const patch = sshPatch(flags, sub === 'setup')
+
+  switch (sub) {
+    case 'ls':
+    case 'list': {
+      const hidden = switches.has('hidden')
+      if (rest.length > (hidden ? 0 : 1)) {
+        return reject(
+          'bad-arg',
+          hidden
+            ? 'ls --hidden takes no filter: codewaifu pro ssh ls --hidden'
+            : 'ls takes one filter: codewaifu pro ssh ls prod'
+        )
+      }
+      const stray = strayFields('ls', flags)
+      if (stray) return stray
+      if (hidden) return call('ssh', 'POST', '/pro/ssh', { op: 'hidden' }, json)
+      // The filter rides in the query so `curl` alone can search the roster;
+      // the far side still runs it through the same parser a POST gets.
+      const filter = rest[0] ?? ''
+      const path = filter ? `/pro/ssh?q=${encodeURIComponent(filter)}` : '/pro/ssh'
+      return call('ssh', 'GET', path, null, json)
+    }
+
+    case 'keys': {
+      const stray = strayFields('keys', flags)
+      return stray ?? call('ssh', 'POST', '/pro/ssh', { op: 'keys' }, json)
+    }
+
+    case 'add':
+    case 'pin':
+      if (!target) return needsTarget(sub)
+      return call('ssh', 'POST', '/pro/ssh', { op: 'save', target, ...over(patch) }, json)
+
+    case 'edit':
+    case 'rename': {
+      if (!target) return needsTarget(sub)
+      // Nothing to change is a command that cannot be reported honestly: the
+      // service would store nothing and we would print "edited".
+      if (!Object.keys(patch).length) {
+        return reject(
+          'needs-field',
+          'edit needs a field to change: codewaifu pro ssh edit prod --label lab'
+        )
+      }
+      return call('ssh', 'POST', '/pro/ssh', { op: 'edit', target, patch }, json)
+    }
+
+    // One subcommand for both outcomes, because which one happens is a fact
+    // about the row and not a choice the caller makes: a machine we pinned is
+    // deleted, a row read out of ~/.ssh/config is hidden (that file is ours to
+    // read, never to rewrite). `ssh ls --hidden` and `ssh restore` are the way
+    // back, and the reply names which of the two happened.
+    case 'rm':
+    case 'remove':
+    case 'hide': {
+      if (!target) return needsTarget(sub)
+      const stray = strayFields(sub, flags)
+      if (stray) return stray
+      return call('ssh', 'POST', '/pro/ssh', { op: 'hide', target }, json)
+    }
+
+    case 'unhide':
+    case 'restore': {
+      if (!target) {
+        return reject(
+          'needs-target',
+          'restore needs a hidden key: codewaifu pro ssh ls --hidden prints them'
+        )
+      }
+      const stray = strayFields(sub, flags)
+      if (stray) return stray
+      return call('ssh', 'POST', '/pro/ssh', { op: 'unhide', key: target }, json)
+    }
+
+    case 'test':
+    case 'probe':
+      if (!target) return needsTarget(sub)
+      return call('ssh', 'POST', '/pro/ssh', { op: 'probe', target, ...over(patch) }, json)
+
+    case 'setup': {
+      if (!target) return needsTarget(sub)
+      // `--key` here is the public key to publish; blank means the box's
+      // default, which the service picks and the reply names.
+      return call(
+        'ssh',
+        'POST',
+        '/pro/ssh',
+        {
+          op: 'setup',
+          target,
+          key: str(flags.get('key')),
+          run: !switches.has('plan'),
+          ...over(patch)
+        },
+        json
+      )
+    }
+
+    default: {
+      // connect | go | open, and any first token that is not a subcommand.
+      if (!target) return needsTarget('connect')
+      return call(
+        'ssh',
+        'POST',
+        '/pro/ssh',
+        {
+          op: 'connect',
+          target,
+          // Pinning is what makes the second connect to a box one keystroke, so
+          // it is the default and `--no-pin` is the opt-out.
+          save: !switches.has('no-pin'),
+          cwd: str(flags.get('dir')),
+          ...over(patch)
+        },
+        json
+      )
+    }
+  }
 }
 
 /**
@@ -439,6 +730,16 @@ export function parseProCli(args: readonly string[]): ProCliParse {
       const limit = Math.min(200, Math.max(1, Math.trunc(num(flags.get('limit')) || 20)))
       return call('log', 'POST', '/pro/ledger', { op: 'read', taskId, limit }, json)
     }
+
+    case 'ssh':
+      return parseSsh(positional, flags, switches, json)
+
+    case 'term':
+    case 'shell':
+      // An empty `cwd` means "here" and only the runner knows where here is, so
+      // main/pro/cli.ts fills it from process.cwd() before the request goes out
+      // - the same rule `new` already follows. `--dir ~` asks for home.
+      return call('term', 'POST', '/pro/ssh', { op: 'terminal', cwd: str(flags.get('dir')) }, json)
 
     default:
       return reject('bad-verb', `unknown pro command: ${verb}`)
@@ -927,6 +1228,255 @@ export function renderProResult(payload: unknown, verb: ProCliVerb): string {
     default:
       return result.detail || result.code || 'ok'
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * ssh text
+ * ------------------------------------------------------------------ */
+
+/**
+ * The label column is measured from the labels being printed, for the reason the
+ * task id column is: a constant is too wide for a roster of short names and too
+ * narrow for a real one, and the dial line at the end of a row is the part a
+ * human actually reads.
+ */
+const SSH_LABEL_MIN = 8
+const SSH_LABEL_MAX = 24
+const SSH_SOURCE_W = 8
+
+/** Where a row came from, in the one word that says who owns it. */
+const SSH_SOURCE: Record<string, string> = { saved: 'pinned', config: 'config', herdr: 'herdr' }
+
+/**
+ * What a write to the roster did. `rm` has two honest outcomes and they are not
+ * interchangeable: one deleted a record of ours, the other stopped showing a row
+ * whose source is a file we only read.
+ */
+const SSH_WROTE: Record<string, string> = {
+  saved: 'pinned',
+  edited: 'edited',
+  forked: 'forked',
+  removed: 'removed',
+  hidden: 'hidden',
+  unhidden: 'restored'
+}
+
+/** What opening a session did, in the words for the code `openSession` reports. */
+const SSH_OPENED: Record<string, string> = {
+  connected: 'connected',
+  'connected-unsaved': 'connected, not pinned',
+  terminal: 'shell',
+  setup: 'passwordless setup'
+}
+
+/** What a probe verdict means, in the words that lead to the fix. */
+const PROBE_TEXT: Record<string, string> = {
+  ok: 'in without a password',
+  auth: 'refused the key: this box still wants a password',
+  'host-key': 'the host key did not verify, and a changed key is never trusted for you',
+  timeout: 'no answer inside the probe timeout',
+  unreachable: 'nothing answered on that host and port',
+  'no-ssh': 'this box has no ssh client to probe with',
+  error: 'the probe itself failed',
+  unknown: 'no verdict yet'
+}
+
+function sshLabelWidth(labels: readonly string[]): number {
+  const longest = labels.reduce((max, label) => Math.max(max, String(label ?? '').length), 0)
+  return Math.max(SSH_LABEL_MIN, Math.min(SSH_LABEL_MAX, longest + 2))
+}
+
+/** One roster row: the name, who owns it, and the line that dials it. */
+function sshRow(label: string, tag: string, line: string, width: number, labelW: number): string {
+  const head = `  ${pad(clip(label, labelW - 2), labelW)}${pad(
+    clip(tag, SSH_SOURCE_W - 1),
+    SSH_SOURCE_W
+  )}`
+  // No floor on the dial column: a row that overflows the terminal wraps, and a
+  // wrapped row destroys the alignment of every row under it. The runner clamps
+  // the width to 60 at the narrowest, which is room for both columns.
+  return `${head}${clip(line, Math.max(0, width - head.length))}`
+}
+
+/**
+ * The roster, in the order the service ranked it. The source tag is the column
+ * that answers "may I rename this one": a pinned row is ours, a config row was
+ * read out of a file we do not rewrite, and editing one of those forks it.
+ */
+function rosterText(data: Record<string, unknown>, width: number): string {
+  const machines = (data.machines ?? []) as SshMachine[]
+  const hidden = Array.isArray(data.hidden) ? (data.hidden as HiddenMachine[]) : []
+  if (!machines.length) {
+    const config = str(data.configPath)
+    const lines = ['nothing to connect to']
+    if (config) lines.push(`  read   ${config} (no usable Host entry in it)`)
+    lines.push('  pin    codewaifu pro ssh add user@host')
+    if (hidden.length) lines.push(`  ${hidden.length} hidden   codewaifu pro ssh ls --hidden`)
+    return lines.join('\n')
+  }
+  const labelW = sshLabelWidth(machines.map((machine) => machine.label))
+  const home = str(data.home)
+  const rows = machines.map((machine) =>
+    sshRow(
+      machine.label,
+      SSH_SOURCE[machine.source] ?? machine.source,
+      sshLine(machine, { home }),
+      width,
+      labelW
+    )
+  )
+  const head = `${machines.length} machine${machines.length === 1 ? '' : 's'}`
+  const foot = hidden.length ? [`${hidden.length} hidden   codewaifu pro ssh ls --hidden`] : []
+  return [head, ...rows, ...foot].join('\n')
+}
+
+/** The restore list. The key leads because it is the argument `restore` takes. */
+function hiddenText(hidden: readonly HiddenMachine[], width: number): string {
+  if (!hidden.length) return 'nothing is hidden'
+  const keyW = Math.max(
+    12,
+    Math.min(40, hidden.reduce((max, row) => Math.max(max, row.key.length), 0) + 2)
+  )
+  const rows = hidden.map((row) => {
+    const head = `  ${pad(clip(row.key, keyW - 2), keyW)}${pad(row.stale ? 'stale' : '', 7)}`
+    return `${head}${clip(sshLine(row.machine, {}), Math.max(0, width - head.length))}`
+  })
+  return [`${hidden.length} hidden`, ...rows, 'restore: codewaifu pro ssh restore <key>'].join(
+    '\n'
+  )
+}
+
+/**
+ * The public keys, with the default starred. `setup` publishes that one unless
+ * `--key` names another, so the star answers "which key am I about to put on a
+ * remote box" before it has to be asked.
+ */
+function keysText(keys: readonly string[], fallback: string): string {
+  if (!keys.length) {
+    return [
+      'no public key in ~/.ssh yet',
+      'setup creates one first: codewaifu pro ssh setup <target>'
+    ].join('\n')
+  }
+  const rows = keys.map((key) => `  ${key === fallback ? '*' : ' '} ${key}`)
+  return [
+    `${keys.length} public key${keys.length === 1 ? '' : 's'}`,
+    ...rows,
+    'the starred key is what setup publishes unless --key names another'
+  ].join('\n')
+}
+
+/**
+ * The passwordless plan. The lines are printed whole rather than clipped: a
+ * command whose tail the terminal ate has to be retyped by hand, and this is a
+ * command rather than a table row, so wrapping it costs nothing.
+ */
+function setupText(result: ProResult, data: Record<string, unknown>): string {
+  const lines = (data.lines ?? []) as string[]
+  const key = str(data.key)
+  const publishing = key ? `publishing ${key}` : 'publishing the default key'
+  const body = lines.map((line) => `  ${line}`)
+  if (!data.paneId) {
+    return [`would run, ${publishing} - and has run nothing:`, ...body].join('\n')
+  }
+  return [
+    `${SSH_OPENED[result.code || ''] ?? result.code}  ${publishing}`,
+    ...body,
+    ...sessionFoot(result, data)
+  ].join('\n')
+}
+
+/** What a probe concluded, and what to do about it when it is not green. */
+function probeText(data: Record<string, unknown>, home: string, width: number): string {
+  const machine = data.machine as SshMachine
+  const status = str(data.status) || 'unknown'
+  const label = machine?.label ?? ''
+  const dial = machine ? sshLine(machine, { home }) : ''
+  const head = `${pad(status, 9)}`
+  const lines = [clip(`${head}${label}${dial ? `  ${dial}` : ''}`, width)]
+  if (status !== 'ok') {
+    lines.push(`  ${PROBE_TEXT[status] ?? status}`)
+    const detail = str(data.detail)
+    if (detail) lines.push(`  ${clip(detail, Math.max(20, width - 2))}`)
+    // The one verdict with a one-command fix, so the fix is printed with it.
+    if (status === 'auth' && label) {
+      lines.push(`  make it passwordless: codewaifu pro ssh setup ${clip(label, 40)}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+/**
+ * What a write to the roster produced. The follow-up lines exist because two of
+ * these outcomes are about a file we do not own: saying only "hidden" would send
+ * somebody to `~/.ssh/config` looking for an edit we never made.
+ */
+function machineText(result: ProResult, data: Record<string, unknown>, home: string, width: number): string {
+  const machine = data.machine as SshMachine
+  const code = result.code || 'saved'
+  const word = SSH_WROTE[code] ?? code
+  const dial = machine ? sshLine(machine, { home }) : ''
+  const lines = [clip(`${pad(word, 9)}${machine?.label ?? ''}${dial ? `  ${dial}` : ''}`, width)]
+  if (code === 'forked') {
+    lines.push('  it came from ~/.ssh/config, which we read and never rewrite: the row is now ours')
+  }
+  if (code === 'hidden' && machine) {
+    lines.push('  it came from ~/.ssh/config, which we read and never rewrite')
+    lines.push(`  restore: codewaifu pro ssh restore ${machineKey(machine).toLowerCase()}`)
+  }
+  if (code === 'removed') lines.push('  it was a row of ours, so it is gone; nothing else was touched')
+  return lines.join('\n')
+}
+
+/**
+ * The pane a session landed in, plus the one thing that can go wrong quietly:
+ * `openSession` counts the lines that actually reached the pane, and zero on a
+ * verb that types one means the shell is open and silent, which reads as a hang
+ * unless the output says otherwise. A plain `term` types nothing by design, so
+ * it is the one code exempt from that reading.
+ */
+function sessionFoot(result: ProResult, data: Record<string, unknown>): string[] {
+  const foot: string[] = []
+  const where = [
+    data.paneId ? `pane ${str(data.paneId)}` : '',
+    data.taskId ? `task ${str(data.taskId)}` : ''
+  ].filter(Boolean)
+  if (where.length) foot.push(`  ${where.join('  ')}`)
+  if (result.code !== 'terminal' && num(data.typed) === 0) {
+    foot.push('  nothing reached the pane, so the line is unsent: herdr refused the keys')
+  }
+  return foot
+}
+
+function sessionText(result: ProResult, data: Record<string, unknown>, width: number): string {
+  const word = SSH_OPENED[result.code || ''] ?? result.code ?? 'opened'
+  const title = str(data.title)
+  return [clip(title ? `${word}  ${title}` : word, width), ...sessionFoot(result, data)].join('\n')
+}
+
+/**
+ * The line an ssh verb prints.
+ *
+ * Dispatch is on the shape of `data` rather than on the subcommand that asked,
+ * so one renderer covers the CLI, a `curl` against the same route and any future
+ * spelling of the same op - and a payload none of these branches recognises
+ * falls through to the service's own words instead of to a confident guess.
+ */
+export function renderProSsh(payload: unknown, width = 100): string {
+  const result = payload as ProResult | null
+  if (!result || typeof result !== 'object') return 'the bench sent back something unreadable'
+  if (!result.ok) return failureText(result)
+  const data = (result.data ?? {}) as Record<string, unknown>
+  const home = str(data.home)
+  if (Array.isArray(data.machines)) return rosterText(data, width)
+  if (Array.isArray(data.hidden)) return hiddenText(data.hidden as HiddenMachine[], width)
+  if (Array.isArray(data.keys)) return keysText(data.keys as string[], str(data.key))
+  if (Array.isArray(data.lines)) return setupText(result, data)
+  if (data.status) return probeText(data, home, width)
+  if (data.machine) return machineText(result, data, home, width)
+  if (data.paneId) return sessionText(result, data, width)
+  if (typeof data.key === 'string' && data.key) return `${SSH_WROTE.unhidden}  ${data.key}`
+  return result.detail || result.code || 'ok'
 }
 
 /** Why there was nothing to talk to, in the words that lead to the fix. */

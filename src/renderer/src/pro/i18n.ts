@@ -525,6 +525,71 @@ const STRINGS = {
   sshPinned: { zh: '已固定 {label}', en: 'Pinned {label}' },
   sshUnpinned: { zh: '已取消固定 {label}', en: 'Unpinned {label}' },
   sshTest: { zh: '测试', en: 'Test' },
+  /* ------------------------------------------------- edit + dismiss a row
+
+     Two verbs, and the wording never blurs which is which. `edit` on a row we
+     own rewrites our record; on a row that came from `~/.ssh/config` it forks
+     one, because that file is read and never written. `dismiss` deletes a
+     record of ours and hides a row somebody else reported - the same button,
+     and the two toasts say which one happened. */
+  sshEdit: { zh: '编辑', en: 'Edit' },
+  sshEditTitle: { zh: '编辑机器', en: 'Edit machine' },
+  sshEditNewTitle: { zh: '存为我的机器', en: 'Save as my machine' },
+  sshEditHint: {
+    zh: '改名字，或改 ssh 实际拨号的参数',
+    en: 'Rename it, or change what ssh actually dials'
+  },
+  sshEditConfigHint: {
+    zh: '这一行来自 ~/.ssh/config。CodeWaifu 不改你的配置文件：保存后会另存为自己的记录，并把原来那一行隐藏。',
+    en: 'This row comes from ~/.ssh/config. CodeWaifu never rewrites your config: saving stores its own record and hides the original row.'
+  },
+  sshEditAliasHint: {
+    zh: '改任何连接参数都会脱离 {alias} 这个别名，之后由 CodeWaifu 自己记住 host/端口/密钥。',
+    en: 'Changing any connection field detaches the {alias} alias; CodeWaifu then remembers the host, port and key itself.'
+  },
+  sshFieldLabel: { zh: '名称', en: 'Name' },
+  sshFieldHost: { zh: '主机', en: 'Host' },
+  sshFieldPort: { zh: '端口', en: 'Port' },
+  sshFieldUser: { zh: '用户', en: 'User' },
+  sshFieldKey: { zh: '私钥', en: 'Identity file' },
+  sshFieldJump: { zh: '跳板机', en: 'ProxyJump' },
+  sshFieldAlias: { zh: 'config 别名', en: 'config alias' },
+  sshPortDefault: { zh: '留空 = 22', en: 'blank = 22' },
+  sshKeyNone: { zh: '不指定（用默认密钥）', en: 'none (use the default key)' },
+  sshEditSave: { zh: '保存', en: 'Save' },
+  sshEditNeedsHost: { zh: '主机不能为空', en: 'A host is required' },
+  sshEditBadPort: {
+    zh: '端口要在 1-65535 之间，或留空表示 22',
+    en: 'Port must be between 1 and 65535, or blank for 22'
+  },
+  sshEdited: { zh: '已更新 {label}', en: 'Updated {label}' },
+  sshForked: { zh: '已另存为 {label}，~/.ssh/config 原样未动', en: 'Saved as {label}; ~/.ssh/config untouched' },
+  sshDismiss: { zh: '删除', en: 'Delete' },
+  sshDismissHint: { zh: '从列表里删掉这条已保存的机器', en: 'Delete this saved machine from the list' },
+  sshHide: { zh: '隐藏', en: 'Hide' },
+  sshHideHint: {
+    zh: '不再显示这一行（它来自 config/herdr，隐藏不会改动任何文件），可在「已隐藏」里恢复',
+    en: 'Stop showing this row (it comes from config/herdr; hiding touches no files). Restore it under "Hidden".'
+  },
+  sshRemoved: { zh: '已删除 {label}', en: 'Deleted {label}' },
+  sshHiddenRow: { zh: '已隐藏 {label}，可在「已隐藏」里恢复', en: 'Hid {label}; restore it under "Hidden"' },
+  sshHidden: { zh: '已隐藏 {n}', en: 'Hidden {n}' },
+  sshHiddenTitle: { zh: '已隐藏的机器', en: 'Hidden machines' },
+  sshHiddenHint: {
+    zh: '这些行是 ~/.ssh/config 或 herdr 报上来的，隐藏只影响这个列表，你的文件一个字都没动。',
+    en: 'These rows were reported by ~/.ssh/config or herdr. Hiding only affects this list; your files are untouched.'
+  },
+  sshHiddenEmpty: { zh: '没有隐藏的机器', en: 'Nothing hidden' },
+  sshHiddenPlaceholder: { zh: '筛选已隐藏的机器', en: 'Filter hidden machines' },
+  /* An identity no source reports any more (the Host block was deleted, herdr
+     stopped knowing the box). Restoring it drops the entry instead of bringing
+     a row back, and this pill is what keeps that from reading as a dead click. */
+  sshHiddenStale: { zh: '来源已消失', en: 'source gone' },
+  sshRestore: { zh: '恢复', en: 'Restore' },
+  sshRestoreHint: { zh: '让这一行重新出现在连接列表里', en: 'Show this row in the connect list again' },
+  sshRestored: { zh: '已恢复 {label}', en: 'Restored {label}' },
+  sshOpenConfig: { zh: '打开 ~/.ssh/config', en: 'Open ~/.ssh/config' },
+  sshBack: { zh: '返回连接列表', en: 'Back to the connect list' },
   sshSetupKey: { zh: '配置免密', en: 'Passwordless' },
   sshSetupHint: {
     zh: '在终端里运行 ssh-copy-id，你需要输入一次远端密码',
@@ -546,8 +611,16 @@ const STRINGS = {
   sshKeysHint: {
     /* Alt (⌥ on mac) rather than bare letters: the input is a text field, so an
        unmodified `s` has to keep typing the hostname you are filtering on. */
-    zh: '↑/↓ 选择 · Enter 连接 · Alt/⌥+P 测试 · +S 固定 · +K 免密 · +U 取消固定',
-    en: '↑/↓ select · Enter connect · Alt/⌥+P test · +S pin · +K passwordless · +U unpin'
+    zh: '↑/↓ 选择 · Enter 连接 · Alt/⌥+P 测试 · +E 编辑 · +D 删除/隐藏 · +S 固定 · +K 免密',
+    en: '↑/↓ select · Enter connect · Alt/⌥+P test · +E edit · +D delete/hide · +S pin · +K passwordless'
+  },
+  sshEditKeysHint: {
+    zh: 'Tab 换字段 · Enter 保存 · Esc 取消',
+    en: 'Tab to move · Enter to save · Esc to cancel'
+  },
+  sshHiddenKeysHint: {
+    zh: '↑/↓ 选择 · Enter 恢复 · Esc 返回',
+    en: '↑/↓ select · Enter restore · Esc back'
   },
 
   /* ---------------------------------------------------------- time */

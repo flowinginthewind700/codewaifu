@@ -33,8 +33,10 @@ import {
   clampPort,
   makeMachine,
   parseTarget,
+  type MachineEdit,
   type MachineSource,
   type ProbeStatus,
+  type HiddenMachine,
   type SshMachine
 } from './ssh'
 
@@ -681,21 +683,58 @@ export type ProSshRequest =
   | { op: 'list'; query: string }
   /** Public keys in `~/.ssh`, conventional first. */
   | { op: 'keys' }
-  | { op: 'probe'; machine: SshMachine | null; target: string }
-  | { op: 'save'; machine: SshMachine | null; target: string }
+  /**
+   * The machine ops all carry the same optional `patch`: the fields named beside
+   * the destination, applied to whatever the target resolves to. It is what lets
+   * `pro ssh box -p 2222` mean one thing to a probe, a pin, a connect and a
+   * setup, instead of four ops with four ideas about a port. A patch that
+   * changes what ssh dials is also what turns a row we only read into one we
+   * own, so it rides through `editMachine` rather than being merged by hand.
+   */
+  | { op: 'probe'; machine: SshMachine | null; target: string; patch?: MachineEdit }
+  /** Pin a machine, with the fields named beside it if there were any. */
+  | { op: 'save'; machine: SshMachine | null; target: string; patch?: MachineEdit }
   | { op: 'remove'; id: string }
+  /**
+   * Change a row: its name, and what ssh dials. For a row we do not own this
+   * forks it into our roster and hides the original identity - `~/.ssh/config`
+   * is read, never rewritten.
+   */
+  | { op: 'edit'; machine: SshMachine | null; target: string; patch: MachineEdit }
+  /**
+   * Dismiss a row. A saved machine is deleted; a config or herdr row is hidden,
+   * because there is nothing of ours to delete and its source is not ours to
+   * edit. `hidden` is what the restore list reads.
+   */
+  | { op: 'hide'; machine: SshMachine | null; target: string }
+  | { op: 'unhide'; key: string }
+  | { op: 'hidden' }
   /**
    * Open a session: a pane, a task record, and the connect line typed into it.
    * `save` pins the machine as a side effect, which is what makes the second
    * connect to the same box one keystroke.
    */
-  | { op: 'connect'; machine: SshMachine | null; target: string; save: boolean; cwd: string }
+  | {
+      op: 'connect'
+      machine: SshMachine | null
+      target: string
+      save: boolean
+      cwd: string
+      patch?: MachineEdit
+    }
   /**
    * Make a machine passwordless. `run` types the setup line into a pane (the
    * human still answers the password prompt); without it we only hand back the
    * lines, for a palette that wants to show what it would do.
    */
-  | { op: 'setup'; machine: SshMachine | null; target: string; key: string; run: boolean }
+  | {
+      op: 'setup'
+      machine: SshMachine | null
+      target: string
+      key: string
+      run: boolean
+      patch?: MachineEdit
+    }
   /** A plain local shell. Empty `cwd` means home. */
   | { op: 'terminal'; cwd: string }
 
@@ -705,6 +744,14 @@ export type ProSshParse = ProSshRequest | ProReject
 export interface ProSshRoster {
   machines: SshMachine[]
   home: string
+  /** Dismissed rows, each with the key that restores it. */
+  hidden: HiddenMachine[]
+  /**
+   * The `~/.ssh/config` this roster was parsed from. The palette offers to open
+   * it rather than only offering to work around it: a config row we refuse to
+   * rewrite is a row the human should still be able to reach in one keystroke.
+   */
+  configPath: string
 }
 
 /** One probe's verdict. `detail` is the last line ssh printed, for a tooltip. */
@@ -731,6 +778,14 @@ export interface ProSessionOpened {
   paneId: string
   /** How many of the requested lines actually reached the pane. */
   typed: number
+  /**
+   * What the session is called: the machine's label for a connect or a setup,
+   * the directory's own name for a plain shell. The ids say where to look, and
+   * this says what was opened - the one thing every renderer of this payload
+   * (a toast, a terminal line) wants to put in words, and the only layer that
+   * knows it, since it is computed on the way into `createWorkspace`.
+   */
+  title: string
 }
 
 /** The passwordless plan: the lines that would run, and the key they publish. */
@@ -789,6 +844,35 @@ function targetOf(value: unknown): string {
   return /\s/.test(raw) && !parseTarget(raw) ? '' : raw
 }
 
+/**
+ * The fields an edit may change.
+ *
+ * A key that is *absent* means "leave it alone" and one that is present but
+ * empty means "clear it", so `hasOwnProperty` is the test rather than
+ * truthiness - dropping that distinction would make blanking the port
+ * impossible, and a form that cannot undo a field is a form that lies.
+ *
+ * `source` is deliberately not editable: where a row came from is a fact, and a
+ * caller claiming `saved` for a config alias would be asking us to treat a file
+ * we only read as one we own.
+ */
+export function editOf(value: unknown): MachineEdit {
+  const raw = record(value)
+  const patch: MachineEdit = {}
+  const take = (key: keyof MachineEdit, limit: number): void => {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) return
+    patch[key] = str(raw[key], limit).trim()
+  }
+  take('label', 200)
+  take('host', 200)
+  take('user', 100)
+  take('identityFile', 400)
+  take('proxyJump', 400)
+  take('alias', 200)
+  if (Object.prototype.hasOwnProperty.call(raw, 'port')) patch.port = clampPort(raw.port)
+  return patch
+}
+
 /** `~` and '' both mean home; anything else must be an absolute-ish path. */
 function cwdOf(value: unknown): string {
   return str(value, 400).trim()
@@ -811,31 +895,63 @@ export function parseProSsh(payload: unknown): ProSshParse {
       if (!id) return reject('bad-machine', 'a machine id is required')
       return { op, id }
     }
+    case 'unhide': {
+      const key = str(raw.key ?? raw.id, 160).trim()
+      if (!key) return reject('bad-machine', 'a hidden machine key is required')
+      return { op, key }
+    }
+    case 'hidden':
+      return { op }
     case 'terminal':
       return { op, cwd: cwdOf(raw.cwd ?? raw.workdir ?? raw.path) }
     case 'probe':
     case 'save':
+    case 'hide':
     case 'connect':
+    case 'edit':
     case 'setup': {
       const machine = machineOf(raw.machine)
       const target = targetOf(raw.target)
       if (!machine && !target) {
         return reject('bad-machine', 'a machine or an ssh target is required')
       }
-      if (op === 'save') return { op, machine, target }
+      // The fields named beside the machine. `edit` cannot do without them; the
+      // rest treat a patch as an override, and an empty one is left out rather
+      // than sent, so "no override" stays a distinct shape from "override every
+      // field to nothing".
+      const patch = editOf(raw.patch ?? raw)
+      const over = Object.keys(patch).length ? { patch } : {}
+      if (op === 'hide') return { op, machine, target }
+      if (op === 'edit') {
+        // Nothing to change is not an error the caller has to prevent, but it is
+        // not a stored machine either: saying "edited" about a no-op write would
+        // be the lie.
+        if (!Object.keys(patch).length) {
+          return reject('bad-machine', 'an edit needs at least one field to change')
+        }
+        return { op, machine, target, patch }
+      }
       if (op === 'connect') {
         return {
           op,
           machine,
           target,
           save: bool(raw.save, true),
-          cwd: cwdOf(raw.cwd ?? raw.workdir)
+          cwd: cwdOf(raw.cwd ?? raw.workdir),
+          ...over
         }
       }
       if (op === 'setup') {
-        return { op, machine, target, key: str(raw.key, 400).trim(), run: bool(raw.run, true) }
+        return {
+          op,
+          machine,
+          target,
+          key: str(raw.key, 400).trim(),
+          run: bool(raw.run, true),
+          ...over
+        }
       }
-      return { op, machine, target }
+      return { op, machine, target, ...over }
     }
     default:
       return reject('bad-op', `unknown ssh op ${str(raw.op, 20)}`)

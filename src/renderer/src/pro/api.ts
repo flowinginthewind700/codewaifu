@@ -34,7 +34,7 @@ import type {
   ProSshSetup,
   ImportCandidate
 } from '@shared/proIpc'
-import type { SshMachine } from '@shared/ssh'
+import type { HiddenMachine, MachineEdit, SshMachine } from '@shared/ssh'
 import type { PaneScroll } from '@shared/herdr'
 import type { Lang, RedactedConfig, RuntimeState, SteerResult, UiSnapshot } from '@shared/protocol'
 
@@ -265,6 +265,34 @@ export const proApi = {
     save: (machine: SshMachine | null, target = ''): Promise<ProResult<{ machine: SshMachine }>> =>
       call<{ machine: SshMachine }>(CH.proSsh, { op: 'save', machine, target }),
     remove: (id: string): Promise<ProResult> => call(CH.proSsh, { op: 'remove', id }),
+    /**
+     * Change a row. For a row we do not own this forks it into our roster and
+     * hides the original, so the palette never grows a second row for one box.
+     * A field left out of `patch` is left alone; one sent as '' is cleared.
+     */
+    edit: (
+      machine: SshMachine | null,
+      patch: MachineEdit,
+      target = ''
+    ): Promise<ProResult<{ machine: SshMachine }>> =>
+      call<{ machine: SshMachine }>(CH.proSsh, { op: 'edit', machine, target, patch }),
+    /**
+     * Dismiss a row: delete when it is ours, hide when its source is a file we
+     * only read. `code` tells the two apart, and the toast says so.
+     */
+    hide: (
+      machine: SshMachine | null,
+      target = ''
+    ): Promise<ProResult<{ machine: SshMachine; hidden: boolean }>> =>
+      call<{ machine: SshMachine; hidden: boolean }>(CH.proSsh, { op: 'hide', machine, target }),
+    /** Bring a dismissed row back. `key` is the `machineKey` the list carried. */
+    unhide: (key: string): Promise<ProResult> => call(CH.proSsh, { op: 'unhide', key }),
+    /**
+     * The dismissed rows on their own. The roster already carries them; this is
+     * for a caller that has a roster and needs the list to be current.
+     */
+    hidden: (): Promise<ProResult<{ hidden: HiddenMachine[] }>> =>
+      call<{ hidden: HiddenMachine[] }>(CH.proSsh, { op: 'hidden' }),
     /** Open a session: a pane, a task row, and the connect line typed into it. */
     connect: (input: {
       machine?: SshMachine | null

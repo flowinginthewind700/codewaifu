@@ -12,6 +12,7 @@ import {
   type ProActionRequest,
   type ProLedgerRequest,
   type ProResult,
+  type ProSshRequest,
   type ProTaskRequest
 } from '../../src/shared/proIpc'
 import type { ProApi } from '../../src/main/server'
@@ -69,6 +70,7 @@ export interface ProRecorder {
   actions: ProActionRequest[]
   tasks: ProTaskRequest[]
   ledger: ProLedgerRequest[]
+  ssh: ProSshRequest[]
 }
 
 export interface FakePro {
@@ -92,7 +94,7 @@ export interface FakePro {
  * with `result`, so a test drives the status code and the payload separately.
  */
 export function fakePro(initial: { view?: BenchView | null; online?: boolean } = {}): FakePro {
-  const recorded: ProRecorder = { actions: [], tasks: [], ledger: [] }
+  const recorded: ProRecorder = { actions: [], tasks: [], ledger: [], ssh: [] }
   let view: BenchView | null = initial.view === undefined ? benchView() : initial.view
   let online = initial.online ?? true
   let result: ProResult = okResult(null, '', '')
@@ -118,6 +120,10 @@ export function fakePro(initial: { view?: BenchView | null; online?: boolean } =
     },
     ledgerOp: (request) => {
       recorded.ledger.push(request)
+      return result
+    },
+    sshOp: async (request) => {
+      recorded.ssh.push(request)
       return result
     },
     onChange: (listener) => {

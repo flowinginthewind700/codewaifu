@@ -99,7 +99,15 @@ import {
   type ProTaskRequest,
   type ImportCandidate
 } from '../../shared/proIpc'
-import { parseTarget, type SshMachine } from '../../shared/ssh'
+import {
+  editMachine,
+  isHiddenRemoval,
+  machineKey,
+  parseTarget,
+  type HiddenMachine,
+  type MachineEdit,
+  type SshMachine
+} from '../../shared/ssh'
 import { TaskRegistry, type CreateTaskInput, type RegistryPatch } from './bench'
 import { CompanionBridge, type AnnounceResult, type CompanionApi } from './companion'
 import { benchFile, ensureProDirs, tasksDir } from './env'
@@ -2689,7 +2697,16 @@ export class ProService implements CompanionApi {
     switch (request.op) {
       case 'list': {
         const machines = await this.ssh.roster(request.query)
-        const roster: ProSshRoster = { machines, home: homeDir }
+        // The restore list rides along with the roster: one round trip, and a
+        // palette that has to ask twice for "what can I bring back" is a palette
+        // that shows a stale count next to the button that opens it.
+        const hidden = await this.ssh.hiddenMachines()
+        const roster: ProSshRoster = {
+          machines,
+          home: homeDir,
+          hidden,
+          configPath: this.ssh.configFile()
+        }
         return okResult(roster, '', 'roster')
       }
       case 'keys':
@@ -2699,14 +2716,23 @@ export class ProService implements CompanionApi {
           'keys'
         )
       case 'probe': {
-        const machine = this.machineFor(request.machine, request.target)
+        const machine = this.machineWithPatch(
+          await this.machineFor(request.machine, request.target),
+          request.patch
+        )
         if (!machine) return this.noMachine()
         const probe = await this.ssh.probe(machine)
         const result: ProSshProbe = { machine, status: probe.status, detail: probe.detail }
         return okResult(result, probe.detail, probe.status)
       }
       case 'save': {
-        const machine = this.machineFor(request.machine, request.target)
+        // A pin may carry the values typed beside it (`pro ssh add box --label
+        // lab`). Applying them in the same write is what keeps the roster from
+        // ever holding a row whose name the caller asked for and never got.
+        const machine = this.machineWithPatch(
+          await this.machineFor(request.machine, request.target),
+          request.patch
+        )
         if (!machine) return this.noMachine()
         const saved = this.ssh.save(machine)
         this.invalidate()
@@ -2721,8 +2747,52 @@ export class ProService implements CompanionApi {
           ? okResult({ id: request.id }, '', 'removed')
           : failResult('no-item', `no saved machine ${request.id}`)
       }
+      case 'edit': {
+        const machine = await this.machineFor(request.machine, request.target)
+        if (!machine) return this.noMachine()
+        // `edit` resolves the row against the roster before patching: a stale
+        // renderer copy of a config alias would otherwise fork the values it
+        // happened to be holding instead of the ones on disk right now.
+        const current = this.currentMachine(machine)
+        const stored = this.ssh.edit(current, request.patch)
+        this.invalidate()
+        return stored
+          ? okResult({ machine: stored }, '', current.source === 'saved' ? 'edited' : 'forked')
+          : failResult('bad-machine', 'the edited machine could not be stored')
+      }
+      case 'hide': {
+        const machine = await this.machineFor(request.machine, request.target)
+        if (!machine) return this.noMachine()
+        const current = this.currentMachine(machine)
+        const hidden = this.ssh.hide(current)
+        this.invalidate()
+        // `removed` vs `hidden` is the difference the toast has to name: one
+        // deleted a record of ours, the other stopped showing a row whose source
+        // is a file we do not write.
+        return hidden
+          ? okResult(
+              { machine: current, hidden: isHiddenRemoval(current) },
+              '',
+              isHiddenRemoval(current) ? 'hidden' : 'removed'
+            )
+          : failResult('no-item', `${current.label} is not in the roster`)
+      }
+      case 'unhide': {
+        const restored = this.ssh.unhide(request.key)
+        this.invalidate()
+        return restored
+          ? okResult({ key: request.key }, '', 'unhidden')
+          : failResult('no-item', `no hidden machine ${request.key}`)
+      }
+      case 'hidden': {
+        const hidden = await this.ssh.hiddenMachines()
+        return okResult<{ hidden: HiddenMachine[] }>({ hidden }, '', 'hidden')
+      }
       case 'connect': {
-        const machine = this.machineFor(request.machine, request.target)
+        const machine = this.machineWithPatch(
+          await this.machineFor(request.machine, request.target),
+          request.patch
+        )
         if (!machine) return this.noMachine()
         // Pin first, so the roster the human sees next time already has this box
         // in it even if herdr turns out to be down. A saved machine that never
@@ -2738,7 +2808,10 @@ export class ProService implements CompanionApi {
         })
       }
       case 'setup': {
-        const machine = this.machineFor(request.machine, request.target)
+        const machine = this.machineWithPatch(
+          await this.machineFor(request.machine, request.target),
+          request.patch
+        )
         if (!machine) return this.noMachine()
         const lines = this.setupPlan(machine, request.key)
         if (!request.run) {
@@ -2840,7 +2913,11 @@ export class ProService implements CompanionApi {
     // The human asked to be somewhere; landing them on the pane they just opened
     // is the whole point, and it also attaches the bridge that draws it.
     this.focusBench(task.id, paneId, input.code)
-    return okResult({ taskId: task.id, workspaceId, paneId, typed }, '', input.code)
+    return okResult(
+      { taskId: task.id, workspaceId, paneId, typed, title },
+      '',
+      input.code
+    )
   }
 
   /**
@@ -2862,10 +2939,83 @@ export class ProService implements CompanionApi {
    * through `~/.ssh/config`, so it may carry the alias that makes
    * `ssh <alias>` the correct line; a typed target has not, so it is parsed
    * here, in the process that owns the same config file.
+   *
+   * A bare name is looked up in the roster before it is read as a hostname,
+   * because the roster is what the caller was just shown: a pinned machine's
+   * label is a name a human chose, not a DNS name, and `ssh lab-2222` would fail
+   * on a row whose host is an address. Only an exact match on id, label or alias
+   * resolves - a fuzzy one would make a connect depend on the roster's ordering,
+   * and reaching the wrong box is the one mistake this surface must not make
+   * quietly.
    */
-  private machineFor(machine: SshMachine | null, target: string): SshMachine | null {
+  private async machineFor(
+    machine: SshMachine | null,
+    target: string
+  ): Promise<SshMachine | null> {
     if (machine && machine.host.trim()) return machine
-    return target ? parseTarget(target) : null
+    if (!target) return null
+    return (await this.namedMachine(target)) ?? parseTarget(target)
+  }
+
+  /** The roster row this exact name points at, or null when nothing claims it. */
+  private async namedMachine(name: string): Promise<SshMachine | null> {
+    const want = name.trim().toLowerCase()
+    // A name with a space in it is a pasted command line rather than a label,
+    // and `parseTarget` is the only thing that knows how to read one.
+    if (!want || /\s/.test(want)) return null
+    const roster = await this.ssh.roster().catch(() => [] as SshMachine[])
+    // The roster is ranked saved-then-config-then-herdr, so a name two sources
+    // both claim resolves to the row the human pinned, which is the one they
+    // meant when they gave it a name.
+    for (const row of roster) {
+      const alias = row.alias.toLowerCase()
+      if (row.id.toLowerCase() === want || row.label.toLowerCase() === want) return row
+      if (alias && alias === want) return row
+    }
+    return null
+  }
+
+  /**
+   * The machine an op acts on: the row the caller named, with the fields they put
+   * beside it applied.
+   *
+   * One helper instead of four copies of the same emptiness test, because the
+   * rule has to hold everywhere - `-p 2222` is the same port to a probe, a pin, a
+   * connect and a setup, and an op that quietly ignored the field would be the
+   * one place a human cannot predict. An empty patch hands the row back as it
+   * came, source and all: only a real change makes a row ours.
+   */
+  private machineWithPatch(machine: SshMachine | null, patch?: MachineEdit): SshMachine | null {
+    if (!machine) return null
+    return patch && Object.keys(patch).length ? editMachine(machine, patch) : machine
+  }
+
+  /**
+   * The roster's own copy of a row, so a mutation acts on what main holds
+   * rather than on whatever the renderer last saw.
+   *
+   * A config alias can change under us (the human edits `~/.ssh/config`, or
+   * another tool does), and `edit` in particular would otherwise fork the stale
+   * values - a saved machine whose port is the one from ten minutes ago, with no
+   * visible reason. Matching is by `id` first, which is exact for a saved row,
+   * and by connect identity second, which is how a config row is recognised
+   * after its `id` was regenerated by a re-parse. A row that is in neither list
+   * (a typed target, a herdr report) is returned as sent: there is nothing more
+   * current to prefer.
+   *
+   * Synchronous on purpose - `saved()` and `config()` are both disk reads the
+   * roster already does, and making this await would put herdr's machine list on
+   * the path of every edit.
+   */
+  private currentMachine(machine: SshMachine): SshMachine {
+    const key = machineKey(machine).toLowerCase()
+    for (const entry of this.ssh.saved()) {
+      if (entry.id === machine.id || machineKey(entry).toLowerCase() === key) return entry
+    }
+    for (const entry of this.ssh.config()) {
+      if (machineKey(entry).toLowerCase() === key) return entry
+    }
+    return machine
   }
 
   /**
