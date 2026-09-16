@@ -1,9 +1,11 @@
 # Pro handoff
 
-`main` @ `7104b3a` plus the push route and `pro watch` (F9), the bundled
-terminal font, boot auto-resume and the RobotWorld palette - typecheck, 1045
-tests (plus the 12 Windows-only skips), `electron-vite build` and
-`npm run test:e2e` (10 cases, needs a display) all green on Linux (Ubuntu,
+`main` @ the tray fix: the push route and `pro watch` (F9), the bundled
+terminal font, boot auto-resume, the RobotWorld palette, one app with two modes
+(the stage and the bench switch into each other), import of foreign
+codex/claude sessions into the tree, and a tray that works on Linux -
+typecheck, 1091 tests (plus the 12 Windows-only skips), `electron-vite build`
+and `npm run test:e2e` (10 cases, needs a display) all green on Linux (Ubuntu,
 node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built for but not
 yet run.
 
@@ -32,8 +34,12 @@ npm run dev
 ```
 
 `npm run dev` starts the companion widget and the tray icon. **The Bench is
-opened from the tray menu: `Open Bench`** (the label carries the attention count
-when it is non-zero). Two other doors exist: `pro.openBenchOnLaunch: true` in the
+opened from the tray menu**, whose bench row carries the attention count when it
+is non-zero. On Linux a left click on the tray icon opens that menu: the
+platform's tray is a D-Bus StatusNotifierItem, which delivers no click event,
+and `Tray.popUpContextMenu` is a mac/Windows API - the published menu is the
+whole interaction there. On mac and Windows the left click summons the stage and
+the right click opens the menu. Two other doors exist: `pro.openBenchOnLaunch: true` in the
 config file, and clicking an attention bubble that carries no task.
 
 Config lives in `~/.codewaifu/config.json` under `pro.*`; every key and its
@@ -451,18 +457,24 @@ without reading those first.
    the bridge finishes connecting, but it was never the fix: the failure
    reproduced once with the wait in place, and that is what turned a suspected
    race into a bug hunt.
-2. **macOS.** Nothing has been run there. What has been checked from this side
-   of it: the darwin voice runtimes resolve at the pinned versions
+2. **macOS.** Nothing has been run there. The release plan ships Linux and
+   Windows from CI first and leaves the mac build to a human on a mac
+   ([docs/RELEASE.md](../RELEASE.md)). What has been checked from this side of
+   it: the darwin voice runtimes resolve at the pinned versions
    (`sherpa-onnx-darwin-arm64@1.13.8`, and the `x64` build), and so does the FFI
    layer - `koffi@3.2.1` with `@koromix/koffi-darwin-arm64@3.2.1`, while the
    registry's latest is 3.3.0, so it is the pin that has to keep resolving.
-   `build/` holds `icon.png` but no `icon.icns`, so `npm run dist:mac` needs the
-   icons toolset or a fetch at build time. There is no macOS autostart at all:
+   `build/` holds `icon.png` and no `icon.icns`, which is fine: electron-builder
+   converts the png through app-builder's icon command, so `dist:mac` needs no
+   icons toolset. CI fetches each target's voice runtime
+   (`ensure-voice-runtime.mjs` per matrix entry), which is what lets an arm64
+   runner ship a speaking x64 zip. There is still no macOS autostart:
    `install.sh --autostart` writes only `~/.config/autostart`, and no LoginItems
-   path exists. The likely sharp edges at runtime are the menubar tray (a long
-   `Open Bench (12)` label), `alwaysOnTop` interplay with the Bench window, and
-   the packaged binary's argv handling, which is now what `codewaifu pro` stands
-   on. The Cmd/Ctrl chord table itself is pure and tested on both.
+   path exists. The likely sharp edges at runtime are the menubar tray (the
+   bench row is a menu item now, so a long label is a menu width rather than a
+   menubar width), `alwaysOnTop` interplay with the Bench window, and the
+   packaged binary's argv handling, which is now what `codewaifu pro` stands on.
+   The Cmd/Ctrl chord table itself is pure and tested on both.
 3. **The tree projection has no test of its own.** `buildBench`, `deriveGroups`,
    `groupKeyFor`, `groupLabelFor` and `compareTasks` in `shared/pro.ts` are the
    grouping and ordering every surface reads through, and they are covered only

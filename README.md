@@ -38,6 +38,11 @@ what every agent is doing right now.
 - **A window that behaves.** Draggable anywhere, always-on-top, click-through
   when you want it ghosted, opacity and scale sliders, collapses to a 320px
   bubble and expands to a full panel with tabs.
+- **A tray that answers.** The tray menu shows or hides the stage, opens the
+  Bench with its attention count in the label, mutes the voice, repairs the
+  agent hooks and quits. On Linux a left click on the icon opens that menu,
+  because the platform delivers no click of its own; on macOS and Windows the
+  left click summons her and the right click opens the menu.
 - **Loopback only.** The relay binds `127.0.0.1`, every route except `/health`
   needs a per-install token, and the Host header is validated. No telemetry,
   no network egress, no sudo.
@@ -67,8 +72,9 @@ machine sleeping, and the app crashing.
   terminal, `Shift+Tab` takes it back, `a/d/s` decide, `1/2/3` switch panels.
 
 Pro is Linux-first and needs herdr 0.9+ running; with no herdr the Bench shows
-an install card instead of crashing. Open it from the tray menu (`Open Bench`),
-or set `pro.openBenchOnLaunch` in `~/.codewaifu/config.json`.
+an install card instead of crashing. Open it from the tray menu (the bench row
+carries the attention count), or set `pro.openBenchOnLaunch` in
+`~/.codewaifu/config.json`.
 
 ## Install
 

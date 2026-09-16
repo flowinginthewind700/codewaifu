@@ -18,13 +18,20 @@ jobs:
         include:
           - os: macos-14
             platform: mac
+            # The mac target ships two arches from one arm64 runner, so the
+            # x64 voice runtime has to be fetched: npm installs only the
+            # binaries of the machine it runs on, and a missing one degrades
+            # to the OS voice without a word.
+            runtime: darwin arm64 x64
           - os: windows-latest
             platform: win
+            runtime: win x64
           # 22.04 rather than ubuntu-latest: 24.04's unprivileged-userns
           # restriction is what the installer has to cope with on a real
           # desktop, and a build runner should not be guessing about it.
           - os: ubuntu-22.04
             platform: linux
+            runtime: linux x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +52,13 @@ jobs:
 
       - name: bundle
         run: npm run build
+
+      # The neural voice is a native optionalDependency per platform/arch, so
+      # a runner that packages for another arch would otherwise ship an app
+      # whose Matcha engine cannot load - quietly, because every line of it
+      # falls back to the OS voice. Same reason the local dist:* scripts run it.
+      - name: voice runtime for the target
+        run: node scripts/ensure-voice-runtime.mjs ${{ matrix.runtime }}
 
       - name: package (mac)
         if: matrix.platform == 'mac'
@@ -110,6 +124,19 @@ jobs:
       - name: list artifacts
         run: ls -la release
 
+      # Linux and Windows ship from this run. The mac artifacts stay in CI:
+      # they are unsigned and no mac has ever opened them, so the mac release
+      # is a human on a mac attaching them after a manual pass
+      # (docs/RELEASE.md). Building them here still matters - it is the only
+      # compile-and-package check the mac target gets.
+      - name: drop the mac artifacts from the publish set
+        run: |
+          shopt -s nullglob
+          for f in release/*-mac-* release/*.dmg release/latest-mac.yml; do
+            rm -f -- "$f"
+          done
+          ls -la release
+
       - name: create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,7 +149,7 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "CodeWaifu ${GITHUB_REF_NAME}" \
-              --notes "Automated build for ${GITHUB_REF_NAME}." \
+              --generate-notes \
               $([ "${GITHUB_REF_NAME}" = "${GITHUB_REF_NAME#*-}" ] || echo --prerelease)
           fi
           gh release upload "${GITHUB_REF_NAME}" release/* \
