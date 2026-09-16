@@ -1,6 +1,7 @@
 # Pro handoff
 
-`main` @ `363d6a7` plus the push route and `pro watch` (F9) - typecheck, 1022
+`main` @ `7104b3a` plus the push route and `pro watch` (F9), the bundled
+terminal font, boot auto-resume and the RobotWorld palette - typecheck, 1045
 tests (plus the 12 Windows-only skips), `electron-vite build` and
 `npm run test:e2e` (10 cases, needs a display) all green on Linux (Ubuntu,
 node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built for but not
@@ -493,7 +494,7 @@ without reading those first.
 - 数据落盘：`~/.codewaifu/pro/bench.json` 是任务注册表，`~/.codewaifu/pro/tasks/*.jsonl`
   是每个任务的意图账本（append-only + fsync）。GUI 是可丢弃的，重启后由这两样加
   herdr 现状重新推导。
-- 状态：F1-F9 都已实现并有单测（1022 passed / 12 skipped，skipped 是 Windows 专用）。
+- 状态：F1-F9 都已实现并有单测（1045 passed / 12 skipped，skipped 是 Windows 专用）。
 - 面板桥接起不来时不再吐裸 errno：ENOENT 变成「装上 herdr，或把 pro.herdrPath
   指到可执行文件」，EACCES/EPERM 变成「chmod +x」，认不出的消息原文照抄；重试
   退避 1s→8s，一帧到达就把错误文案和连续计数一起清零。
@@ -598,6 +599,26 @@ without reading those first.
   两个用例分别钉住「窗口内重连必须重算」和「重算不能变成每次都算」。
   第四道闸里那个「偶发 `offline` 而不是 `lost`」因此**不是 race**：trace 打出
   `online=true verdict=offline` 并稳定保持 33 秒——race 不会稳定成一个状态。
+- 终端字体随 app 走（`4bd382c`）：mono 栈以前把宿主装没装的家族排在前面，没装
+  JetBrains Mono 的机器就静默落到 DejaVu——「字体好怪」的截图就是这么来的。更隐蔽的
+  一半是 xterm 在 `open()` 那一刻用 canvas 量一次字形、而 canvas 解不开 `var(--mono)`：
+  woff2 还没解析完就 open 的 pane 会**一辈子**留着 fallback 的格宽，换行柱跟 PTY 的宽度
+  对不上，行就在词中间断。现在 `@fontsource/jetbrains-mono` 打进 bundle（两个 renderer
+  入口都 import 它的 CSS），`terminalFontsReady()` 等 `document.fonts` 确认加载完才建
+  Terminal；`tokens.css` 的 `--mono` 与 `terminalFont.ts::MONO_FALLBACK` 由单测钉成同一串。
+- 重启即续工（`c3c987d`）：恢复计划以前只给人看、等人点，agent 就在 herdr 里干等。
+  `pro.autoResumeOnBoot`（默认开）现在有人读了：boot 时 `armAutoResume` 拿
+  `session.snapshot` 当门——只有真缺 pane/会话的任务才进计划，`applyPlans` 每轮 boot 至多
+  应用一次、每个任务有上限，herdr 重连再挣一次机会，全好的 bench 一次都不碰；播报走界面
+  语言（中文用全角标点）。执行体是 `main/pro/herdr/launcher.ts`：经 herdr 起/续 agent，
+  失败是双语 `Failure {en,zh}`、跨重试粘住、`describe()` 本地化、日志记 `.en`。
+  「不装 herdr」和「装了但拒绝」从此是两句话而不是同一句英文。
+- 配色换成 RobotWorld（`7104b3a`）：粉 + 紫炭是两套眼睛的两套疲劳。`tokens.css` 现在是
+  RobotWorld 的暗色系统（`surface.dark`/`card.dark`/发丝线/代码底 + slate 文字阶 +
+  单一绿 accent），每个 accent 都带 `-rgb` 三元组，半透明用法不再旁边躺一个硬编码 rgba；
+  `styles.css`、`pro/bench.css` 里粉/紫字面量清零（rg 可验），xterm 主题与搜索高亮用站点
+  同一组语法色（注释灰/字符串琥珀/关键字紫/调用青），bench 窗口底色与 Linux 无合成器时的
+  不透明底色同步换掉，首帧不闪紫。浮窗角色本身的腮红是角色设定，不动。
 - 还没做：macOS 实机验证——darwin 侧能从这边核实的都核实了（语音运行时与 koffi 在
   registry 上按 pin 版本可解、`build/` 只有 `icon.png` 没有 `icon.icns`、并且**没有**
   macOS 自启动：`install.sh --autostart` 只写 `~/.config/autostart`，没有 LoginItems
