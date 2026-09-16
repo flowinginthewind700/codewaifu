@@ -1,11 +1,12 @@
 # Pro handoff
 
-`main` @ 0.4.2: the push route and `pro watch` (F9), the bundled
+`main` @ 0.4.3: ssh and local shells as first-class panes (F10), the push route
+and `pro watch` (F9), the bundled
 terminal font, boot auto-resume, the RobotWorld palette, one app with two modes
 (the stage and the bench switch into each other), import of foreign
 codex/claude sessions into the tree, a tray that works on Linux, and a release
 pipeline that ships Linux and Windows from CI -
-typecheck, 1105 tests (plus the 12 Windows-only skips), `electron-vite build`
+typecheck, 1241 tests (plus the 12 Windows-only skips), `electron-vite build`
 and `npm run test:e2e` (10 cases, needs a display) all green on Linux (Ubuntu,
 node 20+, herdr 0.9.0). Verified platform is Linux; macOS is built for but not
 yet run, and Windows is built by CI but not yet opened (section 6, gap 3).
@@ -13,10 +14,11 @@ yet run, and Windows is built by CI but not yet opened (section 6, gap 3).
 The spec is [MVP.md](./MVP.md) and it is still the authority: F1-F7, the
 acceptance criteria in section 6, the phases in section 7. This file is the
 other half - how to run what exists, which decisions are settled, and what is
-known to be missing. F8 and F9 in the table below are not in the spec: F8 is
-what F6's "scripts and agents can drive the bench" became once somebody typed
-it, and F9 is what the same feature's "push, never poll" became once a terminal
-wanted to sit and watch.
+known to be missing. F8, F9 and F10 in the table below are not in the spec: F8
+is what F6's "scripts and agents can drive the bench" became once somebody typed
+it, F9 is what the same feature's "push, never poll" became once a terminal
+wanted to sit and watch, and F10 is what F4's pane became once somebody wanted a
+shell in it that was not an agent.
 
 ## 1. What Pro is
 
@@ -153,6 +155,7 @@ now that both the widget and the bench import it.
 | F7 companion link | `shared/companionLink.ts`, `main/pro/companion.ts`, `App.tsx` | `proIpcHost`, `proCommand`, `companionLink`, `bubbleAnswer` | done |
 | F8 terminal control surface | `shared/proCli.ts`, `main/pro/cli.ts`, `main/cliIo.ts` | `proCli`, `topBarCounts`, the built-CLI cases in gate four | done |
 | F9 push route + `pro watch` | `main/server.ts` (`/pro/stream`), `main/probe.ts` (`streamNdjson`), `shared/proCli.ts` (`diffProViews` + the change renderers), `main/pro/cli.ts` (`runProWatch`), `main/pro/service.ts` (`onChange`) | `server`, `proCli`, `proService`, the ctrl-c case in gate four | done |
+| F10 ssh + local shells | `shared/ssh.ts` (every rule, pure), `main/pro/ssh.ts` (the impure edge), `renderer/src/pro/ConnectDialog.tsx`, `main/pro/service.ts` (`sshOp`, `openSession`) | `ssh`, `proSsh`, `proIpcSsh`, the `ProService ssh` cases in `proService`, `tests/e2e/sshLive.e2e.ts` (opt-in, real box) | done |
 
 Acceptance criteria 6.1-6.4 and 6.7 are exercised by unit tests against recorded
 fixtures (`tests/fixtures/herdr/`, captured with
@@ -178,6 +181,38 @@ What the pane deliberately does not carry is written down with its reasons in
 `thirdparty/README.md` under "Read and refused": no OSC 133 prompt marks (herdr
 owns PTY spawn, so "jump to the last prompt" is not ours to build), no kitty
 keyboard protocol (`Ctrl+I` stays `Tab`), no inline images.
+
+A pane does not have to hold an agent (F10). `t` opens a plain shell in the
+selected task's directory and `c` opens the connect palette; both end in the same
+place, because a terminal session is a Bench task with `agentKind: ''` - herdr
+still owns the PTY, the registry still owns the row in the tree, and the renderer
+that already draws agent output draws a shell too. One provisioning path
+(`service.ts::openSession`) for connect, terminal and passwordless setup, and the
+only thing that differs is what gets typed into the fresh shell. There is no
+second terminal implementation in this app and no node-pty.
+
+The palette reads three sources and says which one each row came from: pinned
+machines (`machines.json`, the only file this feature writes), `~/.ssh/config`
+aliases, and whatever is in the input. A config alias wins over its own parsed
+host/port, because `ssh <alias>` resolves HostName/Port/User/IdentityFile from
+the user's config and a guess from ours would silently disagree with it. The
+input takes `user@host[:port]` or a whole pasted `ssh` command line, which is how
+machines actually arrive - from a README or a colleague's message.
+
+Parsing is deliberately boring, because the alternative is typing an attacker's
+line into somebody's shell. A pasted command keeps only the flags that change the
+destination (`-p -l -i -J`, and `-o Port/User/IdentityFile/ProxyJump`), drops the
+remote command, refuses any line carrying a shell metacharacter, and refuses
+destinations outside a plain allow-list. What reaches the PTY goes through
+`shellQuote` as one line plus Enter.
+
+The probe answers the only question anybody has about a machine - "can I get in
+without typing a password?" - so every status is phrased as that answer rather
+than as an exit code, and it runs `ssh` with `BatchMode=yes`, which is what makes
+"needs a password" distinguishable from "hangs". `Alt/Opt+K` runs `ssh-copy-id`
+for the selected machine, prepending `ssh-keygen` only when `~/.ssh` has no key
+to copy. `tests/e2e/sshLive.e2e.ts` is the one case that touches a real box, and
+it is opt-in (`CODEWAIFU_SSH_TARGET`), because CI has no box to reach.
 
 A question can be answered in words from either surface (F7). The widget's
 bubble grows one row - an Answer chip, a single-line field, a Send - and widens
@@ -414,7 +449,8 @@ without reading those first.
   a debounce timer; the bar now shows the engine's reason in the counter that
   otherwise shows the match count, and a mode toggle rescans immediately rather
   than waiting for the next keystroke.
-- **`i` is the only door into a terminal.** MVP F7's "focusTask focuses that pane"
+- **`i` is the only door into a terminal nobody asked for.** MVP F7's "focusTask
+  focuses that pane"
   is grid selection and deliberately not keyboard focus: a companion bubble that
   brought the window forward and quietly took the keyboard would send the next `d`
   into the agent's shell instead of denying the head of the queue, which breaks the
@@ -422,6 +458,9 @@ without reading those first.
   different things, because "this task has no panes" and "that pane is released"
   have different fixes. Shift+Tab is the way out; xterm's helper textarea sits in
   the tab order ahead of the pane header buttons, so tabbing alone cannot escape.
+  `c` and `t` (F10) do land the keyboard in the pane they open, and that is not a
+  contradiction: they are the human's own keystroke asking for a shell, not the
+  app deciding on their behalf. Neither one is reachable from a companion push.
 - **The fault card asks nobody for anything.** No `proApi`, no config, no context,
   no import of `Bench`, and its language comes from `navigator` rather than from
   the user's `uiLang` setting - a card in the wrong language still beats a blank

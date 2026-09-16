@@ -68,8 +68,16 @@ machine sleeping, and the app crashing.
   with approve / deny / snooze, and the companion bubble can answer in words.
 - **A ledger and a recovery plan.** Every decision is append-only on disk, and a
   task whose agent session died gets a resume prompt you can run or re-ask.
+- **Shells and ssh, in the same tree.** A pane does not have to hold an agent.
+  `t` opens a local shell in the selected task's directory; `c` opens a connect
+  palette over your pinned machines, your `~/.ssh/config` aliases, and whatever
+  you type - `user@host:port`, or a whole `ssh ...` line pasted straight from a
+  README. Each row can be probed for passwordless login, pinned, or handed to
+  `ssh-copy-id`, and the answer is in words ("needs a password") rather than an
+  exit code.
 - **Keyboard first.** `j/k` move, `Enter` opens, `i` hands the keyboard to a
-  terminal, `Shift+Tab` takes it back, `a/d/s` decide, `1/2/3` switch panels.
+  terminal, `Shift+Tab` takes it back, `a/d/s` decide, `1/2/3` switch panels,
+  `c` connects, `t` opens a shell.
 
 Pro is Linux-first and needs herdr 0.9+ running; with no herdr the Bench shows
 an install card instead of crashing. Open it from the tray menu (the bench row
