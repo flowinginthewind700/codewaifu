@@ -311,6 +311,12 @@ function proHost(instance: Core): ProHost {
     // The sessions the companion already tracks on this machine. Read-only:
     // the bench offers them for import, it never writes to the tracker.
     listThreads: () => instance.threads(),
+    // The conversation of one session, and the way to answer it. Both are the
+    // core's own implementations - the stage's chat view reads and steers
+    // through the same two - so an imported session says the same thing in
+    // either mode and there is one delivery path, not two.
+    readTranscript: (agent, threadId, options) => instance.transcript(agent, threadId, options),
+    steerThread: (agent, threadId, message) => instance.steer(agent, threadId, message),
     pickDir: () => pickDirectory(),
     openPath: (target) => {
       void revealPath(target)

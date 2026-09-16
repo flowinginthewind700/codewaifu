@@ -2429,3 +2429,176 @@ button.plan-title:focus-visible {
     display: none;
   }
 }
+
+/* ==========================================================================
+   Conversation
+
+   The center column for a task the bench has no terminal for: an imported
+   session, still running in the human's own console. It takes the pane grid's
+   place and its weight, so switching between a task with panes and a task
+   without one does not move the layout.
+   ========================================================================== */
+
+.convo {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bench-panel);
+}
+
+.convo-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--bench-line-soft);
+}
+
+.convo-title {
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.convo-hint {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  color: var(--faint);
+  font-size: var(--fs-small);
+  line-height: 1.6;
+}
+
+.convo-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.convo-older {
+  align-self: center;
+}
+
+.convo-msg {
+  border: 1px solid var(--bench-line-soft);
+  border-left: 2px solid var(--bench-line);
+  border-radius: var(--radius-sm);
+  background: var(--bench-panel-2);
+  padding: 6px 9px 7px;
+}
+
+/* Who said it, by colour: the human's own turns are the ones to find fast when
+   scrolling back through forty tool calls. */
+.convo-msg[data-role='user'] {
+  border-left-color: var(--accent);
+}
+
+.convo-msg[data-role='assistant'] {
+  border-left-color: var(--review);
+}
+
+.convo-msg[data-role='tool'],
+.convo-msg[data-role='reasoning'] {
+  background: var(--bench-panel);
+}
+
+/* A sub-agent's traffic is context, not the main thread: dimmed, not hidden. */
+.convo-msg[data-side='true'] {
+  opacity: 0.72;
+}
+
+.convo-msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 3px;
+}
+
+.convo-role {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.convo-when {
+  font-size: 10.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.convo-text {
+  margin: 0 0 4px;
+  font-size: var(--fs-body);
+  line-height: 1.62;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Folded means clamped, not truncated: the last line has to stay readable
+   enough to decide whether the rest is worth opening. */
+.convo-blocks:not([data-unfold]) .convo-text,
+.convo-output:not([data-unfold]) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 14;
+  overflow: hidden;
+}
+
+.convo-code,
+.convo-output {
+  margin: 0 0 4px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--bench-term);
+  color: var(--text);
+  font-size: var(--fs-term);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.convo-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--bench-line);
+  background: var(--bench-panel);
+}
+
+.convo-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--bench-line);
+  border-radius: var(--radius-sm);
+  background: var(--bench-term);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+
+.convo-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.convo-error {
+  color: var(--warn);
+}

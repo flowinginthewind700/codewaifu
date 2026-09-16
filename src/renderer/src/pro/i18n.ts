@@ -278,6 +278,62 @@ const STRINGS = {
     en: 'This task has no live pane. It may be gone from herdr - see the recovery plan above.'
   },
   noTask: { zh: '从左边选一个任务。', en: 'Pick a task on the left.' },
+
+  /* ---------------------------------------------------- conversation */
+  /**
+   * The surface for a task with no pane. An imported session is still running
+   * in the human's own terminal, so the bench cannot show its PTY - what it can
+   * show is the transcript the agent writes for itself, which is the same file
+   * the stage's chat view reads.
+   */
+  convoTitle: { zh: '会话记录', en: 'Conversation' },
+  convoHint: {
+    zh: '这个任务跑在工作台之外的终端里，这里读的是 agent 自己写下的记录文件。',
+    en: 'This task runs in a terminal the bench does not own. What you are reading is the transcript the agent writes for itself.'
+  },
+  convoLoading: { zh: '正在读取记录…', en: 'Reading the transcript…' },
+  convoEmpty: { zh: '记录还是空的。', en: 'Nothing in the transcript yet.' },
+  convoNoSession: {
+    zh: '这个任务还没有 agent 会话 id，暂时没有记录可读。它一开口，这里就会跟上。',
+    en: 'This task has no agent session id yet, so there is no transcript to read. It will appear here as soon as the agent speaks.'
+  },
+  convoMissing: {
+    zh: '找不到这个会话的记录文件：可能已被清理，或者会话跑在另一台机器上。',
+    en: 'No transcript file for this session: it may have been cleaned up, or the session runs on another machine.'
+  },
+  convoFailed: { zh: '读取失败：{detail}', en: 'Read failed: {detail}' },
+  convoRefresh: { zh: '重新读取', en: 'Re-read' },
+  convoReveal: { zh: '打开记录文件', en: 'Reveal transcript file' },
+  convoOlder: { zh: '载入更早的 {n} 条', en: 'Load {n} older' },
+  convoDropped: { zh: '还有 {n} 条更早的消息', en: '{n} older messages' },
+  convoTruncated: { zh: '（已截断）', en: '(truncated)' },
+  convoLive: { zh: '跟随中', en: 'Following' },
+  convoIdle: { zh: '已停止跟随', en: 'Not following' },
+  convoTool: { zh: '工具', en: 'Tool' },
+  convoReasoning: { zh: '思考', en: 'Reasoning' },
+  convoMore: { zh: '展开', en: 'More' },
+  convoLess: { zh: '收起', en: 'Less' },
+  convoPlaceholder: { zh: '接着这个会话说一句…', en: 'Say something to this session…' },
+  convoSend: { zh: '发送', en: 'Send' },
+  convoSteerHint: {
+    zh: 'Codex 走队列投递，Claude 没有注入接口、内容进剪贴板。',
+    en: 'Codex takes a queue write; Claude has no injection API, so the text goes to your clipboard.'
+  },
+  steerSent: { zh: '已送达会话 {id}', en: 'Delivered to session {id}' },
+  steerQueued: {
+    zh: '已排队，但 {id} 现在没在读队列；内容也复制到剪贴板了',
+    en: 'Queued, but {id} is not reading the queue right now; the text is also on your clipboard'
+  },
+  steerUndelivered: {
+    zh: '{id} 收下了却没在超时内读取；内容已复制到剪贴板',
+    en: '{id} accepted it but never read it in time; the text is on your clipboard'
+  },
+  steerNoCli: { zh: '找不到 codex CLI，内容已复制到剪贴板', en: 'Could not find the codex CLI; the text is on your clipboard' },
+  steerFailed: { zh: '插话失败，内容已复制到剪贴板', en: 'Steering failed; the text is on your clipboard' },
+  steerClaudeClipboard: {
+    zh: 'Claude 没有注入接口，内容已复制到剪贴板，去它的终端粘贴',
+    en: 'Claude has no injection API; the text is on your clipboard, paste it into its terminal'
+  },
   phaseIdle: { zh: '未接管', en: 'Idle' },
   phaseStarting: { zh: '正在接管…', en: 'Attaching…' },
   phaseLive: { zh: '实时', en: 'Live' },

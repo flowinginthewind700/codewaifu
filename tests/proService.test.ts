@@ -33,7 +33,8 @@ import {
   type ProTaskRequest
 } from '../src/shared/proIpc'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
-import type { ThreadInfo } from '../src/shared/protocol'
+import type { ChatTranscript } from '../src/shared/chat'
+import type { SteerResult, ThreadInfo } from '../src/shared/protocol'
 import { TaskRegistry } from '../src/main/pro/bench'
 import type { AnnounceResult } from '../src/main/pro/companion'
 import { GitProbe } from '../src/main/pro/git'
@@ -307,6 +308,15 @@ interface FakeHostOpts {
   autoResumeOnBoot?: boolean
   /** What the companion can see on this machine; the import picker reads it. */
   threads?: readonly ThreadInfo[]
+  /**
+   * What the transcript reader answers, and the tape of what the bench asked
+   * it to deliver. Absent transcript means "nothing on disk", which is a real
+   * outcome the panel has to name rather than a test that forgot to stub.
+   */
+  transcript?: ChatTranscript | null
+  steers?: string[]
+  /** How the agent took the message; absent means it could not be reached. */
+  steer?: SteerResult | null
   /** Window verbs the service asked for, in order. */
   calls?: string[]
 }
@@ -338,6 +348,11 @@ function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
       opts.calls?.push('openStage')
     },
     listThreads: async () => opts.threads ?? [],
+    readTranscript: () => opts.transcript ?? null,
+    steerThread: async (agent, threadId, message) => {
+      opts.steers?.push(`${agent}:${threadId} ${message}`)
+      return opts.steer ?? { ok: false, method: 'none', message: 'nobody is listening', reason: 'no-cli' }
+    },
     pickDir: async () => '',
     openPath: () => {},
     openExternal: () => {},
@@ -404,6 +419,31 @@ function thread(agent: 'codex' | 'claude', id: string, cwd = IMPORT_DIR, title =
 }
 
 /**
+ * One conversation as the transcript reader hands it over. The messages are the
+ * point of the shape: a task with no pane has nothing else to show, so an empty
+ * `messages` array here would let a panel that drops every line pass for one
+ * that renders them.
+ */
+function chatTranscript(id = FREE, agent: 'codex' | 'claude' = 'codex'): ChatTranscript {
+  return {
+    key: `${agent}:${id}`,
+    agent,
+    id,
+    title: 'the conversation the bench did not start',
+    cwd: IMPORT_DIR,
+    file: `/home/nobody/.codex/sessions/rollout-${id}.jsonl`,
+    messages: [
+      { id: `${agent}-0`, role: 'user', text: 'pick up where we left off', at: START },
+      { id: `${agent}-1`, role: 'assistant', text: 'reading the tree now', at: START + 1000 }
+    ],
+    dropped: 0,
+    mtimeMs: START,
+    bytes: 2048,
+    steerable: true
+  }
+}
+
+/**
  * A git probe that cannot spawn anything. `importThreads` resolves the repo root
  * of the directory a conversation started in, so that answer has to come from a
  * probe rather than from whatever `git` happens to be on the runner's PATH; the
@@ -432,6 +472,8 @@ interface Bench {
   calls: string[]
   /** Every ledger line written, so a case can ask what the task remembers. */
   ledgerTape: LedgerInput[]
+  /** Every message the bench asked an agent to take, as `agent:id text`. */
+  steers: string[]
   /** The registry the service was built on: what an import actually created. */
   registry: TaskRegistry
   /** How many times the plans were actually computed, memo misses only. */
@@ -510,6 +552,10 @@ interface BootOpts {
   autoResumeMax?: number
   /** What `listThreads` answers; absent means the companion sees nothing. */
   threads?: readonly ThreadInfo[]
+  /** What the transcript reader answers; absent means nothing on disk. */
+  transcript?: ChatTranscript | null
+  /** How the agent takes a message from the bench; absent means it cannot. */
+  steer?: SteerResult | null
   /** Directory -> repo root for the fake probe. Absent keeps the service default. */
   gitRoots?: Record<string, string>
   /** Build the real companion bridge instead of the tape. */
@@ -523,6 +569,7 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
   const announced: string[] = []
   const calls: string[] = []
   const ledgerTape: LedgerInput[] = []
+  const steers: string[] = []
   const registry = new TaskRegistry({
     file: 'memory://bench.json',
     now: () => clock.now(),
@@ -534,6 +581,9 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
       lang: opts.lang,
       autoResumeOnBoot: opts.autoResumeOnBoot,
       threads: opts.threads,
+      transcript: opts.transcript,
+      steer: opts.steer,
+      steers,
       calls
     }),
     timers: clock.timers,
@@ -564,7 +614,18 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
   })
   const planAllCalls = countPlanAll(service.recovery)
   await service.start()
-  return { service, clock, session, logs, announced, calls, ledgerTape, registry, planAllCalls }
+  return {
+    service,
+    clock,
+    session,
+    logs,
+    announced,
+    calls,
+    ledgerTape,
+    steers,
+    registry,
+    planAllCalls
+  }
 }
 
 /** Read the projection the way the window and `pro state` both do. */
@@ -920,6 +981,113 @@ describe('ProService import', () => {
       'a failed attach must not leave an active task with no pane behind'
     ).toBe('parked')
     expect(created?.agentSessionId).toBe(FREE)
+  })
+})
+
+/**
+ * The conversation of a task the bench has no terminal for.
+ *
+ * Import creates a parked task pointing at a session that is still running in
+ * the human's own console: herdr has no pane for it, so the centre column would
+ * otherwise be its honest-but-useless "no panes", and the imported work reads as
+ * lost. The transcript the agent writes for itself is the other source of truth
+ * - the same file the stage reads - and `steer` is the only way to answer a
+ * terminal we do not own, so both go through the host and neither invents a
+ * delivery it cannot prove.
+ */
+describe('ProService conversation', () => {
+  it('reads the transcript of an imported task, which has no pane to draw', async () => {
+    const bench = await boot({
+      tasks: [{ ...seedTask(), paneIds: [], agentSessionId: FREE, origin: 'imported' }],
+      transcript: chatTranscript()
+    })
+
+    const result = await bench.service.taskOp({
+      op: 'transcript',
+      taskId: TASK_ID,
+      limit: 240,
+      fresh: true
+    })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('transcript')
+    const transcript = result.data as ChatTranscript
+    expect(transcript.id).toBe(FREE)
+    expect(transcript.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
+  })
+
+  it('separates "no session yet" from "the file is gone"', async () => {
+    // The two ask for different actions: one is a task that has not spoken, the
+    // other is a conversation that ran somewhere this machine cannot see.
+    const silent = await boot({ tasks: [{ ...seedTask(), agentSessionId: '' }] })
+    const noSession = await silent.service.taskOp({
+      op: 'transcript',
+      taskId: TASK_ID,
+      limit: 240,
+      fresh: true
+    })
+    expect(noSession.code).toBe('no-session')
+
+    const missing = await boot({ tasks: [{ ...seedTask(), agentSessionId: FREE }] })
+    const noFile = await missing.service.taskOp({
+      op: 'transcript',
+      taskId: TASK_ID,
+      limit: 240,
+      fresh: true
+    })
+    expect(noFile.code).toBe('no-transcript')
+  })
+
+  it('refuses to read a session whose agent it cannot parse', async () => {
+    // `agentKind` is free text in the registry; a reader handed `unknown` would
+    // have to guess a directory, and guessing is how one agent's conversation
+    // ends up rendered as another's.
+    const bench = await boot({
+      tasks: [{ ...seedTask(), agentKind: 'aider', agentSessionId: FREE }],
+      transcript: chatTranscript()
+    })
+    const result = await bench.service.taskOp({
+      op: 'transcript',
+      taskId: TASK_ID,
+      limit: 240,
+      fresh: true
+    })
+    expect(result.code).toBe('no-session')
+  })
+
+  it('answers the session through steer, and writes the human into the ledger', async () => {
+    const bench = await boot({
+      tasks: [{ ...seedTask(), agentSessionId: FREE }],
+      steer: { ok: true, method: 'queue', message: 'queued for codex', reason: 'sent' }
+    })
+
+    const result = await bench.service.taskOp({ op: 'steer', taskId: TASK_ID, message: 'ship it' })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('steered')
+    // Never a keystroke into a pane we do not own: the host verb is the queue.
+    expect(bench.steers).toEqual([`codex:${FREE} ship it`])
+    const notes = bench.ledgerTape.filter((entry) => entry.kind === 'note')
+    expect(notes.map((entry) => entry.text)).toContain('ship it')
+  })
+
+  it('reports a clipboard delivery as a copy, not as a send', async () => {
+    // Claude has no injection API. Saying "sent" would be a lie the human
+    // discovers only after waiting on an agent that never saw the message.
+    const bench = await boot({
+      tasks: [{ ...seedTask(), agentKind: 'claude', agentSessionId: FREE }],
+      steer: { ok: true, method: 'clipboard', message: 'on your clipboard', reason: 'clipboard' }
+    })
+
+    const result = await bench.service.taskOp({ op: 'steer', taskId: TASK_ID, message: 'paste me' })
+    expect(result.code).toBe('copied')
+    expect(bench.steers).toEqual([`claude:${FREE} paste me`])
+  })
+
+  it('says so when the agent could not be reached', async () => {
+    const bench = await boot({ tasks: [{ ...seedTask(), agentSessionId: FREE }] })
+
+    const result = await bench.service.taskOp({ op: 'steer', taskId: TASK_ID, message: 'anyone there' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('steer-failed')
   })
 })
 

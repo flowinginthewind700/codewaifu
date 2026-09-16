@@ -8,6 +8,7 @@
  * starts lying.
  */
 import type { ProConfig } from '@shared/config'
+import { DEFAULT_MESSAGE_LIMIT, type ChatTranscript } from '@shared/chat'
 import { DEFAULT_SNOOZE_MINUTES } from '@shared/pro'
 import type {
   AttentionAction,
@@ -28,7 +29,7 @@ import type {
   ProResult,
   ImportCandidate
 } from '@shared/proIpc'
-import type { Lang, RedactedConfig, RuntimeState, UiSnapshot } from '@shared/protocol'
+import type { Lang, RedactedConfig, RuntimeState, SteerResult, UiSnapshot } from '@shared/protocol'
 
 const bridge = window.codewaifu
 
@@ -130,7 +131,26 @@ export const proApi = {
       keys: readonly string[],
       attach: boolean
     ): Promise<ProResult<{ imported: number; attached: number; skipped: string[] }>> =>
-      call(CH.proTask, { op: 'import', keys, attach })
+      call(CH.proTask, { op: 'import', keys, attach }),
+    /**
+     * The conversation behind a task, read from the agent's own transcript
+     * file. This is what a task with no pane has to show: an imported session
+     * is still running in somebody else's terminal, so herdr has nothing to
+     * draw and the transcript is the only live surface the bench can offer.
+     */
+    transcript: (
+      taskId: string,
+      opts: { limit?: number; fresh?: boolean } = {}
+    ): Promise<ProResult<ChatTranscript | null>> =>
+      call<ChatTranscript | null>(CH.proTask, {
+        op: 'transcript',
+        taskId,
+        limit: opts.limit ?? DEFAULT_MESSAGE_LIMIT,
+        fresh: opts.fresh ?? false
+      }),
+    /** Answer that session. Codex gets a queue write, Claude the clipboard. */
+    steer: (taskId: string, message: string): Promise<ProResult<SteerResult>> =>
+      call<SteerResult>(CH.proTask, { op: 'steer', taskId, message })
   },
 
   ledger: {

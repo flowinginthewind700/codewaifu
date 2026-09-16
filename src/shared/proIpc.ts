@@ -15,6 +15,7 @@
  */
 import type { Lang } from './protocol'
 import type { Expression } from './ui'
+import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT } from './chat'
 import {
   attentionKindOf,
   DEFAULT_SNOOZE_MINUTES,
@@ -280,6 +281,23 @@ export type ProTaskRequest =
    * recovery plan resumes the conversation in a workspace the bench owns.
    */
   | { op: 'import'; keys: string[]; attach: boolean }
+  /**
+   * The conversation behind a task, read from the agent's own transcript file.
+   *
+   * This is the surface for work the bench did not start. An imported session
+   * is running in somebody else's terminal, so herdr has no pane for it and the
+   * pane grid has nothing to draw; without this op the tree row is the whole of
+   * what an import gives you, which reads as "the import lost the conversation"
+   * rather than as "the conversation lives in a file we did not open". Same
+   * reader the stage's chat view uses, so both modes show the same words.
+   */
+  | { op: 'transcript'; taskId: string; limit: number; fresh: boolean }
+  /**
+   * Answer the session behind a task. Codex takes a queue write, Claude has no
+   * injection API and gets the clipboard; `steer.ts` already tells the two
+   * apart, and the bench reports whatever it says instead of guessing.
+   */
+  | { op: 'steer'; taskId: string; message: string }
 
 export type ProTaskParse = ProTaskRequest | ProReject
 
@@ -330,6 +348,23 @@ export function parseProTask(payload: unknown): ProTaskParse {
       const keys = threadKeysOf(raw.keys ?? raw.ids)
       if (!keys.length) return reject('bad-payload', 'import needs at least one thread key')
       return { op, keys, attach: bool(raw.attach) }
+    }
+    case 'transcript': {
+      const taskId = taskIdOf(raw.taskId ?? raw.id)
+      if (!taskId) return reject('bad-task', 'taskId is required')
+      return {
+        op,
+        taskId,
+        limit: int(raw.limit, DEFAULT_MESSAGE_LIMIT, 1, MAX_MESSAGE_LIMIT),
+        fresh: bool(raw.fresh)
+      }
+    }
+    case 'steer': {
+      const taskId = taskIdOf(raw.taskId ?? raw.id)
+      if (!taskId) return reject('bad-task', 'taskId is required')
+      const message = str(raw.message ?? raw.text, 8000).trim()
+      if (!message) return reject('bad-payload', 'steer needs a message')
+      return { op, taskId, message }
     }
     default:
       return reject('bad-op', `unknown task op ${str(raw.op, 20)}`)

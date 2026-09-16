@@ -40,6 +40,7 @@ import type { Lang, RedactedConfig, RuntimeState } from '@shared/protocol'
 import type { ProFocusPush, ProResult } from '@shared/proIpc'
 import { proApi } from './api'
 import { AttentionQueue } from './AttentionQueue'
+import { ConversationPanel } from './ConversationPanel'
 import { ImportDialog } from './ImportDialog'
 import { InstallCard } from './InstallCard'
 import { LedgerPanel } from './LedgerPanel'
@@ -209,6 +210,18 @@ export function Bench(): ReactElement {
   const selectedTask = useMemo(
     () => view?.tasks.find((entry) => entry.id === taskId) ?? null,
     [view, taskId]
+  )
+  /**
+   * The task whose conversation replaces its terminal: it has a session to read
+   * and no pane to draw. Import lands here, and so does an adopted workspace
+   * whose pane has since gone away.
+   */
+  const conversationTask = useMemo(
+    () =>
+      selectedTask && !selectedTask.panes.length && selectedTask.agentSessionId
+        ? selectedTask
+        : null,
+    [selectedTask]
   )
   const plan = useMemo(
     () => view?.recovery.find((entry) => entry.taskId === taskId) ?? null,
@@ -641,13 +654,22 @@ export function Bench(): ReactElement {
                 onRemove={() => setRemoveId(selectedTask.id)}
               />
             )}
-            <PaneGrid
-              task={selectedTask}
-              selectedPaneId={paneId}
-              t={t}
-              onSelectPane={setPaneId}
-              onNotify={push}
-            />
+            {conversationTask ? (
+              // A task with a session but no pane: imported from the companion,
+              // or adopted from a herdr workspace whose terminal is gone. The
+              // pane grid's honest answer here is "no panes", which tells the
+              // human nothing about work that is still running in their own
+              // terminal, so the transcript takes the center instead.
+              <ConversationPanel task={conversationTask} t={t} onNotify={push} />
+            ) : (
+              <PaneGrid
+                task={selectedTask}
+                selectedPaneId={paneId}
+                t={t}
+                onSelectPane={setPaneId}
+                onNotify={push}
+              />
+            )}
           </main>
 
           <aside className="bench-right">

@@ -99,7 +99,20 @@ export function TaskCard({
     const text = draft.trim()
     if (!text) return
     if (!paneId) {
-      onNotify(t('steerNoPane'), 'warn')
+      // No terminal of ours to type into - an imported session is still running
+      // in the human's own console. The queue/clipboard path reaches it anyway,
+      // and it reports which of the two happened instead of claiming a delivery.
+      const sent = await proApi.task.steer(task.id, text)
+      const delivered = sent.data
+      if (!sent.ok || !delivered) {
+        onNotify(sent.detail || sent.code || t('steerFailed'), 'error')
+        return
+      }
+      onNotify(delivered.message || t('steerFailed'), delivered.ok ? 'ok' : 'warn')
+      if (delivered.ok) {
+        setDraft('')
+        setSteering(false)
+      }
       return
     }
     const result = await proApi.pane.send(paneId, text)
@@ -110,7 +123,7 @@ export function TaskCard({
     // No success toast: the line appears in the terminal a hundred pixels below.
     setDraft('')
     setSteering(false)
-  }, [draft, onNotify, paneId, t])
+  }, [draft, onNotify, paneId, t, task.id])
 
   const interrupt = useCallback(async (): Promise<void> => {
     if (!paneId) {

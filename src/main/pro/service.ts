@@ -39,7 +39,8 @@ import {
   type Snapshot
 } from '../../shared/herdr'
 import { IPC } from '../../shared/ipcChannels'
-import type { HookEvent, Lang, ThreadInfo } from '../../shared/protocol'
+import type { Agent, HookEvent, Lang, SteerResult, ThreadInfo } from '../../shared/protocol'
+import type { ChatTranscript } from '../../shared/chat'
 import type { BubbleMessage } from '../../shared/ui'
 import {
   buildBench,
@@ -160,6 +161,20 @@ export interface ProHost {
    * a human who can wait twenty milliseconds.
    */
   listThreads: () => Promise<readonly ThreadInfo[]>
+  /**
+   * One session's conversation, read off the agent's own transcript file. The
+   * bench needs it because a task it did not start has no pane: herdr owns the
+   * PTYs of workspaces the bench provisioned, and an imported session is still
+   * running in the human's own terminal. Without a reader the tree row is the
+   * whole of what an import gives back.
+   */
+  readTranscript: (
+    agent: Agent,
+    threadId: string,
+    options?: { limit?: number; fresh?: boolean }
+  ) => ChatTranscript | null
+  /** Answer that session. Never a keystroke into a pane we do not own. */
+  steerThread: (agent: Agent, threadId: string, message: string) => Promise<SteerResult>
   pickDir: () => Promise<string>
   openPath: (path: string) => void
   /** Hand a link to the OS browser. The scheme allow-list already ran. */
@@ -1728,6 +1743,10 @@ export class ProService implements CompanionApi {
       }
       case 'import':
         return this.importThreads(request)
+      case 'transcript':
+        return this.taskTranscript(request)
+      case 'steer':
+        return this.steerTask(request)
     }
   }
 
@@ -1942,6 +1961,91 @@ export class ProService implements CompanionApi {
       '',
       request.attach ? 'imported-attached' : 'imported'
     )
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Conversation
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The conversation behind a task, whether or not the bench owns a terminal
+   * for it.
+   *
+   * An imported or adopted task can be perfectly alive and still have nothing
+   * to draw: herdr only has panes for workspaces the bench provisioned, and the
+   * session this task points at is running in the human's own terminal. The
+   * agent's own transcript file is the other source of truth, and it is the one
+   * the stage already reads, so both modes show the same words.
+   *
+   * Three outcomes, three codes, because "no session id yet" and "the file is
+   * gone" ask the human to do different things.
+   */
+  private taskTranscript(request: Extract<ProTaskRequest, { op: 'transcript' }>): ProResult {
+    const task = this.registry.get(request.taskId)
+    if (!task) return this.noTask(request.taskId)
+    const session = sessionOf(task)
+    if (!session) {
+      return failResult('no-session', `task ${task.id} has no agent session to read yet`)
+    }
+    let found: ChatTranscript | null = null
+    try {
+      found = this.host.readTranscript(session.agent, session.id, {
+        limit: request.limit,
+        fresh: request.fresh
+      })
+    } catch (error) {
+      this.host.log('warn', 'pro transcript read failed', String(error))
+      return failResult('no-transcript', `could not read the ${session.agent} transcript`)
+    }
+    if (!found) {
+      return failResult(
+        'no-transcript',
+        `no transcript on disk for ${session.agent} session ${session.id.slice(0, 8)}`
+      )
+    }
+    return okResult(found, '', 'transcript')
+  }
+
+  /**
+   * Answer that session from the bench.
+   *
+   * This goes through `steer` rather than through a pane, on purpose: the point
+   * of the op is the task with no pane, and typing into a terminal the bench
+   * does not own is not something it can do anyway. What the agent gets is the
+   * same delivery the stage's composer uses, and the result it reports is the
+   * same honest one - `codex queue` exits 0 even when nobody reads the queue.
+   */
+  private async steerTask(request: Extract<ProTaskRequest, { op: 'steer' }>): Promise<ProResult> {
+    const task = this.registry.get(request.taskId)
+    if (!task) return this.noTask(request.taskId)
+    const session = sessionOf(task)
+    if (!session) {
+      return failResult('no-session', `task ${task.id} has no agent session to answer`)
+    }
+    const result = await this.host
+      .steerThread(session.agent, session.id, request.message)
+      .catch((error: unknown) => {
+        this.host.log('warn', 'pro steer failed', String(error))
+        return null
+      })
+    if (!result) {
+      return failResult('steer-failed', `could not reach the ${session.agent} session`)
+    }
+    // The ledger is the task's memory, and "a human said this" belongs in it
+    // whether or not the agent had a pane to say it into.
+    this.ledger.append(
+      {
+        taskId: task.id,
+        kind: 'note',
+        text: clipText(request.message, 400),
+        agent: session.agent,
+        source: 'bench'
+      },
+      this.timers.now()
+    )
+    this.invalidate()
+    if (!result.ok) return failResult('steer-failed', result.message || 'the agent refused the message')
+    return okResult(result, result.message, result.method === 'queue' ? 'steered' : 'copied')
   }
 
   /* ---------------------------------------------------------------- *
@@ -2548,6 +2652,22 @@ function clipText(text: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}...` : value
 }
 
+/**
+ * The session a task points at, as the transcript reader wants it.
+ *
+ * `agentKind` is free text in the registry (herdr reports what it saw, import
+ * reports what the tracker saw), so it is narrowed here rather than at every
+ * call site: anything that is not codex or claude has no transcript format we
+ * can parse, and saying so is better than handing `unknown` to a reader that
+ * would then guess a directory.
+ */
+function sessionOf(task: TaskRecord): { agent: Agent; id: string } | null {
+  const id = String(task.agentSessionId || '').trim()
+  if (!id) return null
+  const kind = String(task.agentKind || '').trim().toLowerCase()
+  if (kind !== 'codex' && kind !== 'claude') return null
+  return { agent: kind, id }
+}
 function hookText(event: HookEvent): string {
   const source = String(event.sourceText || '').trim()
   const detail = String(event.detail || '').trim()
