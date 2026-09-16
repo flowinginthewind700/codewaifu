@@ -1,8 +1,10 @@
 /**
  * New task (F2): the one form in the product.
  *
- * It is a form and not a wizard because everything on it is optional except the
- * directory. Title and goal can be filled in later from the card; the worktree
+ * It is a form and not a wizard because everything on it is optional, the
+ * directory included: blank means `~`, and main resolves that to a real path
+ * (`shared/pro.ts::resolveWorkdir`) so the registry never stores a guess.
+ * Title and goal can be filled in later from the card; the worktree
  * and branch fields stay hidden until the checkbox that needs them is ticked;
  * the agent list is whatever herdr can actually start on this machine, fetched
  * once on open rather than hardcoded, because a select full of agents that are
@@ -91,16 +93,15 @@ export function NewTaskDialog({
 
   const submit = async (): Promise<void> => {
     if (busy) return
-    if (!workdir.trim()) {
-      setError(t('needWorkdir'))
-      return
-    }
     setBusy(true)
     setError('')
     const result = await proApi.task.create({
       title: title.trim(),
       goal: goal.trim(),
-      workdir: workdir.trim(),
+      // A blank field is a decision, not a missing one: it means home. The
+      // tilde is sent rather than expanded here because the renderer does not
+      // know whose home this is, and main already has the one implementation.
+      workdir: workdir.trim() || '~',
       branch: worktree ? branch.trim() : '',
       base: worktree ? base.trim() : '',
       worktree,
@@ -169,7 +170,7 @@ export function NewTaskDialog({
                 className="input mono"
                 value={workdir}
                 spellCheck={false}
-                placeholder="/path/to/repo"
+                placeholder={t('workdirPlaceholder')}
                 onChange={(event) => setWorkdir(event.target.value)}
               />
               <button type="button" className="btn sm" onClick={() => void browse()}>

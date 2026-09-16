@@ -375,7 +375,7 @@ const STRINGS = {
   worktreeToggle: { zh: '新建 git worktree', en: 'New git worktree' },
   startToggle: { zh: '现在就启动代理', en: 'Start the agent now' },
   createTask: { zh: '创建任务', en: 'Create task' },
-  needWorkdir: { zh: '先选一个工作目录。', en: 'Pick a working directory first.' },
+  workdirPlaceholder: { zh: '留空 = ~（主目录）', en: 'blank = ~ (home)' },
 
   /* ---------------------------------------------------------- time */
   timeNow: { zh: '刚刚', en: 'just now' },

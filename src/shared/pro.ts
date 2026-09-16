@@ -45,6 +45,39 @@ function samePath(a: string, b: string): boolean {
   return left === right || left.toLowerCase() === right.toLowerCase()
 }
 
+/**
+ * What a typed working directory means, resolved against a home the caller
+ * supplies: empty is home, `~` is home, `~/src/app` is home plus the tail.
+ *
+ * The field is a path in a product that owns terminals, so it gets typed like
+ * one - and a shell would have expanded the tilde before we ever saw it. Not
+ * expanding it here means the one input that looks most like a path is the one
+ * that fails with "not a directory", which reads as a bug in the form.
+ *
+ * Empty meaning home is the GUI's rule, not the CLI's: `--cli` fills in
+ * `process.cwd()` before it sends anything, because a terminal knows where
+ * "here" is and a window does not. Only the caller's home is expanded - `~root`
+ * stays literal, since guessing another user's home is how a task lands
+ * somewhere nobody meant.
+ */
+export function resolveWorkdir(raw: unknown, home: string): string {
+  const value = String(raw ?? '').trim()
+  const base = String(home || '').trim().replace(/[\\/]+$/, '')
+  if (!value) return base
+  const isTilde = value === '~' || value.startsWith('~/') || value.startsWith('~\\')
+  if (!isTilde) return value
+  if (!base) return value
+  // Match the separator the home directory already uses, so a Windows home does
+  // not end up stored as `C:\Users\u/src/app`. Only that direction: on POSIX a
+  // backslash is an ordinary character in a filename and rewriting it would
+  // point the task at a directory that does not exist.
+  const separator = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+  const rest = value === '~' ? '' : value.slice(2).replace(/^[\\/]+/, '')
+  const tail = separator === '\\' ? rest.replace(/\//g, '\\') : rest
+  if (!tail) return base
+  return `${base}${separator}${tail}`
+}
+
 /* ------------------------------------------------------------------ *
  * Tasks
  * ------------------------------------------------------------------ */

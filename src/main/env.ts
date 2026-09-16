@@ -10,6 +10,14 @@ export const isWindows = platform === 'win32'
 
 const home = os.homedir()
 
+/**
+ * The home directory, exported because Pro resolves a human's `~` and an empty
+ * path field against it. Everything below is derived from the same value, so a
+ * caller that needs "home" and a caller that needs "our state dir" cannot
+ * disagree about whose home it is.
+ */
+export const homeDir = home
+
 function resolveOverride(envValue: string | undefined, fallback: string): string {
   return envValue && envValue.trim() ? path.resolve(envValue) : fallback
 }

@@ -50,6 +50,7 @@ import {
   pathBase,
   planAttentionAction,
   rePromptText,
+  resolveWorkdir,
   type AttentionExecution,
   type AttentionItem,
   type BenchView,
@@ -87,6 +88,7 @@ import {
 import { TaskRegistry, type CreateTaskInput, type RegistryPatch } from './bench'
 import { CompanionBridge, type AnnounceResult, type CompanionApi } from './companion'
 import { benchFile, ensureProDirs, tasksDir } from './env'
+import { homeDir } from '../env'
 import { GitProbe, suggestBranch, type GitFacts } from './git'
 import type { HerdrClient, ReadFormat, ReadSource } from './herdr/client'
 import {
@@ -1737,7 +1739,10 @@ export class ProService implements CompanionApi {
    * recovery will bind it to a workspace the moment herdr appears.
    */
   private async createTask(request: Extract<ProTaskRequest, { op: 'create' }>): Promise<ProResult> {
-    const workdir = request.workdir
+    // `~` and an empty field both mean home, and the expansion happens here
+    // rather than in the form because this is the layer that knows whose home
+    // it is. What the registry stores is always a real absolute path.
+    const workdir = resolveWorkdir(request.workdir, homeDir)
     if (!workdir) return failResult('bad-payload', 'a task needs a working directory')
     if (!isDirectory(workdir)) return failResult('no-dir', `${workdir} is not a directory`)
 

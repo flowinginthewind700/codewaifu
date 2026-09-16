@@ -19,8 +19,19 @@
 import os from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG } from '../src/shared/config'
-import { emptyCounts, type LedgerDigest, type RecoveryPlan, type TaskRecord } from '../src/shared/pro'
-import { okResult, type ImportCandidate, type ProCompanionPush } from '../src/shared/proIpc'
+import {
+  emptyCounts,
+  resolveWorkdir,
+  type LedgerDigest,
+  type RecoveryPlan,
+  type TaskRecord
+} from '../src/shared/pro'
+import {
+  okResult,
+  type ImportCandidate,
+  type ProCompanionPush,
+  type ProTaskRequest
+} from '../src/shared/proIpc'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
 import type { ThreadInfo } from '../src/shared/protocol'
 import { TaskRegistry } from '../src/main/pro/bench'
@@ -930,5 +941,78 @@ describe('ProService mode switch', () => {
     // being put away here.
     expect(bench.calls).toEqual(['openStage'])
     expect(bench.service.view()?.tasks).toHaveLength(1)
+  })
+})
+
+/**
+ * What a typed path means. The new-task form's directory field is the one input
+ * in the product a human types as a path, so it gets typed like one: `~` and a
+ * blank field both mean home. Expanding that is main's job and not the
+ * renderer's, because main is the layer that knows whose home it is - and the
+ * registry stores an absolute path either way, since a `~` in bench.json is a
+ * path only the machine that wrote it could read back.
+ */
+describe('ProService task paths', () => {
+  const HOME = os.homedir()
+
+  function create(workdir: string): ProTaskRequest {
+    return {
+      op: 'create',
+      title: 'from a typed path',
+      goal: '',
+      workdir,
+      branch: '',
+      base: '',
+      worktree: false,
+      agent: '',
+      start: false,
+      prompt: ''
+    }
+  }
+
+  it('reads blank and ~ as home, and a real path as itself', () => {
+    expect(resolveWorkdir('', HOME)).toBe(HOME)
+    expect(resolveWorkdir('   ', HOME)).toBe(HOME)
+    expect(resolveWorkdir('~', HOME)).toBe(HOME)
+    expect(resolveWorkdir('~/', HOME)).toBe(HOME)
+    expect(resolveWorkdir('~/src/app', HOME)).toBe(`${HOME}/src/app`)
+    expect(resolveWorkdir('/work/app', HOME)).toBe('/work/app')
+    // Somebody else's home is not ours to guess, so it stays literal and fails
+    // the directory check like any other path that is not there.
+    expect(resolveWorkdir('~root/src', HOME)).toBe('~root/src')
+  })
+
+  it('expands against a Windows home without mixing the separators', () => {
+    expect(resolveWorkdir('~', 'C:\\Users\\u')).toBe('C:\\Users\\u')
+    expect(resolveWorkdir('~/src/app', 'C:\\Users\\u')).toBe('C:\\Users\\u\\src\\app')
+    expect(resolveWorkdir('~\\src', 'C:\\Users\\u')).toBe('C:\\Users\\u\\src')
+  })
+
+  it('leaves the tilde alone when there is no home to expand it against', () => {
+    expect(resolveWorkdir('~/src', '')).toBe('~/src')
+    expect(resolveWorkdir('', '')).toBe('')
+  })
+
+  it('creates the task in home when the form sent the default', async () => {
+    const bench = await boot({ tasks: [], gitRoots: {} })
+
+    const result = await bench.service.taskOp(create('~'))
+    expect(result.ok).toBe(true)
+
+    const created = bench.registry.tasks()[0]
+    expect(created?.workdir).toBe(HOME)
+    // Home is not a repository, so it groups under itself rather than under
+    // nothing: the tree's spine is directories and this one is real.
+    expect(created?.repoRoot).toBe(HOME)
+    expect(bench.service.view()?.tasks).toHaveLength(1)
+  })
+
+  it('still refuses a path the expansion made absolute but not real', async () => {
+    const bench = await boot({ tasks: [], gitRoots: {} })
+
+    const result = await bench.service.taskOp(create('~/.codewaifu-no-such-dir'))
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('no-dir')
+    expect(bench.registry.tasks()).toHaveLength(0)
   })
 })
