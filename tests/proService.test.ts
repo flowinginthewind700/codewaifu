@@ -17,10 +17,12 @@
  * in-memory file, the ledger answers from a closure, the session is a flag.
  */
 import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG } from '../src/shared/config'
 import {
   emptyCounts,
+  pathBase,
   resolveWorkdir,
   type LedgerDigest,
   type RecoveryPlan,
@@ -1226,7 +1228,11 @@ describe('ProService task paths', () => {
     expect(resolveWorkdir('   ', HOME)).toBe(HOME)
     expect(resolveWorkdir('~', HOME)).toBe(HOME)
     expect(resolveWorkdir('~/', HOME)).toBe(HOME)
-    expect(resolveWorkdir('~/src/app', HOME)).toBe(`${HOME}/src/app`)
+    // `path.join`, not a hand-written `/`: this case runs on a Windows runner
+    // too, where the real home is `C:\Users\x` and the expansion has to come
+    // back with backslashes. The literal-separator behaviour is pinned by the
+    // next case, which does not depend on the host at all.
+    expect(resolveWorkdir('~/src/app', HOME)).toBe(path.join(HOME, 'src', 'app'))
     expect(resolveWorkdir('/work/app', HOME)).toBe('/work/app')
     // Somebody else's home is not ours to guess, so it stays literal and fails
     // the directory check like any other path that is not there.
@@ -1594,7 +1600,10 @@ describe('ProService ssh', () => {
     const task = bench.registry.tasks()[0]
     expect(task?.agentKind, 'a shell is not an agent').toBe('')
     expect(task?.workdir).toBe(HOME)
-    expect(task?.title).toBe(HOME.split('/').filter(Boolean).pop())
+    // The last segment, however this host spells a path: `HOME.split('/')` is
+    // the whole string on Windows, and a title reading `C:\Users\x` over a
+    // directory called `x` is the kind of wrong that ships quietly.
+    expect(task?.title).toBe(pathBase(HOME))
     expect(bench.ledgerTape).toHaveLength(1)
     expect(bench.ledgerTape[0]?.kind).toBe('session')
     // The human asked to be somewhere; landing them there is the point.

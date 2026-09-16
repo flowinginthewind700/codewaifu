@@ -177,6 +177,47 @@ describe('keys', () => {
   it('is empty with no home', () => {
     expect(new SshService({ home: '' }).keys()).toEqual([])
   })
+
+  /**
+   * The separator comes from the platform the service was told about, not the
+   * one the test happens to run on. Built on `node:path`, a faked posix world
+   * answered `/home/tester/.ssh/...` on Linux and `\home\tester\.ssh\...` on a
+   * Windows runner - so the same case passed in one CI job and failed in
+   * another, and the Windows answer was a key path nothing could open.
+   *
+   * Two keys, not one: ranking reduces a path to its filename, and a basename
+   * that only splits on the host separator leaves a Windows path whole, both
+   * keys unranked, and the order they were listed in.
+   */
+  it('joins and ranks with the declared platform', () => {
+    const posix = world({ sshDir: ['id_rsa.pub', 'id_ed25519.pub'] })
+    expect(service(posix, { platform: 'posix' }).keys()).toEqual([
+      `${HOME}/.ssh/id_ed25519.pub`,
+      `${HOME}/.ssh/id_rsa.pub`
+    ])
+
+    const windows = world({ sshDir: ['id_rsa.pub', 'id_ed25519.pub'] })
+    expect(service(windows, { platform: 'windows', home: 'C:\\Users\\t' }).keys()).toEqual([
+      'C:\\Users\\t\\.ssh\\id_ed25519.pub',
+      'C:\\Users\\t\\.ssh\\id_rsa.pub'
+    ])
+  })
+
+  it('reads the config from the declared platform too', () => {
+    const seen: string[] = []
+    const w = world({ config: 'Host prod\n  HostName 10.0.0.5\n' })
+    const svc = service(w, {
+      platform: 'windows',
+      home: 'C:\\Users\\t',
+      sshConfigPath: undefined,
+      readFile: (file) => {
+        seen.push(file)
+        return file.endsWith('config') ? w.config : null
+      }
+    })
+    expect(svc.config().map((m) => m.alias)).toEqual(['prod'])
+    expect(seen).toEqual(['C:\\Users\\t\\.ssh\\config'])
+  })
 })
 
 describe('setup + connect lines', () => {

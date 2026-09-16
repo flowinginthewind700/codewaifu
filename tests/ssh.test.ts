@@ -12,6 +12,8 @@ import {
   clampPort,
   dedupeMachines,
   expandHome,
+  baseName,
+  joinFor,
   makeMachine,
   machineSlug,
   parseSshConfig,
@@ -383,5 +385,48 @@ describe('setupLines', () => {
   it('uses the alias directly when the machine came from config', () => {
     const m = makeMachine({ host: 'h', alias: 'myserver', source: 'config' })
     expect(setupLines(m, { platform: 'posix' })[0]).toBe('ssh-copy-id myserver')
+  })
+})
+
+/**
+ * Path arithmetic with the separator of the *named* platform.
+ *
+ * `node:path` picks its separator once, at load time, so anything built on it
+ * answers a different question on a different runner. These two exist so a
+ * service told `platform: 'posix'` with a faked home describes the same world on
+ * every host - and so a Windows key path reduces to a filename on Linux, where
+ * `path.basename` would return the whole thing and the ranking it feeds would
+ * silently do nothing.
+ */
+describe('joinFor', () => {
+  it('uses the separator of the platform it was told about', () => {
+    expect(joinFor('posix', '/home/t', '.ssh', 'id_rsa.pub')).toBe('/home/t/.ssh/id_rsa.pub')
+    expect(joinFor('windows', 'C:\\Users\\t', '.ssh', 'id_rsa.pub')).toBe(
+      'C:\\Users\\t\\.ssh\\id_rsa.pub'
+    )
+  })
+
+  it('drops empty parts and the slashes where two meet', () => {
+    expect(joinFor('posix', '/home/t/', '/.ssh/', '', 'config')).toBe('/home/t/.ssh/config')
+    expect(joinFor('posix')).toBe('')
+    expect(joinFor('posix', '', '')).toBe('')
+  })
+
+  it('leaves a lone part alone, so a relative head is not rewritten', () => {
+    expect(joinFor('posix', 'herdr')).toBe('herdr')
+    expect(joinFor('windows', 'C:\\Users\\t')).toBe('C:\\Users\\t')
+  })
+})
+
+describe('baseName', () => {
+  it('splits on either separator, whichever host produced the path', () => {
+    expect(baseName('/home/t/.ssh/id_ed25519.pub')).toBe('id_ed25519.pub')
+    expect(baseName('C:\\Users\\t\\.ssh\\id_ed25519.pub')).toBe('id_ed25519.pub')
+    expect(baseName('id_ed25519.pub')).toBe('id_ed25519.pub')
+  })
+
+  it('ignores a trailing separator, and answers empty for empty', () => {
+    expect(baseName('/home/t/.ssh/')).toBe('.ssh')
+    expect(baseName('')).toBe('')
   })
 })

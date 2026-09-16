@@ -31,8 +31,14 @@ function pickAsset(os: string, arch: string, exts: string[], names: string[]): s
   return status === 0 && stdout ? stdout : null
 }
 
+/**
+ * Read a script as text. `spawnSync('cat', ...)` was the same thing with two
+ * extra failure modes: no `cat` on a bare Windows runner, and an empty string
+ * that reads exactly like "the needle is not in the file" - so the assertion
+ * failed for a reason that had nothing to do with the installer.
+ */
 function source(path: string): string {
-  return String(spawnSync('cat', [path], { encoding: 'utf8' }).stdout ?? '')
+  return readFileSync(path, 'utf8')
 }
 
 /**
@@ -380,9 +386,18 @@ describe.skipIf(!hasBash)('install.sh herdr step', () => {
   const systemHerdr = ['/opt/homebrew/bin/herdr', '/usr/local/bin/herdr', '/usr/bin/herdr'].filter(
     (path) => existsSync(path)
   )
-  const itNoSystemHerdr = systemHerdr.length > 0 ? it.skip : it
+  /**
+   * Git Bash is a real bash, so `hasBash` is true on a Windows runner and these
+   * cases would run - and fail to run anything at all. `runHerdrStep` hands the
+   * child a deliberately minimal POSIX PATH, because the host PATH may hold a
+   * herdr the developer installed and then "installs herdr" passes vacuously;
+   * that same PATH cannot resolve `bash.exe`, so Node never starts the child and
+   * every status comes back null. This is the macOS/Linux installer - Windows
+   * gets install.ps1, which `installWindows.test.ts` drives on a Windows runner.
+   */
+  const itRuns = isWindows || systemHerdr.length > 0 ? it.skip : it
 
-  itNoSystemHerdr('installs herdr on the way, and says where it landed', () => {
+  itRuns('installs herdr on the way, and says where it landed', () => {
     const run = runHerdrStep(['--herdr-only'])
     expect(run.status, run.stderr).toBe(0)
     expect(run.calls.some((line) => line.includes('https://herdr.dev/install.sh'))).toBe(true)
@@ -392,7 +407,7 @@ describe.skipIf(!hasBash)('install.sh herdr step', () => {
     expect(run.stdout).toContain('the Bench starts herdr')
   })
 
-  itNoSystemHerdr('an unreachable herdr installer warns and still exits 0', () => {
+  itRuns('an unreachable herdr installer warns and still exits 0', () => {
     // herdr is Pro's dependency, not the companion's. A blocked download here
     // must not take the app install down with it, and it must leave behind the
     // command that does work instead of a bare curl diagnostic.
@@ -404,7 +419,7 @@ describe.skipIf(!hasBash)('install.sh herdr step', () => {
     expect(run.stderr).not.toContain('curl: (22)')
   })
 
-  itNoSystemHerdr('leaves an existing herdr alone, which is what idempotent means', () => {
+  itRuns('leaves an existing herdr alone, which is what idempotent means', () => {
     const run = runHerdrStep(['--herdr-only'], {
       setup: (sandbox) => {
         mkdirSync(join(sandbox, '.local', 'bin'), { recursive: true })
@@ -417,7 +432,7 @@ describe.skipIf(!hasBash)('install.sh herdr step', () => {
     expect(run.calls).toEqual([])
   })
 
-  itNoSystemHerdr('honours pro.herdrPath, so a custom prefix is not reinstalled over', () => {
+  itRuns('honours pro.herdrPath, so a custom prefix is not reinstalled over', () => {
     const run = runHerdrStep(['--herdr-only'], {
       setup: (sandbox) => {
         const custom = join(sandbox, 'custom', 'herdr')
@@ -436,7 +451,7 @@ describe.skipIf(!hasBash)('install.sh herdr step', () => {
     expect(run.calls).toEqual([])
   })
 
-  it('can be told to skip, and a test sandbox skips without being told', () => {
+  itRuns('can be told to skip, and a test sandbox skips without being told', () => {
     // Last flag wins, which is the only sane reading of a contradictory pair.
     const off = runHerdrStep(['--herdr-only', '--no-herdr'])
     expect(off.status, off.stderr).toBe(0)
