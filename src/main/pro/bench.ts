@@ -12,7 +12,7 @@
  */
 import crypto from 'node:crypto'
 import {
-  bindTask,
+  bindTasks,
   parseTaskRecord,
   provisionTasks,
   type ProvisionResult,
@@ -27,10 +27,41 @@ import { readJson, writeJsonAtomic } from './env'
 /** Bumped when the on-disk shape changes; a mismatch is a re-read, not a crash. */
 export const REGISTRY_VERSION = 1
 
+/**
+ * A workspace the human removed, remembered until herdr agrees it is gone.
+ *
+ * Removing a row used to be the whole operation, and adoption undid it: every
+ * snapshot re-adopts whatever no task claims, so a closed-over shell came back
+ * on the next one - and "open a new terminal" is exactly what delivers the next
+ * one. What the human meant by remove has to outlive the row it deleted.
+ *
+ * The entry is dropped once a snapshot stops reporting the workspace, so a
+ * herdr restart that recycles the id cannot be blocked by a removal from last
+ * week; `at` is the backstop for a workspace that never reappears at all.
+ */
+export interface ForgottenWorkspace {
+  workspaceId: string
+  paneIds: string[]
+  at: number
+}
+
+/**
+ * How long a removal is honoured when herdr never lets the workspace go.
+ *
+ * The entry normally dies the moment a snapshot stops reporting the workspace,
+ * so this is only the backstop for a shell that stays alive indefinitely - and
+ * for one that outlives the removal by longer than this, being adopted back
+ * once is the lesser evil against an id that is blocked forever. A day, because
+ * "I closed that yesterday" still has to mean closed.
+ */
+export const FORGOTTEN_TTL_MS = 24 * 60 * 60 * 1000
+
 export interface RegistryFile {
   version: number
   updatedAt: number
   tasks: TaskRecord[]
+  /** Optional: a registry written before removals were remembered has none. */
+  forgotten?: ForgottenWorkspace[]
 }
 
 export interface CreateTaskInput {
@@ -71,6 +102,7 @@ export class TaskRegistry {
   private readonly read: (file: string) => RegistryFile | null
   private readonly write: (file: string, value: RegistryFile) => boolean
   private records: TaskRecord[] = []
+  private forgottenRecords: ForgottenWorkspace[] = []
   private loaded = false
   private dirty = false
 
@@ -99,6 +131,7 @@ export class TaskRegistry {
     const raw = this.read(this.file)
     const tasks = Array.isArray(raw?.tasks) ? raw.tasks : []
     this.records = tasks.map((entry) => parseTaskRecord(entry)).filter(nonNull)
+    this.forgottenRecords = parseForgotten(raw?.forgotten)
     this.loaded = true
     this.dirty = false
     return this.records
@@ -114,10 +147,14 @@ export class TaskRegistry {
 
   /** Persist now. Returns false when the write or the read-back failed. */
   save(): boolean {
+    // `load()` first: `forgottenRecords` is only populated by it, and saving
+    // before the first load would overwrite the file's list with an empty one.
+    this.load()
     const file: RegistryFile = {
       version: REGISTRY_VERSION,
       updatedAt: this.now(),
-      tasks: this.load().slice()
+      tasks: this.records.slice(),
+      forgotten: this.forgottenRecords.slice()
     }
     const ok = this.write(this.file, file)
     if (ok) this.dirty = false
@@ -194,6 +231,54 @@ export class TaskRegistry {
     return true
   }
 
+  /* ---------------------------------------------------------------- *
+   * Remembered removals
+   * ---------------------------------------------------------------- */
+
+  /** The workspace ids a removal is still standing in front of. */
+  forgotten(): string[] {
+    this.load()
+    return this.forgottenRecords.map((entry) => entry.workspaceId).filter(Boolean)
+  }
+
+  /**
+   * Record a removal. Idempotent per workspace: removing two rows that were
+   * both bound to one recycled id is one fact, not two.
+   */
+  forget(workspaceId: string, paneIds: readonly string[] = []): void {
+    this.load()
+    if (!workspaceId) return
+    const at = this.now()
+    const existing = this.forgottenRecords.find((entry) => entry.workspaceId === workspaceId)
+    if (existing) {
+      existing.at = at
+      for (const paneId of paneIds) if (!existing.paneIds.includes(paneId)) existing.paneIds.push(paneId)
+      this.touch()
+      return
+    }
+    this.forgottenRecords.push({ workspaceId, paneIds: paneIds.slice(), at })
+    this.touch()
+  }
+
+  /**
+   * Reconcile the list against what herdr now reports.
+   *
+   * A workspace herdr no longer has is a removal that landed - drop the entry,
+   * because the id is about to be free for a genuinely new session. Entries
+   * past the TTL go too: an id blocked forever is worse than one row that comes
+   * back once.
+   */
+  reconcileForgotten(live: readonly string[]): void {
+    this.load()
+    const present = new Set(live.filter(Boolean))
+    const now = this.now()
+    const before = this.forgottenRecords.length
+    this.forgottenRecords = this.forgottenRecords.filter(
+      (entry) => present.has(entry.workspaceId) && now - entry.at < FORGOTTEN_TTL_MS
+    )
+    if (this.forgottenRecords.length !== before) this.touch()
+  }
+
   /**
    * Adopt every unclaimed herdr workspace. Persisted immediately: an adopted
    * task that is lost on crash would make the bench look non-deterministic.
@@ -203,7 +288,10 @@ export class TaskRegistry {
       snapshot,
       tasks: this.load(),
       now: this.now(),
-      newId: () => this.newId()
+      newId: () => this.newId(),
+      // A workspace the human removed is not "unclaimed", it is declined - and
+      // the difference is whether it comes back on the next snapshot.
+      forgotten: this.forgotten()
     })
     if (result.created.length) {
       const list = this.load()
@@ -219,11 +307,27 @@ export class TaskRegistry {
    * makes a herdr restart invisible: ids change, tasks do not.
    */
   rebind(snapshot: Snapshot | null): TaskBinding[] {
-    const bindings = this.load().map((task) => bindTask(task, snapshot))
+    const bindings = bindTasks(this.load(), snapshot)
+    const losers = this.duplicateClaims(bindings)
     let changed = false
     for (const binding of bindings) {
       const task = this.get(binding.taskId)
       if (!task) continue
+      // Lost the workspace to a row with a better claim on it. The pane binding
+      // goes, and unlike a merely stale one it goes for good: it points at a
+      // shell somebody else is typing into, and recovery acting on it would
+      // resume a conversation into the wrong terminal. `agentSessionId` stays -
+      // that is the real resume evidence, and it is not shared.
+      if (losers.has(binding.taskId)) {
+        if (task.workspaceId || task.paneIds.length) {
+          this.patch(task.id, { workspaceId: '', paneIds: [] })
+          changed = true
+        }
+        binding.workspaceId = ''
+        binding.paneIds = []
+        binding.matchedBy = 'stale'
+        continue
+      }
       const sameWorkspace = task.workspaceId === binding.workspaceId
       const samePanes =
         task.paneIds.length === binding.paneIds.length &&
@@ -238,6 +342,52 @@ export class TaskRegistry {
     if (changed) this.save()
     return bindings
   }
+
+  /**
+   * Which rows have to give up a workspace another row also claims.
+   *
+   * `bindTasks` already stops the weak rule from taking a workspace the strong
+   * ones hold, so what is left here is the case no per-snapshot reasoning can
+   * see: herdr recycles `w1` across a rebuild, and two rows written in
+   * different lives both name it. Left alone the tree shows two tasks over one
+   * pane and the older one mirrors output it never started.
+   *
+   * The claim backed by better evidence wins - a stored workspace id, then a
+   * conversation id, then a directory guess. Equal evidence means the id really
+   * was recycled, and the row that opened its session most recently is the one
+   * holding the live claim.
+   */
+  private duplicateClaims(bindings: TaskBinding[]): Set<string> {
+    const byWorkspace = new Map<string, TaskBinding[]>()
+    for (const binding of bindings) {
+      if (!binding.workspaceId || binding.matchedBy === 'stale') continue
+      const list = byWorkspace.get(binding.workspaceId)
+      if (list) list.push(binding)
+      else byWorkspace.set(binding.workspaceId, [binding])
+    }
+    const losers = new Set<string>()
+    for (const group of byWorkspace.values()) {
+      if (group.length < 2) continue
+      const keep = group.reduce((best, binding) =>
+        this.betterClaim(binding, best) ? binding : best
+      )
+      for (const binding of group) if (binding.taskId !== keep.taskId) losers.add(binding.taskId)
+    }
+    return losers
+  }
+
+  /** Is `candidate` the stronger of two claims on one workspace? */
+  private betterClaim(candidate: TaskBinding, current: TaskBinding): boolean {
+    const rank = (binding: TaskBinding): number =>
+      binding.matchedBy === 'workspace' ? 3 : binding.matchedBy === 'session' ? 2 : 1
+    const byEvidence = rank(candidate) - rank(current)
+    if (byEvidence) return byEvidence > 0
+    return this.createdAt(candidate.taskId) > this.createdAt(current.taskId)
+  }
+
+  private createdAt(taskId: string): number {
+    return this.load().find((task) => task.id === taskId)?.createdAt ?? 0
+  }
 }
 
 function baseName(value: string): string {
@@ -245,6 +395,23 @@ function baseName(value: string): string {
   return parts.length ? parts[parts.length - 1] : ''
 }
 
+/** Tolerant read of the on-disk list: a bad entry is dropped, not fatal. */
+function parseForgotten(raw: unknown): ForgottenWorkspace[] {
+  if (!Array.isArray(raw)) return []
+  const out: ForgottenWorkspace[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    const workspaceId = typeof record.workspaceId === 'string' ? record.workspaceId : ''
+    if (!workspaceId) continue
+    const paneIds = Array.isArray(record.paneIds)
+      ? record.paneIds.filter((id): id is string => typeof id === 'string')
+      : []
+    const at = typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0
+    out.push({ workspaceId, paneIds, at })
+  }
+  return out
+}
 function nonNull<T>(value: T | null): value is T {
   return value !== null
 }

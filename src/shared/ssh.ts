@@ -77,6 +77,47 @@ export function expandHome(value: string, home: string): string {
 }
 
 /**
+ * Join with the separator the *named* platform uses, not the one this process
+ * happens to be running on.
+ *
+ * `node:path` picks its separator at load time, so a service told
+ * `platform: 'posix'` and `home: '/home/tester'` would still emit
+ * `\home\tester\.ssh\id_rsa.pub` on a Windows host. That is not a production
+ * bug - production always passes the real platform with the real home - but it
+ * makes every faked-world test assert one thing on Linux and another on
+ * Windows, and this project's rule is that path arithmetic is asserted on every
+ * platform. Empty parts are dropped, and a leading `~` is expanded against the
+ * first part so `joinFor(p, home, '~/.ssh')` does what it reads like.
+ */
+export function joinFor(platform: 'posix' | 'windows', ...parts: readonly string[]): string {
+  const sep = platform === 'windows' ? '\\' : '/'
+  const kept = parts
+    .map((part) => String(part ?? ''))
+    .filter((part) => part !== '')
+  if (kept.length === 0) return ''
+  const [head, ...rest] = kept
+  const tail = rest
+    .map((part) => part.replace(/^[\\/]+/, '').replace(/[\\/]+$/, ''))
+    .filter((part) => part !== '')
+    .join(sep)
+  const normalizedHead = head.replace(/[\\/]+$/, '')
+  return tail ? `${normalizedHead}${sep}${tail}` : normalizedHead || head
+}
+
+/**
+ * The last segment of a path, split on either separator.
+ *
+ * `path.basename` only knows the host's separator, so on Linux it returns
+ * `C:\Users\x\.ssh\id_rsa.pub` whole. Key ranking compares conventional
+ * filenames, and a Windows path that fails to reduce to one silently loses its
+ * rank instead of failing loudly.
+ */
+export function baseName(value: string): string {
+  const raw = String(value ?? '').replace(/[\\/]+$/, '')
+  const at = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'))
+  return at < 0 ? raw : raw.slice(at + 1)
+}
+/**
  * POSIX single-quote an argument, but only when it needs it. A connect line is
  * typed into a real shell, so a path with a space must survive; a plain `host`
  * must not grow quotes that look like noise.

@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest'
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
 import {
   buildBench,
+  bindTasks,
   deriveGroups,
   filterGroups,
   groupKeyFor,
@@ -196,6 +197,142 @@ describe('provisionTasks', () => {
     })
     expect(result.created).toHaveLength(1)
     expect(result.created[0].origin).toBe('adopted')
+  })
+
+  it('declines a workspace the human removed instead of adopting it back', () => {
+    // Removing a row does not close the session - the confirmation says so -
+    // which means the workspace is still in every later snapshot and still
+    // unclaimed. Adoption cannot tell "nobody wants this" from "the human just
+    // threw this away" without being told, and getting it wrong is the row
+    // coming back.
+    const result = provisionTasks({
+      snapshot: snapshotWith('ws-9', OTHER),
+      tasks: [],
+      now: NOW,
+      newId: () => 't-new',
+      forgotten: ['ws-9']
+    })
+    expect(result.created).toHaveLength(0)
+  })
+
+  it('still adopts the neighbours of a removed workspace', () => {
+    const snapshot = parseSnapshot({
+      version: '0.0.0-test',
+      protocol: 1,
+      workspaces: [
+        { workspace_id: 'ws-9', number: 1, label: 'removed' },
+        { workspace_id: 'ws-10', number: 2, label: 'new' }
+      ],
+      panes: [
+        { pane_id: 'ws-9:p1', workspace_id: 'ws-9', tab_id: 't1', cwd: OTHER },
+        { pane_id: 'ws-10:p1', workspace_id: 'ws-10', tab_id: 't2', cwd: OTHER }
+      ]
+    })
+    if (!snapshot) throw new Error('snapshot fixture did not parse')
+    const result = provisionTasks({
+      snapshot,
+      tasks: [],
+      now: NOW,
+      newId: () => 't-new',
+      forgotten: ['ws-9']
+    })
+    // A removal is about one workspace. Blocking the whole snapshot would make
+    // "I closed that one terminal" cost every terminal opened afterwards.
+    expect(result.created.map((task) => task.workspaceId)).toEqual(['ws-10'])
+  })
+})
+
+/**
+ * The weakest binding rule is the only one that collides, so it is the only one
+ * that has to look at the rest of the roster.
+ *
+ * "Some pane has my directory as cwd" is true of every shell opened in the same
+ * checkout, and a task whose own workspace is momentarily missing from a
+ * snapshot - the rebuild case the fallback exists for - will grab a neighbour's
+ * instead. Bound one task at a time that guess is indistinguishable from a real
+ * match, and `rebind` writes it back to disk, so two rows stay glued to one pane
+ * across restarts: the older one mirrors output it never started, and steering
+ * it types into somebody else's shell.
+ */
+describe('bindTasks', () => {
+  /** Every pane in one directory, so the guess matches all of them. */
+  function sharedCwd(workspaceIds: readonly string[]): Snapshot {
+    const parsed = parseSnapshot({
+      version: '0.0.0-test',
+      protocol: 1,
+      workspaces: workspaceIds.map((id, index) => ({
+        workspace_id: id,
+        number: index + 1,
+        label: id
+      })),
+      panes: workspaceIds.map((id) => ({
+        pane_id: `${id}:p1`,
+        workspace_id: id,
+        tab_id: `${id}:t1`,
+        cwd: REPO
+      }))
+    })
+    if (!parsed) throw new Error('snapshot fixture did not parse')
+    return parsed
+  }
+
+  const HOLDER = record({
+    id: 't-holder',
+    workdir: REPO,
+    workspaceId: 'w1',
+    paneIds: ['w1:p1'],
+    updatedAt: NOW
+  })
+  const GUESSER = record({ id: 't-guesser', workdir: REPO, updatedAt: NOW })
+
+  function bound(tasks: readonly TaskRecord[], snapshot: Snapshot): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const binding of bindTasks(tasks, snapshot)) {
+      out[binding.taskId] = `${binding.workspaceId || '-'}:${binding.matchedBy}`
+    }
+    return out
+  }
+
+  it('does not let the directory guess take a workspace an id holds', () => {
+    expect(bound([HOLDER, GUESSER], sharedCwd(['w1', 'w2']))).toEqual({
+      't-holder': 'w1:workspace',
+      // Its own shell, found by stepping around the held one: still a guess,
+      // but a guess about a pane nobody else claims.
+      't-guesser': 'w2:workdir'
+    })
+  })
+
+  it('goes stale rather than share, when there is nowhere else to land', () => {
+    expect(bound([HOLDER, GUESSER], sharedCwd(['w1']))).toEqual({
+      't-holder': 'w1:workspace',
+      // Stale is the honest answer and it is recoverable: the pane may come
+      // back, and the ledger still holds the evidence to re-bind by session.
+      't-guesser': '-:stale'
+    })
+  })
+
+  it('answers the same whichever order the roster happens to be in', () => {
+    // One pass would make the outcome depend on which row came first in
+    // bench.json, and the file is written by whichever operation landed last.
+    expect(bound([GUESSER, HOLDER], sharedCwd(['w1', 'w2']))).toEqual({
+      't-holder': 'w1:workspace',
+      't-guesser': 'w2:workdir'
+    })
+  })
+
+  it('still binds by directory when nothing stronger holds it', () => {
+    expect(bound([GUESSER], sharedCwd(['w1', 'w2']))).toEqual({ 't-guesser': 'w1:workdir' })
+  })
+
+  it('binds nothing at all when herdr is away', () => {
+    expect(bindTasks([HOLDER, GUESSER], null).map((binding) => binding.matchedBy)).toEqual([
+      'stale',
+      'stale'
+    ])
+    expect(bindTasks([HOLDER, GUESSER], null).map((binding) => binding.workspaceId)).toEqual([
+      '',
+      ''
+    ])
   })
 })
 

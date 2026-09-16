@@ -24,6 +24,8 @@ import {
   dedupeMachines,
   expandHome,
   isMachine,
+  baseName,
+  joinFor,
   keygenLine,
   makeMachine,
   parseSshConfig,
@@ -165,8 +167,11 @@ export class SshService {
   constructor(deps: SshDeps = {}) {
     this.file = deps.file ?? machinesFile
     this.home = deps.home ?? ''
-    this.sshConfigPath = deps.sshConfigPath ?? (this.home ? path.join(this.home, '.ssh', 'config') : '')
     this.platform = deps.platform ?? 'posix'
+    // After `platform`: the config path is joined with that platform's
+    // separator, so reading it first would bake in the wrong one.
+    this.sshConfigPath =
+      deps.sshConfigPath ?? (this.home ? joinFor(this.platform, this.home, '.ssh', 'config') : '')
     this.run = deps.run ?? runSsh
     this.readFile =
       deps.readFile ??
@@ -297,10 +302,10 @@ export class SshService {
   /** Absolute paths of the public keys in `~/.ssh`, conventional ones first. */
   keys(): string[] {
     if (!this.home) return []
-    const dir = path.join(this.home, '.ssh')
+    const dir = joinFor(this.platform, this.home, '.ssh')
     const pubs = this.listDir(dir)
       .filter((name) => name.endsWith('.pub'))
-      .map((name) => path.join(dir, name))
+      .map((name) => joinFor(this.platform, dir, name))
     const order = ['id_ed25519.pub', 'id_ecdsa.pub', 'id_rsa.pub']
     return pubs.sort((a, b) => rankKey(a, order) - rankKey(b, order))
   }
@@ -340,7 +345,7 @@ export class SshService {
 }
 
 function rankKey(file: string, order: readonly string[]): number {
-  const base = path.basename(file)
+  const base = baseName(file)
   const at = order.indexOf(base)
   return at < 0 ? order.length : at
 }

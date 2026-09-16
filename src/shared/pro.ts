@@ -1129,8 +1129,17 @@ export interface TaskBinding {
  * do not survive a rebuild, and the point of the ledger is that a task keeps its
  * identity when its terminal does not — so fall back to the conversation id,
  * then to the directory.
+ *
+ * `avoid` is the set of workspaces a stronger match already holds. Only the
+ * directory fallback consults it, because that fallback is a guess about which
+ * shell this task is running in, and a guess must not take a workspace away
+ * from a task that knows it owns it.
  */
-export function bindTask(task: TaskRecord, snapshot: Snapshot | null): TaskBinding {
+export function bindTask(
+  task: TaskRecord,
+  snapshot: Snapshot | null,
+  avoid?: ReadonlySet<string>
+): TaskBinding {
   const empty: TaskBinding = { taskId: task.id, workspaceId: '', paneIds: [], matchedBy: 'stale' }
   if (!snapshot) return empty
   const panes = snapshot.panes
@@ -1164,7 +1173,9 @@ export function bindTask(task: TaskRecord, snapshot: Snapshot | null): TaskBindi
   }
   if (task.workdir) {
     const hit = panes.find(
-      (pane) => samePath(pane.foregroundCwd, task.workdir) || samePath(pane.cwd, task.workdir)
+      (pane) =>
+        !(avoid?.has(pane.workspaceId) ?? false) &&
+        (samePath(pane.foregroundCwd, task.workdir) || samePath(pane.cwd, task.workdir))
     )
     if (hit) {
       return {
@@ -1180,12 +1191,51 @@ export function bindTask(task: TaskRecord, snapshot: Snapshot | null): TaskBindi
   return empty
 }
 
+/**
+ * Bind a whole roster in two passes, so no two rows end up owning one shell.
+ *
+ * Per-task binding cannot see the rest of the roster, and its weakest rule -
+ * "some pane has my directory as cwd" - is the one that collides: every shell
+ * opened in the same repo matches every task rooted there. Bound alone, a task
+ * whose own workspace is momentarily missing from the snapshot grabs a
+ * neighbour's instead, and `rebind` then writes that guess back to disk, so the
+ * two rows stay glued to one pane across restarts.
+ *
+ * Pass one binds normally and collects what the strong rules (the stored
+ * workspace id, the conversation id) actually hold. Pass two re-binds only the
+ * rows whose match came from the directory guess and landed on a held
+ * workspace, this time told to step around it - they keep looking for a shell of
+ * their own and go `stale` when there is none, which is honest.
+ */
+export function bindTasks(
+  tasks: readonly TaskRecord[],
+  snapshot: Snapshot | null
+): TaskBinding[] {
+  const first = tasks.map((task) => bindTask(task, snapshot))
+  if (!snapshot) return first
+  const held = new Set<string>()
+  for (const binding of first) {
+    if (binding.workspaceId && binding.matchedBy !== 'workdir') held.add(binding.workspaceId)
+  }
+  if (!held.size) return first
+  return first.map((binding, index) => {
+    if (binding.matchedBy !== 'workdir' || !held.has(binding.workspaceId)) return binding
+    return bindTask(tasks[index], snapshot, held)
+  })
+}
+
 export interface ProvisionInput {
   snapshot: Snapshot | null
   tasks: readonly TaskRecord[]
   now: number
   /** Injectable id factory; the registry owns uniqueness, not this module. */
   newId: () => string
+  /**
+   * Workspace ids the human removed and herdr has not yet let go of. They are
+   * declined rather than unclaimed: adopting one back is how "I closed that
+   * terminal" turns into five terminals the next time a snapshot arrives.
+   */
+  forgotten?: readonly string[]
 }
 
 export interface ProvisionResult {
@@ -1200,7 +1250,8 @@ export interface ProvisionResult {
  */
 export function provisionTasks(input: ProvisionInput): ProvisionResult {
   const { snapshot, tasks, now, newId } = input
-  const bindings = tasks.map((task) => bindTask(task, snapshot))
+  const forgotten = new Set((input.forgotten ?? []).filter(Boolean))
+  const bindings = bindTasks(tasks, snapshot)
   const created: TaskRecord[] = []
   if (!snapshot) return { created, bindings }
 
@@ -1216,6 +1267,7 @@ export function provisionTasks(input: ProvisionInput): ProvisionResult {
 
   for (const workspace of snapshot.workspaces) {
     if (claimed.has(workspace.workspaceId)) continue
+    if (forgotten.has(workspace.workspaceId)) continue
     const panes = snapshot.panes.filter((pane) => pane.workspaceId === workspace.workspaceId)
     if (!panes.length) continue
     const first = panes[0]

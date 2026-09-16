@@ -39,7 +39,7 @@ import {
 import { parseSnapshot, type Snapshot } from '../src/shared/herdr'
 import type { ChatTranscript } from '../src/shared/chat'
 import type { SteerResult, ThreadInfo } from '../src/shared/protocol'
-import { TaskRegistry } from '../src/main/pro/bench'
+import { FORGOTTEN_TTL_MS, TaskRegistry, type RegistryFile } from '../src/main/pro/bench'
 import type { AnnounceResult } from '../src/main/pro/companion'
 import { GitProbe } from '../src/main/pro/git'
 import type { HerdrTarget } from '../src/main/pro/herdr/discovery'
@@ -1265,6 +1265,216 @@ describe('ProService task paths', () => {
     expect(result.ok).toBe(false)
     expect(result.code).toBe('no-dir')
     expect(bench.registry.tasks()).toHaveLength(0)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Removal: what "remove" has to mean while herdr keeps the session
+ * ------------------------------------------------------------------ */
+
+/**
+ * Removing a row and closing a session are different operations, and the gap
+ * between them is the bug these cases pin down.
+ *
+ * The confirmation promises the pane keeps running, so removal cannot close it -
+ * and a session that keeps running keeps arriving in snapshots, unclaimed. The
+ * bench adopts every workspace no task claims, which made removal self-undoing:
+ * drop five rows, open one terminal, and the snapshot that arrives next adopts
+ * all five back as fresh rows. What the human meant by "remove" has to outlive
+ * the row it deleted.
+ */
+describe('ProService removal', () => {
+  /** Any number of one-pane workspaces, all sitting in the same directory. */
+  function snapshotOf(workspaceIds: readonly string[]): Snapshot {
+    return parseSnapshot({
+      version: '0.9.0',
+      protocol: 1,
+      workspaces: workspaceIds.map((id, index) => ({
+        workspace_id: id,
+        number: index + 1,
+        label: id
+      })),
+      panes: workspaceIds.map((id) => ({
+        pane_id: `${id}:p1`,
+        workspace_id: id,
+        tab_id: `${id}:t1`,
+        cwd: WORKDIR,
+        agent: 'codex'
+      }))
+    }) as Snapshot
+  }
+
+  /** A shell row over one of them, as `openSession` would have written it. */
+  function shell(id: string, workspaceId: string): TaskRecord {
+    return {
+      ...seedTask(),
+      id,
+      title: `shell ${workspaceId}`,
+      agentKind: '',
+      workspaceId,
+      paneIds: [`${workspaceId}:p1`],
+      origin: 'created'
+    }
+  }
+
+  function workspaces(bench: Bench): string[] {
+    return bench.registry.tasks().map((task) => task.workspaceId)
+  }
+
+  it('does not hand a removed workspace back on the next snapshot', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1'), shell('t-b', 'w2')],
+      snapshot: snapshotOf(['w1', 'w2']),
+      record: true
+    })
+
+    for (const taskId of ['t-a', 't-b']) {
+      expect((await bench.service.taskOp({ op: 'remove', taskId })).ok).toBe(true)
+    }
+    expect(bench.registry.tasks()).toHaveLength(0)
+
+    // The moment the rows used to come back: a snapshot still reporting both
+    // workspaces, arriving after the removals landed. `w3` is here too so the
+    // case would fail loudly if removal blocked adoption wholesale.
+    bench.session.pushSnapshot(snapshotOf(['w1', 'w2', 'w3']))
+    expect(workspaces(bench)).toEqual(['w3'])
+  })
+
+  it('leaves the pane running, which is what the confirmation promises', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true
+    })
+
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a' })
+
+    // Closing it would be the easy way to stop the resurrection, and a
+    // destructive one: an adopted row is somebody else's shell, running
+    // something they did not start from this bench.
+    expect(bench.session.calls.map((call) => call.method)).not.toContain('closeWorkspace')
+  })
+
+  it('lets the id go once herdr does, so a recycled id is not blocked forever', async () => {
+    const bench = await boot({
+      tasks: [shell('t-a', 'w1')],
+      snapshot: snapshotOf(['w1']),
+      record: true
+    })
+    await bench.service.taskOp({ op: 'remove', taskId: 't-a' })
+
+    // A snapshot without it is herdr agreeing the removal landed - and the id
+    // is about to mean something else, so the removal stops standing in front.
+    bench.session.pushSnapshot(emptySnapshot())
+    bench.session.pushSnapshot(snapshotOf(['w1']))
+
+    expect(workspaces(bench)).toEqual(['w1'])
+    expect(bench.registry.tasks()[0]?.origin).toBe('adopted')
+  })
+
+  it('reports an unknown task instead of remembering a removal that did not happen', async () => {
+    const bench = await boot({ tasks: [], snapshot: snapshotOf(['w1']), record: true })
+
+    const result = await bench.service.taskOp({ op: 'remove', taskId: 't-nope' })
+    expect(result.ok).toBe(false)
+    expect(bench.registry.forgotten()).toEqual([])
+  })
+})
+
+/**
+ * The remembered-removal list itself, held at the registry so the clock is ours.
+ *
+ * Through the service the only way to age an entry past its TTL is to advance a
+ * clock that also arms the tick, the git sweep and the hydrate, and a projection
+ * rebuilt by a timer is a green test lying about which code path produced it.
+ */
+describe('TaskRegistry forgotten removals', () => {
+  function registry(start: number): { registry: TaskRegistry; now: () => number; set: (n: number) => void } {
+    let current = start
+    let stored: RegistryFile | null = null
+    const registry = new TaskRegistry({
+      file: 'memory://bench.json',
+      now: () => current,
+      read: () => stored,
+      write: (_file, value) => {
+        stored = value
+        return true
+      }
+    })
+    return { registry, now: () => current, set: (next) => (current = next) }
+  }
+
+  it('survives a write and a re-read, because the point is outliving the row', () => {
+    const box = registry(START)
+    box.registry.forget('w1', ['w1:p1'])
+    expect(box.registry.save()).toBe(true)
+    // Same file, new registry: a restart must not resurrect what was removed.
+    box.registry.load(true)
+    expect(box.registry.forgotten()).toEqual(['w1'])
+  })
+
+  it('is one fact per workspace, however many rows named it', () => {
+    const box = registry(START)
+    box.registry.forget('w1', ['w1:p1'])
+    box.registry.forget('w1', ['w1:p2'])
+    expect(box.registry.forgotten()).toEqual(['w1'])
+  })
+
+  it('drops an entry herdr no longer reports', () => {
+    const box = registry(START)
+    box.registry.forget('w1')
+    box.registry.reconcileForgotten(['w2', 'w3'])
+    expect(box.registry.forgotten()).toEqual([])
+  })
+
+  it('expires an entry herdr never let go of, rather than block the id forever', () => {
+    const box = registry(START)
+    box.registry.forget('w1')
+    box.set(START + FORGOTTEN_TTL_MS - 1)
+    box.registry.reconcileForgotten(['w1'])
+    expect(box.registry.forgotten()).toEqual(['w1'])
+    box.set(START + FORGOTTEN_TTL_MS)
+    box.registry.reconcileForgotten(['w1'])
+    // The bounded regression, chosen deliberately: a shell that outlives its
+    // removal by more than a day may be adopted back once, against an id that
+    // would otherwise be unusable for the rest of the install.
+    expect(box.registry.forgotten()).toEqual([])
+  })
+
+  it('reads a registry written before removals were remembered', () => {
+    let stored: RegistryFile | null = { version: 1, updatedAt: START, tasks: [] }
+    const registry = new TaskRegistry({
+      file: 'memory://bench.json',
+      now: () => START,
+      read: () => stored,
+      write: (_file, value) => {
+        stored = value
+        return true
+      }
+    })
+    expect(registry.forgotten()).toEqual([])
+    // And saving it must not invent a list from nothing.
+    expect(registry.save()).toBe(true)
+    expect(stored?.forgotten).toEqual([])
+  })
+
+  it('ignores a hand-edited entry with no workspace in it', () => {
+    const stored: RegistryFile = {
+      version: 1,
+      updatedAt: START,
+      tasks: [],
+      forgotten: [
+        { workspaceId: '', paneIds: ['w1:p1'], at: START },
+        { workspaceId: 'w2', paneIds: 'nope' as unknown as string[], at: 'soon' as unknown as number }
+      ]
+    }
+    const registry = new TaskRegistry({
+      file: 'memory://bench.json',
+      now: () => START,
+      read: () => stored,
+      write: () => true
+    })
+    expect(registry.forgotten()).toEqual(['w2'])
   })
 })
 

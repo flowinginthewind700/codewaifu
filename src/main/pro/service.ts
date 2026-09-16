@@ -289,6 +289,12 @@ export interface RegistryLike {
   remove(taskId: string): boolean
   adopt(snapshot: Snapshot | null): ProvisionResult
   rebind(snapshot: Snapshot | null): TaskBinding[]
+  /** Workspace ids a removal is still standing in front of. */
+  forgotten(): string[]
+  /** Record that the human removed this workspace; see `TaskRegistry.forget`. */
+  forget(workspaceId: string, paneIds?: readonly string[]): void
+  /** Drop remembered removals herdr has let go of, or that went stale. */
+  reconcileForgotten(live: readonly string[]): void
 }
 
 export interface LedgerLike {
@@ -995,6 +1001,9 @@ export class ProService implements CompanionApi {
    * session ids that make a task resumable, then let the tracker reconcile.
    */
   private onSnapshotArrived(snapshot: Snapshot): void {
+    // Before `adopt`, so the list adoption consults is the one herdr has
+    // already agreed with: a removal it has caught up to stops blocking its id.
+    this.registry.reconcileForgotten(snapshot.workspaces.map((workspace) => workspace.workspaceId))
     this.registry.adopt(snapshot)
     this.registry.rebind(snapshot)
     this.captureSessions(snapshot)
@@ -1743,6 +1752,14 @@ export class ProService implements CompanionApi {
         return okResult({ task }, '', request.status)
       }
       case 'remove': {
+        const task = this.registry.get(request.taskId)
+        if (!task) return this.noTask(request.taskId)
+        // Remembered before the row goes. Dropping the row used to be the whole
+        // operation, and adoption undid it: the pane keeps running (that is what
+        // the confirmation promises), so the next snapshot saw a workspace
+        // nobody claimed and handed it straight back. "Remove" has to outlive
+        // the row it deleted, and this is the part that makes it.
+        this.registry.forget(task.workspaceId, task.paneIds)
         if (!this.registry.remove(request.taskId)) return this.noTask(request.taskId)
         this.triage.resolveTaskItems(request.taskId, 'task removed')
         this.lastGit.delete(request.taskId)
