@@ -83,6 +83,11 @@ irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/main/scripts
 带备份地注册 agent hook,并打印接下来要做的事。重复执行即修复安装,不会重复
 写入;`bash install.sh --uninstall --purge` 可以完整卸载。
 
+安装器顺路装上 herdr——工作台(Bench)驱动的那个终端运行时,除非应用会去找的
+位置已经有二进制了。`--no-herdr` 跳过这一步,`--herdr-only` 只做这一步:应用
+装好了但 Bench 还显示安装引导卡片时,用它。herdr 下载失败只警告不中断,伴侣
+本身没有它也是完整的。卸载不动 herdr,因为它托管的终端比这个应用活得久。
+
 ### Linux
 
 两种受支持的形态,按你要不要 Chromium 沙箱来选:

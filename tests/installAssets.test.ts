@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -301,5 +301,179 @@ describe.skipIf(!hasBash)('install.sh', () => {
       stderr.includes('could not list the assets of v9.9.9') || stderr.includes('download failed:')
     expect(explained, stderr).toBe(true)
     expect(stderr.includes('curl: (22)')).toBe(false)
+  })
+})
+
+/**
+ * The herdr step, run for real against stubs. `curl` and `sh` are scripts in a
+ * throwaway PATH and HOME is the sandbox, so a test cannot reach the network or
+ * touch the machine's own herdr. The stub `sh` is what "herdr's installer ran"
+ * looks like from inside install.sh, and it only creates a binary when it was
+ * handed a body -- which is how a failed download stays a failed download
+ * instead of turning into a phantom install.
+ */
+function runHerdrStep(
+  args: string[],
+  opts: { curlFails?: boolean; env?: Record<string, string>; setup?: (sandbox: string) => void } = {}
+): {
+  status: number | null
+  stdout: string
+  stderr: string
+  calls: string[]
+  herdr: string
+} {
+  const sandbox = mkdtempSync(join(tmpdir(), 'cw-herdr-'))
+  const stubDir = join(sandbox, 'stub')
+  const calls = join(sandbox, 'calls.log')
+  mkdirSync(stubDir)
+  writeFileSync(
+    join(stubDir, 'curl'),
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> "$CALLS"`,
+      opts.curlFails ? 'exit 22' : `printf '%s\\n' 'curl -fsSL https://herdr.dev/install.sh | sh'`,
+      ''
+    ].join('\n')
+  )
+  writeFileSync(
+    join(stubDir, 'sh'),
+    [
+      '#!/bin/sh',
+      'body="$(cat)"',
+      '[ -n "$body" ] || exit 0',
+      'mkdir -p "$HOME/.local/bin"',
+      `printf '%s\\n' '#!/bin/sh' 'exit 0' > "$HOME/.local/bin/herdr"`,
+      'chmod +x "$HOME/.local/bin/herdr"',
+      ''
+    ].join('\n')
+  )
+  chmodSync(join(stubDir, 'curl'), 0o755)
+  chmodSync(join(stubDir, 'sh'), 0o755)
+  opts.setup?.(sandbox)
+  const result = spawnSync('bash', [INSTALLER, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      // A minimal PATH on purpose: the real one may contain a herdr the user
+      // installed, and then "installs herdr" would silently test nothing.
+      PATH: `${stubDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+      HOME: sandbox,
+      CALLS: calls,
+      ...(opts.env ?? {})
+    }
+  })
+  return {
+    status: result.status,
+    stdout: String(result.stdout ?? ''),
+    stderr: String(result.stderr ?? ''),
+    calls: existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(Boolean) : [],
+    herdr: join(sandbox, '.local', 'bin', 'herdr')
+  }
+}
+
+describe.skipIf(!hasBash)('install.sh herdr step', () => {
+  /**
+   * The two absolute prefixes are probed by path, not through PATH, so a runner
+   * that really has herdr there has nothing to install and these cases would
+   * assert a lie. GitHub's images do not ship herdr; a developer machine might.
+   */
+  const systemHerdr = ['/opt/homebrew/bin/herdr', '/usr/local/bin/herdr', '/usr/bin/herdr'].filter(
+    (path) => existsSync(path)
+  )
+  const itNoSystemHerdr = systemHerdr.length > 0 ? it.skip : it
+
+  itNoSystemHerdr('installs herdr on the way, and says where it landed', () => {
+    const run = runHerdrStep(['--herdr-only'])
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.calls.some((line) => line.includes('https://herdr.dev/install.sh'))).toBe(true)
+    expect(existsSync(run.herdr)).toBe(true)
+    expect(run.stdout).toContain(`herdr installed: ${run.herdr}`)
+    // The thing a user would otherwise try to do by hand: start the server.
+    expect(run.stdout).toContain('the Bench starts herdr')
+  })
+
+  itNoSystemHerdr('an unreachable herdr installer warns and still exits 0', () => {
+    // herdr is Pro's dependency, not the companion's. A blocked download here
+    // must not take the app install down with it, and it must leave behind the
+    // command that does work instead of a bare curl diagnostic.
+    const run = runHerdrStep(['--herdr-only'], { curlFails: true })
+    expect(run.status, run.stderr).toBe(0)
+    expect(existsSync(run.herdr)).toBe(false)
+    expect(run.stderr).toContain('herdr did not install')
+    expect(run.stderr).toContain('https://herdr.dev/install.sh')
+    expect(run.stderr).not.toContain('curl: (22)')
+  })
+
+  itNoSystemHerdr('leaves an existing herdr alone, which is what idempotent means', () => {
+    const run = runHerdrStep(['--herdr-only'], {
+      setup: (sandbox) => {
+        mkdirSync(join(sandbox, '.local', 'bin'), { recursive: true })
+        writeFileSync(join(sandbox, '.local', 'bin', 'herdr'), '#!/bin/sh\nexit 0\n')
+        chmodSync(join(sandbox, '.local', 'bin', 'herdr'), 0o755)
+      }
+    })
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('herdr is already installed')
+    expect(run.calls).toEqual([])
+  })
+
+  itNoSystemHerdr('honours pro.herdrPath, so a custom prefix is not reinstalled over', () => {
+    const run = runHerdrStep(['--herdr-only'], {
+      setup: (sandbox) => {
+        const custom = join(sandbox, 'custom', 'herdr')
+        mkdirSync(join(sandbox, 'custom'), { recursive: true })
+        writeFileSync(custom, '#!/bin/sh\nexit 0\n')
+        chmodSync(custom, 0o755)
+        mkdirSync(join(sandbox, '.codewaifu'), { recursive: true })
+        writeFileSync(
+          join(sandbox, '.codewaifu', 'config.json'),
+          `${JSON.stringify({ pro: { herdrPath: custom } }, null, 2)}\n`
+        )
+      }
+    })
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('herdr is already installed')
+    expect(run.calls).toEqual([])
+  })
+
+  it('can be told to skip, and a test sandbox skips without being told', () => {
+    // Last flag wins, which is the only sane reading of a contradictory pair.
+    const off = runHerdrStep(['--herdr-only', '--no-herdr'])
+    expect(off.status, off.stderr).toBe(0)
+    expect(off.stdout).toContain('skipping herdr (--no-herdr)')
+    expect(off.calls).toEqual([])
+    // CODEWAIFU_LINUX_ROOT marks a run as a test; it must never reach for the
+    // real herdr, including the network call that would fetch it.
+    const sandboxed = runHerdrStep(['--herdr-only'], { env: { CODEWAIFU_LINUX_ROOT: '/tmp/unused' } })
+    expect(sandboxed.status, sandboxed.stderr).toBe(0)
+    expect(sandboxed.stdout).toContain('skipping herdr (installer sandbox)')
+    expect(sandboxed.calls).toEqual([])
+  })
+
+  it('merges our hooks after herdr, because both write the same two files', () => {
+    // herdr's installer adds its own entries to ~/.codex/hooks.json and
+    // ~/.claude/settings.json. Our merge is the half of that pair with a
+    // regression test for preserving a foreign writer, so it has to go last.
+    const src = source(INSTALLER)
+    const herdr = src.indexOf('\ninstall_herdr\n')
+    const hooks = src.indexOf('registering agent hooks')
+    expect(herdr).toBeGreaterThan(0)
+    expect(hooks).toBeGreaterThan(herdr)
+  })
+
+  it('probes the places the app probes, so "installed" means the same to both', () => {
+    // The failure this pins is silent: a herdr the app would find, but that the
+    // installer does not look for, gets reinstalled on every re-run.
+    const src = source(INSTALLER)
+    for (const needle of [
+      'HERDR_BIN_PATH',
+      '.local/bin/herdr',
+      '.cargo/bin/herdr',
+      '/opt/homebrew/bin/herdr',
+      '/usr/local/bin/herdr',
+      'herdrPath'
+    ]) {
+      expect(src, needle).toContain(needle)
+    }
   })
 })

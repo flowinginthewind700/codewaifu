@@ -95,6 +95,13 @@ The installer downloads the latest release, places the app in `/Applications`
 registers the agent hooks with backups, and prints what to do next. Re-running
 it repairs an install; `bash install.sh --uninstall --purge` removes it again.
 
+It also installs herdr, the terminal runtime the Bench drives, unless a binary
+already sits where the app looks for one. `--no-herdr` skips that step and
+`--herdr-only` runs nothing else, which is the fix for a Bench that shows the
+install card over an otherwise complete install. A herdr download that fails
+only warns: the companion is whole without it. Uninstalling leaves herdr alone,
+because it owns terminals that outlive this app.
+
 ### Linux
 
 Two supported shapes. Pick by whether you want the Chromium sandbox:

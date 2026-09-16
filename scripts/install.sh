@@ -8,10 +8,18 @@
 #   --uninstall   remove hooks + relay scripts (agent configs are backed up first)
 #   --purge       with --uninstall, also delete the app bundle
 #   --hooks-only  register hooks for an app that is already installed
+#   --herdr-only  install herdr, the terminal runtime the Bench drives, and stop
+#   --no-herdr    full install without the herdr step
 #   --version vX  pin a release tag instead of the latest one
 #   --from PATH   install from a local artifact instead of downloading
 #                 (.zip / .app / build dir on macOS, .AppImage / .deb / build dir on Linux)
 #   --autostart   Linux: also drop a copy of the .desktop entry into ~/.config/autostart
+#
+# herdr: the Bench is a cockpit over herdr, which owns the PTYs and has to
+# outlive this app, so it is installed next to the app instead of inside it.
+# The step is a no-op when a binary already sits where the app looks for one,
+# and a failure only warns: the companion runs without herdr, and the Bench
+# then shows the install card that names this very command.
 #
 # Linux notes: everything installs into the user's home (~/.local/share,
 # ~/.local/bin, ~/.local/share/applications) so no sudo is involved. The
@@ -20,22 +28,34 @@
 set -euo pipefail
 
 REPO="${CODEWAIFU_REPO:-flowinginthewind700/codewaifu}"
+HERDR_INSTALLER="${CODEWAIFU_HERDR_INSTALLER:-https://herdr.dev/install.sh}"
 TAG=""
 UNINSTALL=0
 PURGE=0
 HOOKS_ONLY=0
+HERDR_ONLY=0
 LOCAL=""
 AUTOSTART=0
+SKIP_HERDR=0
+SKIP_HERDR_WHY=""
+HERDR_BIN=""
+
+case "${CODEWAIFU_SKIP_HERDR:-0}" in
+  0|"") ;;
+  *) SKIP_HERDR=1; SKIP_HERDR_WHY="CODEWAIFU_SKIP_HERDR" ;;
+esac
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall) UNINSTALL=1 ;;
     --purge) PURGE=1 ;;
-    --hooks-only) HOOKS_ONLY=1 ;;
+    --hooks-only) HOOKS_ONLY=1; SKIP_HERDR=1; SKIP_HERDR_WHY="--hooks-only" ;;
+    --herdr-only) HERDR_ONLY=1; SKIP_HERDR=0; SKIP_HERDR_WHY="" ;;
+    --no-herdr) SKIP_HERDR=1; SKIP_HERDR_WHY="--no-herdr" ;;
     --version) TAG="$2"; shift ;;
     --from) LOCAL="$2"; shift ;;
     --autostart) AUTOSTART=1 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
@@ -143,6 +163,101 @@ run_cli() {
       ;;
   esac
   CODEWAIFU_APP="$BINARY" "$BINARY" --cli "$@" ${flags+"${flags[@]}"}
+}
+
+# ---------------------------------------------------------------------------
+# herdr -- Pro's terminal runtime, installed beside the app rather than in it
+# ---------------------------------------------------------------------------
+
+# The absolute system dirs, overridable for the same reason CODEWAIFU_LINUX_ROOT
+# is: a test run must not depend on what the machine running it happens to have
+# installed. Empty means the platform default.
+herdr_system_dirs() {
+  if [ -n "${CODEWAIFU_HERDR_DIRS:-}" ]; then
+    printf '%s' "$CODEWAIFU_HERDR_DIRS" | tr ':' '\n'
+    return 0
+  fi
+  if [ "$OS" = "Darwin" ]; then
+    printf '%s\n' /opt/homebrew/bin/herdr /usr/local/bin/herdr
+  else
+    printf '%s\n' /usr/local/bin/herdr /usr/bin/herdr
+  fi
+}
+
+# Every place the app looks for the binary, mirrored from
+# src/main/pro/herdr/discovery.ts::binaryCandidates. The mirroring only has to
+# hold in one direction, but that is the direction that hurts: a herdr the app
+# *would* find has to count as installed here, or each re-run of this installer
+# reinstalls over the top of a working one.
+herdr_binary_candidates() {
+  # pro.herdrPath is the one candidate discovery knows and a shell does not: it
+  # lives in the app's config. A grep is enough to avoid a redundant install,
+  # and being wrong about it costs nothing but that.
+  local cfg="$HOME/.codewaifu/config.json" configured
+  if [ -f "$cfg" ]; then
+    configured="$(sed -n 's/.*"herdrPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$cfg" | head -1)"
+    [ -n "$configured" ] && printf '%s\n' "$configured"
+  fi
+  [ -n "${HERDR_BIN_PATH:-}" ] && printf '%s\n' "$HERDR_BIN_PATH"
+  # The PATH walk discovery does, in the one line a shell needs for it.
+  command -v herdr 2>/dev/null || true
+  printf '%s\n' "$HOME/.local/bin/herdr" "$HOME/.cargo/bin/herdr"
+  herdr_system_dirs
+}
+
+# Sets HERDR_BIN to the first candidate that is really there. One per line plus
+# a read loop, because a $HOME with a space in it is a real home directory and
+# word splitting would walk straight past it.
+herdr_present() {
+  local cand list
+  list="$(herdr_binary_candidates)"
+  while IFS= read -r cand; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then HERDR_BIN="$cand"; return 0; fi
+  done <<EOF
+$list
+EOF
+  return 1
+}
+
+# Install herdr unless this machine already has one. Never fatal, and that is
+# the whole design: the companion is complete without herdr, and Pro degrades to
+# an install card instead of a half-broken terminal, so a blocked download here
+# must not take the app install down with it.
+install_herdr() {
+  # CODEWAIFU_LINUX_ROOT is the sandbox marker tests/installAssets.test.ts sets,
+  # and no flag overrides it: a run that is really a test must not pipe a script
+  # off the network into a shell, nor reach for the machine's own herdr.
+  if [ -n "${CODEWAIFU_LINUX_ROOT:-}" ]; then
+    say "skipping herdr (installer sandbox)"
+    return 0
+  fi
+  if [ "$SKIP_HERDR" = "1" ]; then
+    say "skipping herdr${SKIP_HERDR_WHY:+ ($SKIP_HERDR_WHY)}"
+    return 0
+  fi
+  if herdr_present; then
+    say "herdr is already installed: $HERDR_BIN"
+    return 0
+  fi
+  say "installing herdr, the terminal runtime the Bench drives"
+  # Piped rather than staged in a temp file: herdr's own installer is the thing
+  # that knows where its binary goes, and guessing after it is how the two end
+  # up disagreeing about the path.
+  if ! curl -fsSL "$HERDR_INSTALLER" | sh; then
+    warn "herdr did not install (offline, or its installer refused this machine)."
+    warn "the companion is unaffected; the Bench will show its install card, which"
+    warn "is this same command:  curl -fsSL $HERDR_INSTALLER | sh"
+    return 0
+  fi
+  if herdr_present; then
+    say "herdr installed: $HERDR_BIN"
+  else
+    warn "herdr's installer finished, but no binary turned up where the app looks."
+    warn "if it landed somewhere else, set pro.herdrPath in ~/.codewaifu/config.json."
+  fi
+  # Nothing to start here: the app spawns `herdr server` itself when discovery
+  # finds a binary and no socket (src/main/pro/herdr/launcher.ts).
+  say "the Bench starts herdr's server itself the first time you open it"
 }
 
 # ---------------------------------------------------------------------------
@@ -431,6 +546,16 @@ if [ "$UNINSTALL" = "1" ]; then
   else
     warn "no installed app found; nothing to uninstall"
   fi
+  # herdr outlives us by design and may be holding somebody else's panes, so
+  # --purge stops at our own files.
+  say "herdr was left installed; remove it with its own uninstaller if you want it gone"
+  exit 0
+fi
+
+# The verb for "the Bench still shows the install card": everything else is
+# already in place and only herdr is missing.
+if [ "$HERDR_ONLY" = "1" ]; then
+  install_herdr
   exit 0
 fi
 
@@ -520,6 +645,12 @@ fi
 
 find_installed_app || die "app installed but the binary is not executable: ${BINARY:-?}"
 
+# herdr before our own hooks, and that order is load-bearing: its installer
+# writes entries into ~/.codex/hooks.json and ~/.claude/settings.json as well,
+# and our merge is the half of that pair with a regression test for preserving
+# a foreign writer's entries. Ours goes last, so both sets survive.
+install_herdr
+
 say "registering agent hooks (Codex + Claude Code)"
 run_cli install
 
@@ -533,6 +664,8 @@ Next steps
      open Codex, run /hooks, and trust the CodeWaifu entries.
      Claude Code needs nothing extra.
   3. check any time:       codewaifu status   (or: CodeWaifu --cli status)
+  4. the Bench (menu bar) is a cockpit over herdr; the herdr line above says
+     whether this machine has it, and `bash install.sh --herdr-only` gets it.
 
 Uninstall:  curl -fsSL .../install.sh | bash -s -- --uninstall [--purge]
 NEXT
@@ -546,6 +679,8 @@ Next steps
      open Codex, run /hooks, and trust the CodeWaifu entries.
      Claude Code needs nothing extra.
   3. check any time:       codewaifu status
+  4. the Bench (tray menu) is a cockpit over herdr; the herdr line above says
+     whether this machine has it, and \`bash install.sh --herdr-only\` gets it.
 
 Installed:  $LINUX_ROOT
 Launcher:   $LINUX_BIN/codewaifu
