@@ -363,10 +363,21 @@ function runHerdrStep(
   chmodSync(join(stubDir, 'curl'), 0o755)
   chmodSync(join(stubDir, 'sh'), 0o755)
   opts.setup?.(sandbox)
+  // PATH is not the only way the host leaks into this step. herdr_binary_candidates
+  // also reads HERDR_BIN_PATH and CODEWAIFU_HERDR_DIRS, and install_herdr bails out
+  // whole on CODEWAIFU_LINUX_ROOT. Running the suite from inside a herdr pane - which
+  // is what this app exists for - exports the first of those, so "installs herdr"
+  // came back green without ever calling curl and "an unreachable installer warns"
+  // had nothing to warn about. Scrub all three; opts.env still wins, which is how the
+  // sandbox-marker case below sets the one it is about.
+  const host: NodeJS.ProcessEnv = { ...process.env }
+  for (const leak of ['HERDR_BIN_PATH', 'CODEWAIFU_HERDR_DIRS', 'CODEWAIFU_LINUX_ROOT']) {
+    delete host[leak]
+  }
   const result = spawnSync('bash', [INSTALLER, ...args], {
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...host,
       // A minimal PATH on purpose: the real one may contain a herdr the user
       // installed, and then "installs herdr" would silently test nothing.
       PATH: `${stubDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
