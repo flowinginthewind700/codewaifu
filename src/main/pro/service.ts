@@ -1279,7 +1279,8 @@ export class ProService implements CompanionApi {
       paneId:
         hint.paneId && task.paneIds.includes(hint.paneId) ? hint.paneId : (task.paneIds[0] ?? ''),
       paneIds: task.paneIds.slice(),
-      workspaceId: task.workspaceId || hint.workspaceId
+      workspaceId: task.workspaceId || hint.workspaceId,
+      status: task.status
     }
   }
 
@@ -1591,6 +1592,16 @@ export class ProService implements CompanionApi {
       case 'updated':
       case 'snoozed':
         this.invalidate()
+        return
+      case 'reclassified':
+        // One need, better-informed type. The id moved because it embeds the
+        // kind, so carry the announcement across: she already said this one,
+        // and saying it again is not information. No announce is scheduled
+        // here on purpose - a reclassification is not news.
+        if (this.announced.has(event.from)) this.announced.add(event.item.id)
+        this.announced.delete(event.from)
+        this.invalidate()
+        this.companion.clearAnnounce(event.from)
         return
     }
   }

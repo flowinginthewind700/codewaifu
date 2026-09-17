@@ -22,7 +22,8 @@ import {
   DEFAULT_SNOOZE_MINUTES,
   type AttentionItem,
   type AttentionKind,
-  type AttentionSource
+  type AttentionSource,
+  type TaskStatus
 } from '../../shared/pro'
 
 /** What a hook or status event tells us about where the work lives. */
@@ -44,6 +45,12 @@ export interface TaskRef {
   paneId: string
   paneIds: string[]
   workspaceId: string
+  /**
+   * What the human last said about this task. Triage has to know it: herdr
+   * keeps reporting a finished pane as `done` forever, so "is this worth
+   * raising" cannot be answered from the pane alone.
+   */
+  status: TaskStatus
 }
 
 export type TriageEvent =
@@ -51,6 +58,13 @@ export type TriageEvent =
   | { type: 'updated'; item: AttentionItem }
   | { type: 'resolved'; item: AttentionItem; reason: string }
   | { type: 'snoozed'; item: AttentionItem; until: number }
+  /**
+   * One need changed type, so its id moved (`attentionId` embeds the kind).
+   * Deliberately not `dropped` + `raised`: that pair reads as "one need went
+   * away and a different one arrived", which is what made the companion say
+   * the same finished task twice every thirty seconds.
+   */
+  | { type: 'reclassified'; from: string; item: AttentionItem }
   | { type: 'dropped'; itemId: string; reason: string }
 
 /** What a pane read can add to an item that herdr raised blind. */
@@ -138,6 +152,15 @@ export class Triage {
   private readonly listeners = new Set<(event: TriageEvent) => void>()
   /** Needs the human already dealt with, by id: do not resurrect these. */
   private readonly suppressed = new Map<string, { fingerprint: string; until: number }>()
+  /**
+   * The last status seen per pane, and the finishes the human already
+   * acknowledged. Both exist because a finished pane does not become
+   * unfinished: herdr reports `done` on every snapshot until something else
+   * runs in it, so "have I already said this" has to be answered from memory
+   * rather than from the pane. See `notePaneStatus`.
+   */
+  private readonly paneStatus = new Map<string, AgentStatus>()
+  private readonly ackedDone = new Set<string>()
 
   constructor(deps: TriageDeps = {}) {
     this.now = deps.now ?? (() => Date.now())
@@ -273,6 +296,13 @@ export class Triage {
         this.drop(row.item.id, 'pane closed')
       }
     }
+    // Forget panes that are gone, so a pane id that comes back later starts
+    // honest instead of inheriting an acknowledgement from a previous life.
+    for (const paneId of [...this.paneStatus.keys()]) {
+      if (live.has(paneId)) continue
+      this.paneStatus.delete(paneId)
+      this.ackedDone.delete(paneId)
+    }
     this.prune(at)
   }
 
@@ -282,6 +312,7 @@ export class Triage {
     title: string,
     at: number
   ): AttentionItem | null {
+    this.notePaneStatus(hint.paneId, status)
     if (status === 'blocked') {
       // Waiting on a human is not a stall; the pane is exactly where it should be.
       this.clearKinds(hint, ['stalled'], 'agent is blocked')
@@ -292,14 +323,43 @@ export class Triage {
     if (status === 'done') {
       this.clearKinds(hint, ['permission', 'question', 'stalled'], 'agent finished')
       if (this.blockedItem(hint, 'hook')) return null
+      // A finish the human already dealt with is not news, and it will not
+      // become news by itself: this pane reports `done` until something else
+      // runs in it. Gating on the acknowledgement instead of on a timer is the
+      // difference between being told once and being told every two minutes
+      // until the app is closed - which is what `RESOLVED_SUPPRESS_MS` alone
+      // amounted to, because the clock always ran out before the pane moved.
+      if (hint.paneId && this.ackedDone.has(hint.paneId)) return null
       return this.raise('review', 'herdr', hint, { title: 'Finished, awaiting review', detail: '' }, at)
     }
     if (status === 'working' || status === 'idle') {
+      // `review` dies on `working` and not on `idle`: an agent producing output
+      // has provably left the finished state, so "awaiting review" is stale.
+      // Leaving the row alive let it survive into the next `blocked` and get
+      // reclassified on top of the permission row the pane already had.
+      if (status === 'working') this.clearKinds(hint, ['review'], 'agent is working')
       // Not `stalled`: a stalled pane is by definition still `working`. Only a
       // fresh activity signature ends a stall, which detectStalls watches for.
       this.clearKinds(hint, ['permission', 'question'], `agent is ${status}`)
     }
     return null
+  }
+
+  /**
+   * Remember what a pane was last seen doing, and treat a change as the pane
+   * becoming news again.
+   *
+   * Two things read this. `applyRead` may only reclassify a row while the pane
+   * is genuinely `blocked`, because the text it matches comes from the
+   * scrollback and a finished agent's scrollback still holds every prompt it
+   * answered an hour ago. And an acknowledged finish is only worth keeping
+   * while the pane stays finished: the moment it works again, the next `done`
+   * is a real second finish and deserves to be said.
+   */
+  private notePaneStatus(paneId: string, status: AgentStatus): void {
+    if (!paneId) return
+    if (this.paneStatus.get(paneId) !== status) this.ackedDone.delete(paneId)
+    this.paneStatus.set(paneId, status)
   }
 
   /**
@@ -381,6 +441,15 @@ export class Triage {
     const id = attentionId(taskId, kind, origin)
     const fingerprint = fingerprintOf(kind, payload)
     const existing = this.rows.get(id)
+
+    // "Review" is the one need a pane restates forever, so it is the one that
+    // has to consult the human's own answer. A task they marked done or parked
+    // has already been reviewed, and asking them to review it again every few
+    // minutes is the complaint this tracker exists to prevent. Everything else
+    // stays live even under a closed row on purpose: an agent keeps running
+    // after the human stops counting it, and one that gets stuck still needs
+    // someone to unstick it.
+    if (kind === 'review' && ref && ref.status !== 'active') return null
 
     if (this.suppresses(id, fingerprint, at)) return null
 
@@ -475,7 +544,13 @@ export class Triage {
     return cleared
   }
 
-  private resolveRow(row: Row, reason: string): void {
+  /**
+   * Retire a row. `byHuman` says who asked for it: only a human action counts
+   * as acknowledging a finish, because `applyStatus` resolves rows on its own
+   * when a pane transitions to `done`, and crediting that would swallow the
+   * first legitimate review of every task.
+   */
+  private resolveRow(row: Row, reason: string, byHuman = false): void {
     if (row.item.resolved) return
     const item: AttentionItem = { ...row.item, resolved: true, updatedAt: this.now() }
     row.item = item
@@ -484,6 +559,9 @@ export class Triage {
       fingerprint: row.fingerprint,
       until: this.now() + RESOLVED_SUPPRESS_MS
     })
+    if (byHuman && item.paneId && this.paneStatus.get(item.paneId) === 'done') {
+      this.ackedDone.add(item.paneId)
+    }
     if (item.taskId) this.unmarkBlocked(item.taskId)
     this.emit({ type: 'resolved', item, reason })
   }
@@ -544,7 +622,7 @@ export class Triage {
   resolve(itemId: string, reason = 'acted'): AttentionItem | null {
     const row = this.rows.get(itemId)
     if (!row) return null
-    this.resolveRow(row, reason)
+    this.resolveRow(row, reason, true)
     return { ...row.item }
   }
 
@@ -553,7 +631,7 @@ export class Triage {
     let count = 0
     for (const row of [...this.rows.values()]) {
       if (row.item.taskId !== taskId || row.item.resolved) continue
-      this.resolveRow(row, reason)
+      this.resolveRow(row, reason, true)
       count += 1
     }
     return count
@@ -617,7 +695,14 @@ export class Triage {
 
   private applyRead(row: Row, hint: PaneReadHint | null): boolean {
     if (!hint || !this.rows.has(row.item.id)) return false
-    const kind: AttentionKind = hint.kind && hint.kind !== row.item.kind ? hint.kind : row.item.kind
+    // A row may only change type while the pane is genuinely blocked. The text
+    // this match is made against comes from the scrollback, and a finished
+    // agent's scrollback still holds every prompt it answered an hour ago:
+    // reading "waiting on you" off a `done` pane is how an already reviewed
+    // task started asking to be reviewed again every thirty seconds.
+    const blockedNow = this.paneStatus.get(row.item.paneId) === 'blocked'
+    const kind: AttentionKind =
+      blockedNow && hint.kind && hint.kind !== row.item.kind ? hint.kind : row.item.kind
     const title = String(hint.title ?? '').trim()
     const detail = String(hint.detail ?? '').trim()
     const toolName = String(hint.toolName ?? '').trim()
@@ -634,7 +719,10 @@ export class Triage {
     }
     if (kind === row.item.kind) {
       row.item = item
-      row.fingerprint = fingerprintOf(item.kind, item)
+      // The fingerprint stays whatever herdr last stated. These extra fields
+      // are our own addition, and folding them in would make the next
+      // identical snapshot read as a different need, which re-announces a row
+      // nothing new happened to.
       this.emit({ type: 'updated', item })
       return true
     }
@@ -648,10 +736,15 @@ export class Triage {
       id: attentionId(item.taskId, kind, originOf(oldId)),
       since: row.item.since
     }
+    if (this.rows.has(moved.id)) {
+      // That slot is taken. Two live rows for one pane is worse than keeping
+      // the one already there, so retire this one as the duplicate.
+      this.resolveRow(row, 'reclassified into an existing row')
+      return true
+    }
     this.rows.delete(oldId)
-    this.emit({ type: 'dropped', itemId: oldId, reason: 'reclassified' })
     this.rows.set(moved.id, { ...row, item: moved, fingerprint: fingerprintOf(kind, moved) })
-    this.emit({ type: 'raised', item: moved })
+    this.emit({ type: 'reclassified', from: oldId, item: moved })
     return true
   }
 
@@ -722,6 +815,8 @@ export class Triage {
     this.blockedSince.clear()
     this.progress.clear()
     this.suppressed.clear()
+    this.paneStatus.clear()
+    this.ackedDone.clear()
   }
 
   private emit(event: TriageEvent): void {

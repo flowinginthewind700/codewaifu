@@ -15,9 +15,15 @@
  * clock is a counter we advance by hand, and panes are built inline.
  */
 import { describe, expect, it } from 'vitest'
-import { Triage, type TriageEvent } from '../src/main/pro/triage'
+import {
+  paneReadHint,
+  Triage,
+  type TriageDeps,
+  type TriageEvent,
+  type TaskRef
+} from '../src/main/pro/triage'
 import type { AgentStatus, PaneInfo, Snapshot } from '../src/shared/herdr'
-import type { AttentionItem } from '../src/shared/pro'
+import type { AttentionItem, TaskStatus } from '../src/shared/pro'
 
 const START = 1_700_000_000_000
 /** Short on purpose so a test can cross the threshold in a few steps. */
@@ -63,9 +69,12 @@ function snapshot(panes: PaneInfo[]): Snapshot {
 }
 
 /** A fake clock plus the triage events, so a test can assert what was raised. */
-function harness(stalledAfterMs = STALLED_MS) {
+function harness(
+  stalledAfterMs = STALLED_MS,
+  deps: Omit<TriageDeps, 'now' | 'stalledAfterMs'> = {}
+) {
   let now = START
-  const triage = new Triage({ now: () => now, stalledAfterMs })
+  const triage = new Triage({ now: () => now, stalledAfterMs, ...deps })
   const events: TriageEvent[] = []
   triage.onEvent((event) => events.push(event))
   return {
@@ -82,11 +91,44 @@ function harness(stalledAfterMs = STALLED_MS) {
         (e) => (e as { item: AttentionItem }).item
       )
     },
+    /** Rows that changed type, which is what a pane read is allowed to do. */
+    reclassified(): Array<{ from: string; item: AttentionItem }> {
+      return events
+        .filter((e) => e.type === 'reclassified')
+        .map((e) => e as { from: string; item: AttentionItem })
+    },
+    live(kind: string): AttentionItem[] {
+      return triage.items().filter((item) => item.kind === kind && !item.resolved)
+    },
     liveStalled(): AttentionItem[] {
       return triage.items().filter((item) => item.kind === 'stalled' && !item.resolved)
     }
   }
 }
+
+/** One task the registry knows about, at whatever verdict the human left it. */
+function ref(status: TaskStatus, paneId = 'w1:p1'): TaskRef {
+  return {
+    taskId: 't1',
+    title: '论文采集',
+    groupLabel: 'robotworld',
+    agentKind: 'codex',
+    paneId,
+    paneIds: [paneId],
+    workspaceId: 'w1',
+    status
+  }
+}
+
+/** The bench's own hydrate interval; a case crosses it to prove a point. */
+const HYDRATE_MS = 30_000
+/**
+ * Mirrors triage's private `RESOLVED_SUPPRESS_MS`. The two mechanisms answer
+ * different questions - that one is "did we just deal with this id", the ack is
+ * "has this pane finished again since the human looked" - so a case about the
+ * ack has to step past the window to be testing the ack.
+ */
+const SUPPRESS_MS = 120_000
 
 describe('triage stall detection', () => {
   it('does not stall a working pane whose terminal title keeps repainting', () => {
@@ -174,5 +216,224 @@ describe('triage stall detection', () => {
       snapshot([pane({ revision: 1, terminalTitle: 'same', scroll: { offsetFromBottom: 20, maxOffsetFromBottom: 100, viewportRows: 40 } })])
     )
     expect(h.raised('stalled')).toHaveLength(0)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * The human's verdict
+ * ------------------------------------------------------------------ */
+
+/**
+ * A finished task that would not stay finished.
+ *
+ * The shipped bug, from a real bench: one task was marked done, its row
+ * dismissed, and the companion then announced "完成了，等你 review" every two
+ * minutes until the app was closed - the ledger for it holds three separate
+ * `marked done` checkpoints four minutes apart, which is a human clicking the
+ * same button three times because the first two did not take.
+ *
+ * Two independent loops produced it, and both are pinned below.
+ *
+ * herdr reports a finished pane as `done` on every snapshot forever, because
+ * the pane really is still finished; nothing about the pane ever changes. The
+ * only thing that can end the repetition is the human's own answer, so `review`
+ * became the one kind that consults the task status, and an acknowledged finish
+ * became state rather than a two-minute suppression window that always expired
+ * before the pane did.
+ *
+ * The second loop was the pane read. `hydrate` matched the scrollback against a
+ * prompt regex, and a finished agent's scrollback still contains every "do you
+ * want to approve" it answered an hour ago - so a `review` row was reclassified
+ * into a `permission` row, whose id is different because the id embeds the
+ * kind, which the bench announced as a brand new need. The next snapshot raised
+ * `review` again. Two announcements per hydrate tick, alternating, forever.
+ */
+describe('triage and the human verdict', () => {
+  it('does not ask for a review of a task the human already closed', () => {
+    for (const status of ['done', 'parked'] as const) {
+      const h = harness(STALLED_MS, { resolveTask: () => ref(status) })
+      h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+      expect(h.raised('review'), status).toHaveLength(0)
+      expect(h.live('review'), status).toHaveLength(0)
+    }
+  })
+
+  it('still asks while the task is open, and while it cannot be filed at all', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+    expect(h.raised('review')).toHaveLength(1)
+
+    // No task resolved: there is no verdict to consult, so the row is raised.
+    // Guessing "closed" here would hide every pane the registry has not met.
+    const orphan = harness(STALLED_MS, { resolveTask: () => null })
+    orphan.triage.onSnapshot(snapshot([pane({ agentStatus: 'done', paneId: 'w9:p9' })]))
+    expect(orphan.raised('review')).toHaveLength(1)
+  })
+
+  it('keeps every other kind live under a closed task, because the agent is still there', () => {
+    // Only `review` reads the verdict. Everything else stays raisable: closing
+    // a row is not the same as unsticking an agent, and a bench that went quiet
+    // about a hung pane because the human stopped counting it is worse than one
+    // that repeats itself.
+    const h = harness(STALLED_MS, { resolveTask: () => ref('done') })
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'blocked' })]))
+    expect(h.live('permission')).toHaveLength(1)
+    // The same pane, quiet for long enough to count as a stall: also raised.
+    const quiet = pane({ agentStatus: 'working', revision: 9, terminalTitle: 'frozen' })
+    h.triage.onSnapshot(snapshot([quiet]))
+    h.advance(STALLED_MS + 1)
+    h.triage.onSnapshot(snapshot([quiet]))
+    expect(h.live('stalled')).toHaveLength(1)
+  })
+
+  it('says "finished" once and then stays quiet, however long the pane sits there', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const done = pane({ agentStatus: 'done' })
+    h.triage.onSnapshot(snapshot([done]))
+    expect(h.raised('review')).toHaveLength(1)
+    h.triage.resolveTaskItems('t1', 'task marked done')
+
+    // Ten hydrate ticks of the same finished pane. The old suppression window
+    // was two minutes, so this loop used to re-raise on the fifth iteration.
+    for (let i = 0; i < 10; i += 1) {
+      h.advance(HYDRATE_MS)
+      h.triage.onSnapshot(snapshot([done]))
+    }
+    expect(h.raised('review')).toHaveLength(1)
+    expect(h.live('review')).toHaveLength(0)
+  })
+
+  it('counts dismissing the row itself as the acknowledgement', () => {
+    // The bubble's "done" closes the task; the attention row's dismiss only
+    // resolves the one item. Both are the human saying "I have seen this".
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const done = pane({ agentStatus: 'done' })
+    h.triage.onSnapshot(snapshot([done]))
+    const [item] = h.raised('review')
+    h.triage.resolve(item.id, 'acted')
+    for (let i = 0; i < 10; i += 1) {
+      h.advance(HYDRATE_MS)
+      h.triage.onSnapshot(snapshot([done]))
+    }
+    expect(h.raised('review')).toHaveLength(1)
+  })
+
+  it('says it again when the pane works and finishes a second time', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+    h.triage.resolveTaskItems('t1', 'task marked done')
+    h.advance(SUPPRESS_MS + HYDRATE_MS)
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+    expect(h.raised('review')).toHaveLength(1)
+
+    // A second run in the same pane is a second finish, and it is news again.
+    h.triage.onSnapshot(
+      snapshot([pane({ agentStatus: 'working', revision: 2, terminalTitle: 'spin |' })])
+    )
+    h.advance(1000)
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done', revision: 3 })]))
+    expect(h.raised('review')).toHaveLength(2)
+  })
+
+  it('does not reclassify a finished pane off prompts it answered an hour ago', async () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+    expect(h.live('review')).toHaveLength(1)
+
+    // Exactly what the scrollback of the real 论文采集 pane looked like: an
+    // approval prompt, long since answered, still on screen.
+    const filled = await h.triage.hydrate(async () =>
+      paneReadHint('Do you want to approve this command? (y/n)', 'review')
+    )
+    expect(filled).toBe(1)
+    expect(h.live('review')).toHaveLength(1)
+    expect(h.live('permission')).toHaveLength(0)
+    expect(h.reclassified()).toHaveLength(0)
+    // The read is still worth keeping; only the change of type is refused.
+    expect(h.live('review')[0].title).toBe('Do you want to approve this command? (y/n)')
+  })
+
+  it('reclassifies a blocked pane as one need rather than two', async () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+    const [review] = h.live('review')
+    // The human answers, the agent runs, and then blocks on a real question.
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'blocked', revision: 4 })]))
+    expect(h.live('permission')).toHaveLength(1)
+
+    await h.triage.hydrate(async (item) =>
+      item.kind === 'review' ? { kind: 'question', title: 'Which target should I build?' } : null
+    )
+    const [moved] = h.reclassified()
+    expect(moved.from).toBe(review.id)
+    expect(moved.item.kind).toBe('question')
+    expect(h.live('question')).toHaveLength(1)
+    expect(h.live('review')).toHaveLength(0)
+    // How long the human has been kept waiting is a fact about the wait, not
+    // about our guess at its type, so it survives the move.
+    expect(h.live('question')[0].since).toBe(review.since)
+    // The point of the separate event: `raised` is what the bench speaks aloud,
+    // and a better-informed label for the same wait is not news.
+    expect(h.raised('question')).toHaveLength(0)
+  })
+
+  it('keeps one row when a reclassification lands on a need already raised', async () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'done' })]))
+    h.triage.onSnapshot(snapshot([pane({ agentStatus: 'blocked', revision: 4 })]))
+    const [permission] = h.live('permission')
+
+    await h.triage.hydrate(async (item) =>
+      item.kind === 'review' ? { kind: 'permission', title: 'y/n' } : null
+    )
+    // Both rows described the same pane waiting on the same keypress; the one
+    // herdr raised is kept, and the guess retires instead of clobbering it.
+    expect(h.reclassified()).toHaveLength(0)
+    expect(h.live('review')).toHaveLength(0)
+    expect(h.live('permission')).toHaveLength(1)
+    expect(h.live('permission')[0].id).toBe(permission.id)
+    // Kept, not overwritten: clobbering the row would swap what herdr proved
+    // for what a scrollback regex guessed, and the id would stay the same, so
+    // nothing downstream would notice the swap.
+    expect(h.live('permission')[0].title).toBe(permission.title)
+  })
+
+  it('does not let enrichment turn into a second announcement', async () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const blocked = pane({ agentStatus: 'blocked', title: 'Waiting on you' })
+    h.triage.onSnapshot(snapshot([blocked]))
+    expect(h.raised('permission')).toHaveLength(1)
+    const since = h.live('permission')[0].since
+
+    await h.triage.hydrate(async () => ({
+      title: 'Do you want to allow npm test?',
+      detail: 'Press 1 to approve'
+    }))
+    expect(h.live('permission')[0].title).toBe('Do you want to allow npm test?')
+
+    for (let i = 0; i < 4; i += 1) {
+      h.advance(HYDRATE_MS)
+      h.triage.onSnapshot(snapshot([blocked]))
+    }
+    // Nothing new happened to this pane. Writing the enriched fields back into
+    // the row's fingerprint used to make the next identical snapshot look like
+    // a different need, which re-raised it and reset the elapsed timer the row
+    // is displayed with.
+    expect(h.raised('permission')).toHaveLength(1)
+    expect(h.live('permission')).toHaveLength(1)
+    expect(h.live('permission')[0].since).toBe(since)
+  })
+
+  it('forgets a pane that closed, so a reused pane id starts honest', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const done = pane({ agentStatus: 'done' })
+    h.triage.onSnapshot(snapshot([done]))
+    h.triage.resolveTaskItems('t1', 'task marked done')
+    h.advance(SUPPRESS_MS + HYDRATE_MS)
+
+    // herdr restarted and the pane is gone: the acknowledgement goes with it.
+    h.triage.onSnapshot(snapshot([]))
+    h.triage.onSnapshot(snapshot([done]))
+    expect(h.raised('review')).toHaveLength(2)
   })
 })
