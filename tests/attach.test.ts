@@ -228,14 +228,16 @@ describe('savePastedImage', () => {
   it('writes one named file and answers with its path', () => {
     const fake = fakeFs()
     const saved = savePastedImage(PNG, { ...fake, now: () => new Date(2026, 8, 17, 9, 5, 4).getTime() })
-    expect(saved).toBe('/fake/attachments/cw-paste-20260917-090504.png')
+    // path.join, not a literal: the separator is the runner's, and a saved
+    // path is native on purpose - quotePath is what makes it shell-safe.
+    expect(saved).toBe(path.join('/fake/attachments', 'cw-paste-20260917-090504.png'))
     expect(fake.written).toEqual([{ file: saved, bytes: PNG.byteLength }])
   })
 
   it('walks to the next name when the second one already exists', () => {
     const fake = fakeFs({ 'cw-paste-20260917-090504.png': 1 })
     const saved = savePastedImage(PNG, { ...fake, now: () => new Date(2026, 8, 17, 9, 5, 4).getTime() })
-    expect(saved).toBe('/fake/attachments/cw-paste-20260917-090504-2.png')
+    expect(saved).toBe(path.join('/fake/attachments', 'cw-paste-20260917-090504-2.png'))
   })
 
   it('writes nothing and answers null for every way it can fail', () => {
@@ -265,7 +267,12 @@ describe('savePastedImage', () => {
     try {
       const saved = savePastedImage(PNG, { dir })
       expect(saved).toBeTruthy()
-      expect(fs.statSync(saved as string).mode & 0o777).toBe(0o600)
+      // A unix mode is a unix thing: on Windows node's chmod is the read-only
+      // bit and stat answers 0o666, so the permission half of this claim is
+      // POSIX-only. The bytes are everybody's business.
+      if (process.platform !== 'win32') {
+        expect(fs.statSync(saved as string).mode & 0o777).toBe(0o600)
+      }
       expect(fs.readFileSync(saved as string).byteLength).toBe(PNG.byteLength)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
