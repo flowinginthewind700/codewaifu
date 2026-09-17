@@ -3,7 +3,7 @@
 //
 // Three jobs, same as the web version: assemble the model onto a canvas, feed
 // the TTS level into her mouth, and tell the truth about downloading / failing
-// / losing the GL context. Two things are different because this canvas lives
+// / losing the GL context. Three things are different because this canvas lives
 // in a frameless window instead of a page:
 //
 //   * Dragging her moves the window. A CSS `app-region: drag` region cannot be
@@ -11,6 +11,11 @@
 //     expressions needs — so the drag is done in JS over `IPC.moveWindow`.
 //   * The audio level comes from the widget's own Web Audio graph
 //     (`widgetVoice`), which is the only place an analyser can sit.
+//   * The box she stands in is invisible and still catches the pointer, so it
+//     shows itself as glass wherever the pointer is (see stageVeil.ts). On the
+//     web the page underneath is the answer to "what did my click hit"; in a
+//     transparent frameless window the answer is nothing, and nothing reads as
+//     a frozen app.
 //
 // This module pulls in host.ts -> the vendored Cubism framework (~720KB), so
 // App.tsx reaches it through React.lazy and the first bundle stays small.
@@ -20,6 +25,7 @@ import { characterTotalBytes, findCharacter, prefetchCharacter } from './live2d/
 import { Live2DHost } from './live2d/host'
 import { stageCanvasKey } from './live2d/stage'
 import { api } from './api'
+import { attachStageVeil } from './stageVeil'
 import type { Translate } from './i18n'
 import { widgetVoice } from './voice'
 import type { Live2DCharacter } from '@shared/live2dCatalog'
@@ -239,6 +245,13 @@ function Live2DAvatarBase({ characterId, t, lipGain, paused = false, onHostChang
       if (pendingX || pendingY) void api.moveWindow(pendingX, pendingY)
     }
   }, [])
+
+  /**
+   * The glass that answers the pointer. Detached on unmount along with every
+   * other listener; nothing here touches React state, so a mouse move costs a
+   * style write on one element and not a render of the avatar tree.
+   */
+  useEffect(() => attachStageVeil(stageRef.current), [])
 
   const total = progress.total
   const pct = total > 0 ? Math.min(100, Math.round((progress.loaded / total) * 100)) : 0

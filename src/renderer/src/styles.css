@@ -432,6 +432,54 @@ a {
   cursor: grabbing;
 }
 
+/* ---- the bare stage's own material -------------------------------------
+  With no card behind her, the box that makes her draggable is the only thing
+  between the pointer and the desktop, and it is invisible: a click there dies
+  with nothing to explain it, which feels exactly like a frozen app. So the box
+  shows itself. At rest it is a hairline rim - the desktop stays the desktop,
+  which is what "clear area behind her" promised - and under the pointer it
+  becomes glass: the card's own fill, sheen and rim, plus a fraction of the
+  card's blur over the whole surface. stageVeil.ts writes `data-veil`;
+  everything else here is material.
+
+  There is no lens following the cursor, and there was one once: a sheen
+  positioned at the pointer has to paint under the canvas (generated content is
+  the first child), so wherever the pointer stood on her, the middle of the
+  sheen was hidden by her body and only its falloff showed - a halo ring around
+  her shoulders at 9% white, and still a ring at 3.5%. A cue that draws a ring
+  around the person is a cue about the person, not about the glass, so the
+  glass became uniform instead: one surface, lit evenly, exactly as large as
+  the click it takes.
+
+  `--veil-blur` is a fraction of `--glass-blur` on purpose, and the honest
+  reason is that a transparent window has no page backdrop for CSS to sample:
+  over the desktop the blur is a no-op and what sells the glass is the fill,
+  the rim and the sheen. It is still declared, because over anything
+  the app itself paints underneath (a solid surface, the chat cameo) it does
+  exactly what it says. */
+.card[data-bare='1'] .l2d {
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px var(--veil-rim);
+  transition:
+    background-color var(--dur-2) var(--ease-swift),
+    box-shadow var(--dur-2) var(--ease-swift),
+    backdrop-filter var(--dur-2) var(--ease-swift);
+}
+
+/* Under the pointer, the surface that is about to take the click is the surface
+   the human is looking at: fill, sheen, a rim that stops being a whisper, and
+   the blur - which over the desktop has nothing to sample and quietly does
+   nothing, and over anything the app paints is exactly the frost it names. */
+.card[data-bare='1'] .l2d[data-veil='1'] {
+  background-color: var(--veil-fill);
+  background-image: var(--glass-sheen);
+  backdrop-filter: blur(var(--veil-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--veil-blur)) saturate(var(--glass-sat));
+  box-shadow:
+    inset 0 0 0 1px var(--line),
+    var(--highlight);
+}
+
 .l2d-canvas {
   position: absolute;
   inset: 0;
@@ -2278,7 +2326,8 @@ input.filter-input:focus {
   .msg,
   .chat-jump,
   .chat-typing span,
-  .live-dot {
+  .live-dot,
+  .l2d {
     animation: none !important;
     transition: none !important;
   }

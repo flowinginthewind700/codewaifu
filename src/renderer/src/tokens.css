@@ -61,14 +61,24 @@
   --glass-blur: 26px;
   --glass-sat: 180%;
   /* A light raking from the top-left: this is what reads as "glass" rather
-     than "grey box at 56% opacity". Kept under the border highlight so the two
-     never fight over the same edge. */
+    than "grey box at 56% opacity". Kept under the border highlight so the two
+    never fight over the same edge. */
   --glass-sheen: linear-gradient(
     158deg,
     rgba(255, 255, 255, 0.11) 0%,
     rgba(255, 255, 255, 0.035) 34%,
     rgba(255, 255, 255, 0) 62%
   );
+
+  /* The veil: the same glass, at the strength a bare stage can carry. She
+     stands on the desktop with no card behind her, but the box that makes her
+     draggable is still there and still eats a click, so it has to show itself
+     without becoming the card she asked not to have. Hence a fraction of
+     --glass-blur, a fill measured in single percent, and a rim instead of a
+     border. Tuning these three tunes the whole effect; see stageVeil.ts. */
+  --veil-blur: 7px;
+  --veil-fill: rgba(17, 18, 20, 0.2);
+  --veil-rim: rgba(255, 255, 255, 0.07);
 
   --radius: 8px;
   --radius-sm: 6px;

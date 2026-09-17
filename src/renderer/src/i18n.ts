@@ -163,8 +163,8 @@ const STRINGS = {
   },
   clearStage: { zh: '人物区域完全透明', en: 'Clear area behind her' },
   clearStageHint: {
-    zh: '收起时她直接站在桌面上，身后没有卡片；只有她和状态胶囊会挡住鼠标，其余区域的点击会落到下层窗口',
-    en: 'While collapsed she stands straight on the desktop with no sheet behind her; only she and the status pill catch the mouse, clicks elsewhere fall through to the window below'
+    zh: '收起时她直接站在桌面上，身后没有卡片；她站的那块区域仍会接住鼠标，所以指针经过时它会亮起一层液态玻璃，其余地方的点击落到下层窗口',
+    en: 'While collapsed she stands straight on the desktop with no sheet behind her; her stage still catches the mouse, so it lights up as liquid glass under the pointer, and clicks anywhere else fall through to the window below'
   },
   opacity: { zh: '不透明度', en: 'Opacity' },
   scale: { zh: '大小', en: 'Size' },
