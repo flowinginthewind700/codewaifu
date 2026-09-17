@@ -29,6 +29,15 @@ const hasBash = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status ==
 const isWindows = process.platform === 'win32'
 const itPosix = isWindows ? it.skip : it
 
+/**
+ * Linux only, which is narrower than "not Windows" and has to be: `--from`
+ * means a different artifact on each platform. macOS wants a CodeWaifu.app
+ * bundle and answers "could not find CodeWaifu.app" to a plain build directory,
+ * so a test built around a Linux tree would fail there for a reason that has
+ * nothing to do with the copy it is guarding.
+ */
+const itLinux = process.platform === 'linux' ? it : it.skip
+
 function run(script: string, args: string[] = [], input = ''): { status: number | null; stdout: string } {
   const result = spawnSync('bash', ['-c', `. "$0"; ${script}`, LIB, ...args], { input, encoding: 'utf8' })
   return { status: result.status, stdout: String(result.stdout ?? '').trim() }
@@ -324,7 +333,7 @@ describe.skipIf(!hasBash)('install.sh', () => {
     expect(stderr.includes('curl: (22)')).toBe(false)
   })
 
-  itPosix(
+  itLinux(
     'stops the running companion before copying over it, so an upgrade cannot die with ETXTBSY',
     async () => {
       // What this reproduces: upgrading while the companion is open. The old
