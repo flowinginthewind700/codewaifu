@@ -95,25 +95,30 @@ describe('agentName', () => {
     expect(agentName('', '')).toBe('task')
   })
 
-  it('mirrors the length herdr itself enforces', () => {
+  it('mirrors the length herdr itself enforces', (ctx) => {
     // The 32 in `AGENT_NAME_MAX` is copied out of vendored Rust, so the copy is
     // checked against the original. Skipped rather than failed when herdr's
     // source is not checked out: such a machine has nothing to compare against,
     // and this package builds fine there.
     const source = path.join(__dirname, '..', 'thirdparty', 'herdr', 'src', 'app', 'agents.rs')
-    if (!fs.existsSync(source)) return
+    // `thirdparty/` is gitignored, so CI has no herdr source and this reports
+    // skipped. Returning instead would report *passed*, and a green suite that
+    // never compared anything is worse than an honest hole in it.
+    if (!fs.existsSync(source)) return ctx.skip()
     const limit = /name\.len\(\)\s*<=\s*(\d+)/.exec(fs.readFileSync(source, 'utf8'))
     expect(limit, 'valid_agent_name no longer states a byte limit').not.toBeNull()
     expect(AGENT_NAME_MAX).toBe(Number(limit?.[1]))
   })
 
-  it('names the two refusals herdr actually emits', () => {
+  it('names the two refusals herdr actually emits', (ctx) => {
     // The codes quoted in `agentName`'s docs and in the notice a refused start
     // raises. An invented one reads as a typo right up to the moment someone
     // greps herdr for it and finds nothing - which is how
     // `duplicate_agent_name` came to be written down here in the first place.
+    // Nothing in `src/` branches on these codes (the notice surfaces herdr's own
+    // text verbatim), so drift here is a documentation bug, not a behaviour one.
     const source = path.join(__dirname, '..', 'thirdparty', 'herdr', 'src', 'app', 'agents.rs')
-    if (!fs.existsSync(source)) return
+    if (!fs.existsSync(source)) return ctx.skip()
     const rust = fs.readFileSync(source, 'utf8')
     for (const code of ['invalid_agent_name', 'agent_name_taken']) {
       expect(rust, `herdr no longer emits ${code}`).toContain(`code: "${code}".into()`)
