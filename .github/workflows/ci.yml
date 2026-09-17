@@ -1,0 +1,62 @@
+name: ci
+
+# release.yml only runs on a tag, which means main is verified exactly once:
+# after the release is already cut. This workflow answers the question on the
+# commit instead, so a broken main is found by the person who broke it and not
+# by whoever pushes the next tag.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+          # 22.04 rather than ubuntu-latest, same reason release.yml pins it:
+          # 24.04's unprivileged-userns restriction is a real desktop
+          # condition and the suite carries linux-specific expectations.
+          - os: ubuntu-22.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # Not just "the tests pass on my machine": attach.test.ts,
+      # installWindows.test.ts and linuxRuntime.test.ts branch on the platform,
+      # so one OS would green-light paths the other two actually ship.
+      - name: test
+        run: npm test
+
+      # tsc does not resolve what the bundler resolves: a mistyped import or a
+      # bad electron-vite entry typechecks clean and produces no out/.
+      - name: bundle
+        run: npm run build
