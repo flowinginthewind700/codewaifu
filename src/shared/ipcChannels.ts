@@ -21,6 +21,13 @@ export const IPC = {
   hide: 'cw:hide',
   quit: 'cw:quit',
   pickImage: 'cw:pick-image',
+  /**
+   * Whatever is on the system clipboard that can become a path: files copied in
+   * a file manager, or an image written to a file we own. The only form of an
+   * attachment a PTY can carry, and used by both windows, so it lives here
+   * rather than under `cw-pro:`.
+   */
+  clipboardAttach: 'cw:clipboard-attach',
   openPath: 'cw:open-path',
   chatMode: 'cw:chat-mode',
   /** Renderer reports whether a non-empty input is focused (hotkey guard). */
@@ -131,6 +138,7 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.hide,
   IPC.quit,
   IPC.pickImage,
+  IPC.clipboardAttach,
   IPC.openPath,
   IPC.chatMode,
   IPC.inputActive,

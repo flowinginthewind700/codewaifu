@@ -1,5 +1,6 @@
-import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
+import { clipboard, dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import fs from 'node:fs'
+import { readClipboardPayload, savePastedImage, sweepDue } from './attach'
 import type { Core } from './core'
 import { log } from './log'
 import type { Agent } from '../shared/protocol'
@@ -195,5 +196,24 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
     if (!target) return { ok: false }
     void shell.openPath(target)
     return { ok: true }
+  })
+
+  /**
+   * "What can I attach from the clipboard?" Files first, then an image, and
+   * never both, because a paste means one of them: what main saw on the clipboard
+   * is either files somebody copied or a picture somebody took. The answer is a
+   * list of paths and nothing else - no bytes cross this bridge, because the
+   * renderer's next move is to type a path into a terminal.
+   */
+  handle(IPC.clipboardAttach, async () => {
+    const payload = await readClipboardPayload(clipboard)
+    if (payload.paths.length) return { ok: true, paths: payload.paths }
+    if (!payload.png) return { ok: false, empty: true }
+    const saved = savePastedImage(payload.png)
+    if (!saved) return { ok: false, error: 'the pasted image could not be saved' }
+    // Opportunistic and throttled: a paste is the moment the directory is
+    // certainly there and certainly being looked at.
+    sweepDue()
+    return { ok: true, paths: [saved] }
   })
 }

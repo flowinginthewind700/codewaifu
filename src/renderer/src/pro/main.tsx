@@ -31,11 +31,16 @@ import '@fontsource/jetbrains-mono/700.css'
 import '@fontsource/jetbrains-mono/400-italic.css'
 import '@xterm/xterm/css/xterm.css'
 import './bench.css'
+import { guardWindowDrops } from '../attach'
 import { Bench } from './Bench'
 import { FaultBoundary } from './FaultBoundary'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from pro.html')
+
+// Before anything renders: a drop nobody claimed would otherwise navigate this
+// window to the dropped file, and the bench is the only view of the work.
+guardWindowDrops()
 
 createRoot(container).render(
   <FaultBoundary>

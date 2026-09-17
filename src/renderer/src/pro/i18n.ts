@@ -398,6 +398,21 @@ const STRINGS = {
   paneScrollBack: { zh: '已回看 {n} 行', en: '{n} lines back' },
   paneScrollBottom: { zh: '回到最新输出', en: 'Back to the live edge' },
   paneCopyFailed: { zh: '复制失败', en: 'Copy failed' },
+  /* ------------------------------------------------------- attachments */
+  /**
+   * What a drag or a paste put into the input. It says "paths" rather than
+   * "files" on purpose: the honest description of an attachment here is text the
+   * agent can open, and a human who dropped a screenshot wants to know it landed
+   * somewhere readable rather than that it was "uploaded".
+   */
+  attachPaths: { zh: '已插入 {n} 个文件路径', en: 'Inserted {n} file paths' },
+  /** The clipboard held an image and writing it out did not work. */
+  attachFailed: {
+    zh: '剪贴板里的图片没能存成文件',
+    en: 'The image on the clipboard could not be saved to a file'
+  },
+  attachDrop: { zh: '松手，把文件路径交给代理', en: 'Drop to hand the file paths to the agent' },
+  attachDropField: { zh: '松手即插入路径', en: 'Drop to insert the paths' },
   paneZoomOn: { zh: '放大此面板', en: 'Zoom this pane' },
   paneZoomOff: { zh: '退出放大', en: 'Unzoom' },
   paneFocusHerdr: { zh: '在 herdr 里聚焦', en: 'Focus in herdr' },

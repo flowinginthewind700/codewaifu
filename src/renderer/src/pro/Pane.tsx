@@ -14,7 +14,7 @@
  * - Unmounting releases the bridge, and releasing the bridge kills nothing. The
  *   agent keeps running in herdr; we only stop paying for its output.
  */
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactElement } from 'react'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon, type ISearchResultChangeEvent } from '@xterm/addon-search'
@@ -43,6 +43,12 @@ import type { PaneScroll } from '@shared/herdr'
 import type { ProBridgePush, ProFramePush } from '@shared/proIpc'
 import { clipboardAction, searchAction } from '@shared/termKeys'
 import { flushLines, pageScroll, wheelLines, wheelRequest } from '@shared/termScroll'
+import {
+  attachPlatform,
+  attachmentText,
+  clipboardPaths,
+  dropAttachment
+} from '../attach'
 import { agentClass } from './agentTag'
 import { platform, proApi } from './api'
 import { bridgeErrorText, fill, type Translate } from './i18n'
@@ -161,6 +167,10 @@ async function copySelection(term: Terminal): Promise<boolean> {
  * string straight to `proApi.pane.input` would skip the markers, and a TUI that
  * understands bracketed paste would then execute a multi-line clipboard as N
  * separate commands - a pasted diff becoming a pasted shell history.
+ *
+ * When the clipboard has no text it may still have an attachment: a file copied
+ * in Finder, or a screenshot that main writes out and hands back as a path.
+ * That is the one thing a PTY can carry, so it is what gets typed.
  */
 async function pasteInto(term: Terminal): Promise<void> {
   let text = ''
@@ -169,9 +179,14 @@ async function pasteInto(term: Terminal): Promise<void> {
   } catch {
     // Read permission is granted per origin and can be withheld; there is
     // nothing to paste and no reason to interrupt the agent about it.
+    text = ''
+  }
+  if (text) {
+    term.paste(text)
     return
   }
-  if (text) term.paste(text)
+  const paths = await clipboardPaths()
+  if (paths.length) term.paste(attachmentText(paths, attachPlatform(platform)))
 }
 
 export interface PaneProps {
@@ -243,6 +258,14 @@ export function Pane({
   const [bell, setBell] = useState(false)
   /** True when the human released this pane on purpose; no auto re-attach. */
   const [released, setReleased] = useState(false)
+  /** True while a drag is over the pane, which is what shows the drop hint. */
+  const [dropHint, setDropHint] = useState(false)
+  /**
+   * A counter, not a flag: `dragleave` fires for every child the pointer crosses
+   * on its way in, and a hint that blinks off mid-gesture reads as "this does
+   * not accept drops" while the file is still in the air.
+   */
+  const dragDepth = useRef(0)
   /**
    * The bundled face is parsed and measurable. xterm sizes every cell at
    * `open()` (see terminalFont.ts), so a pane waits one woff2 fetch on a cold
@@ -351,6 +374,61 @@ export function Pane({
   }, [clearSearch])
 
   const openSearch = useCallback(() => setSearchOpen(true), [])
+
+  /**
+   * Drop a file on the pane and its path is typed into the agent's prompt.
+   *
+   * This is the only attachment a terminal can have: the far side of the pane is
+   * a PTY, which carries bytes and nothing else, so a picture becomes an
+   * absolute path quoted for the shell that is about to read it. That is also
+   * what the agent wants - codex and Claude Code both open an image argument
+   * themselves - and a path survives scrollback and a transcript verbatim in a
+   * way a base64 blob does not.
+   */
+  const onDrop = useCallback(
+    (event: DragEvent<HTMLElement>): void => {
+      // Claimed here rather than by `guardWindowDrops`: without this the drop
+      // would navigate the whole bench to the dropped file.
+      event.preventDefault()
+      dragDepth.current = 0
+      setDropHint(false)
+      const term = termRef.current
+      if (!term) return
+      const { paths, text } = dropAttachment(event)
+      if (paths.length) {
+        if (released) {
+          onNotify(t('paneDetachedNote'), 'warn')
+          return
+        }
+        term.paste(attachmentText(paths, attachPlatform(platform)))
+        onNotify(fill(t, 'attachPaths', { n: paths.length }), 'info')
+        return
+      }
+      // Text dragged in - a selection out of a browser, a line out of another
+      // terminal - is a paste, and takes the same bracketed-paste route as the
+      // keyboard chord so a TUI sees one gesture rather than N commands.
+      if (text && !released) term.paste(text)
+    },
+    [onNotify, released, t]
+  )
+
+  const onDragOver = useCallback((event: DragEvent<HTMLElement>): void => {
+    // What makes the pane a legal drop target at all; `copy` because a drag out
+    // of a file manager must not read as a move.
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const onDragEnter = useCallback((event: DragEvent<HTMLElement>): void => {
+    event.preventDefault()
+    dragDepth.current += 1
+    setDropHint(true)
+  }, [])
+
+  const onDragLeave = useCallback((): void => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDropHint(false)
+  }, [])
 
   // Focus follows the bar, not the click. Opened from the header button, focus
   // would stay on that button and the first thing anybody does next is type.
@@ -713,6 +791,10 @@ export function Pane({
       data-active={active}
       data-zoom-hidden={zoomed && !active}
       onMouseDown={() => onSelect(paneId)}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
       <header className="pane-head">
         <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>
@@ -781,6 +863,11 @@ export function Pane({
         </button>
       </header>
       <div className="pane-body" ref={hostRef} />
+      {dropHint && (
+        <div className="pane-drop" role="status">
+          <span>{t('attachDrop')}</span>
+        </div>
+      )}
       {searchOpen && !released && (
         <div className="pane-search" role="search">
           <Search size={12} aria-hidden="true" />

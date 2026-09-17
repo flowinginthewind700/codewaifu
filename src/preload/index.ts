@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { INVOKE_CHANNELS, IPC, PUSH_CHANNELS } from '../shared/ipcChannels'
 import type { CodeWaifuApi } from '../shared/bridge'
 
@@ -34,6 +34,20 @@ const api: CodeWaifuApi = {
   },
   /** Channel names, so the renderer never hardcodes a string. */
   channels: IPC,
+  /**
+   * `webUtils.getPathForFile` throws on anything that is not a File carrying a
+   * path, and a drag can carry plenty that are not: dragged text, a selection
+   * from a browser, an image lifted off the clipboard. Those are '' rather than
+   * an exception, because the caller's next move - "then it was not a file
+   * drop" - depends on the empty answer.
+   */
+  pathForFile(file: unknown): string {
+    try {
+      return webUtils.getPathForFile(file as File) || ''
+    } catch {
+      return ''
+    }
+  },
   platform: process.platform,
   versions: {
     electron: process.versions.electron ?? '',

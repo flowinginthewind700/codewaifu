@@ -23,7 +23,8 @@ import {
 import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT, splitBlocks, type ChatMessage, type ChatTranscript } from '@shared/chat'
 import { isImeKey } from '@shared/ime'
 import type { SteerResult, ThreadInfo } from '@shared/protocol'
-import { api } from './api'
+import { api, platform } from './api'
+import { useAttachField } from './useAttach'
 import { useImeEnter } from './useIme'
 import type { StringKey, Translate } from './i18n'
 import { Tip } from './Tip'
@@ -100,6 +101,24 @@ export function ChatView({ thread, t, onBack, onSteer, onNotice, onSay, onOpenPa
   const stickRef = useRef(true)
   const firstIdRef = useRef<string | null>(null)
   const countRef = useRef(0)
+  /**
+   * Drag a file onto the composer, or paste a screenshot, and its path is typed
+   * in at the caret. The agent on the other end reads the file itself - both
+   * codex and Claude Code take an image as a path - so nothing has to leave
+   * this machine as bytes.
+   */
+  const attach = useAttachField({
+    fieldRef: textareaRef,
+    value: draft,
+    onChange: setDraft,
+    platform,
+    strings: {
+      attached: (n) => t('attachPaths').replace('{n}', String(n)),
+      failed: t('attachFailed'),
+      dropHint: t('attachDropField')
+    },
+    notify: (text) => onNotice(text)
+  })
 
   const load = useCallback(
     async (nextLimit: number, fresh: boolean): Promise<void> => {
@@ -344,14 +363,25 @@ export function ChatView({ thread, t, onBack, onSteer, onNotice, onSay, onOpenPa
 
       <div className="chat-foot">
         {!canSteer ? <div className="hint">{t('steerUnsupported')}</div> : null}
-        <div className="composer">
+        <div className="composer" data-dragging={attach.dragging || undefined}>
           <textarea
             ref={textareaRef}
             value={draft}
-            placeholder={canSteer ? t('steerPlaceholder') : t('steerClipboardPlaceholder')}
+            placeholder={
+              attach.dragging
+                ? attach.dropHint
+                : canSteer
+                  ? t('steerPlaceholder')
+                  : t('steerClipboardPlaceholder')
+            }
             disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={attach.onPaste}
+            onDrop={attach.onDrop}
+            onDragOver={attach.onDragOver}
+            onDragEnter={attach.onDragEnter}
+            onDragLeave={attach.onDragLeave}
             {...ime.composition}
           />
           <button

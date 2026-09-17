@@ -30,7 +30,8 @@ import {
 import type { SteerResult } from '@shared/protocol'
 import type { TaskView } from '@shared/pro'
 import { useImeEnter } from '../useIme'
-import { proApi } from './api'
+import { useAttachField } from '../useAttach'
+import { platform, proApi } from './api'
 import { fill, type StringKey, type Translate } from './i18n'
 import type { Tone } from './toast'
 
@@ -142,10 +143,29 @@ export function ConversationPanel({ task, t, onNotify }: ConversationPanelProps)
   const [busy, setBusy] = useState(false)
   const [pinned, setPinned] = useState(true)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
   // Enter-to-send that survives a Chinese IME: the commit Enter of a
   // composition must land in the textarea, not in the agent's queue.
   const ime = useImeEnter()
   const taskId = task.id
+  /**
+   * Drag a file in, or paste a screenshot, and its path lands at the caret.
+   * This panel steers an agent that lives in somebody else's console, so a path
+   * is the whole of what can be delivered - and the whole of what codex and
+   * Claude Code need, since both open an image argument themselves.
+   */
+  const attach = useAttachField({
+    fieldRef: inputRef,
+    value: draft,
+    onChange: setDraft,
+    platform,
+    strings: {
+      attached: (n) => fill(t, 'attachPaths', { n }),
+      failed: t('attachFailed'),
+      dropHint: t('attachDropField')
+    },
+    notify: onNotify
+  })
 
   const read = useCallback(
     async (fresh: boolean, wanted: number): Promise<void> => {
@@ -286,12 +306,19 @@ export function ConversationPanel({ task, t, onNotify }: ConversationPanelProps)
 
       <footer className="convo-foot">
         <textarea
+          ref={inputRef}
           className="convo-input"
+          data-dragging={attach.dragging || undefined}
           rows={2}
           value={draft}
-          placeholder={t('convoPlaceholder')}
-          title={t('convoSteerHint')}
+          placeholder={attach.dragging ? attach.dropHint : t('convoPlaceholder')}
+          title={attach.dragging ? attach.dropHint : t('convoSteerHint')}
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={attach.onPaste}
+          onDrop={attach.onDrop}
+          onDragOver={attach.onDragOver}
+          onDragEnter={attach.onDragEnter}
+          onDragLeave={attach.onDragLeave}
           onKeyDown={(event) => {
             if (!ime.submits(event)) return
             event.preventDefault()

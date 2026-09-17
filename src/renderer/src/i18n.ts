@@ -59,6 +59,17 @@ const STRINGS = {
   steerSend: { zh: '发送', en: 'Send' },
   steerPickFirst: { zh: '先选一个线程', en: 'Select a thread first' },
   steerUnsupported: { zh: '这个 agent 不支持直接插话，内容会复制到剪贴板', en: 'This agent has no injection API; the text will be copied to your clipboard' },
+  /**
+   * A drag or a paste put file paths into the composer. "Paths" rather than
+   * "files" because that is the honest description: an agent opens the path
+   * itself, and nothing was uploaded anywhere.
+   */
+  attachPaths: { zh: '已插入 {n} 个文件路径', en: 'Inserted {n} file paths' },
+  attachFailed: {
+    zh: '剪贴板里的图片没能存成文件',
+    en: 'The image on the clipboard could not be saved to a file'
+  },
+  attachDropField: { zh: '松手即插入路径', en: 'Drop to insert the paths' },
   // Outcomes of a steer. `codex queue` exits 0 even when the session never
   // reads the queue, so the three Codex cases are told apart for the user.
   steerSent: { zh: '已送达 Codex 会话 {id}', en: 'Delivered to Codex thread {id}' },

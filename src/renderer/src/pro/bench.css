@@ -1427,6 +1427,26 @@ textarea {
   z-index: 2;
 }
 
+/* A file in the air over this pane. `pointer-events: none` is load-bearing:
+   the overlay covers the very element the drop has to land on, and an overlay
+   that intercepts its own gesture fires `dragleave` and hides itself, so the
+   hint blinks and the drop never arrives. */
+.pane-drop {
+  position: absolute;
+  inset: 4px;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border: 1px dashed rgba(var(--accent-rgb), 0.75);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--text);
+  font-size: var(--fs-small);
+  text-align: center;
+  pointer-events: none;
+  z-index: 3;
+}
+
 .spin {
   width: 14px;
   height: 14px;
@@ -2979,6 +2999,14 @@ button.plan-title:focus-visible {
 .convo-input:focus-visible {
   outline: none;
   border-color: var(--accent);
+}
+
+/* The composer's version of the same promise: a dashed accent well instead of
+   an overlay, because there is no room over two rows of text for one. */
+.convo-input[data-dragging] {
+  border-style: dashed;
+  border-color: rgba(var(--accent-rgb), 0.75);
+  background: rgba(var(--accent-rgb), 0.08);
 }
 
 .convo-error {

@@ -1622,6 +1622,15 @@ input.filter-input:focus {
   cursor: not-allowed;
 }
 
+/* A file in the air over the composer. Dashed accent on the well itself rather
+   than an overlay: this box is two rows tall and covers the only place a hint
+   could go, which is the placeholder. */
+.composer[data-dragging] textarea {
+  border-style: dashed;
+  border-color: rgba(var(--accent-rgb), 0.75);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
 /* ---- chat: one thread's real conversation ------------------------------
    The transcript is the agent's own, read-only; the composer is the only way
    back in. Layout mirrors a messenger — user right, agent left, tool calls

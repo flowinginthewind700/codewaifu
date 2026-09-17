@@ -34,6 +34,15 @@ export const assetRoot = path.join(stateDir, 'assets')
 /** Scratch space for TTS rendered to a file so the renderer can lip-sync it. */
 export const ttsDir = path.join(stateDir, 'tts')
 /**
+ * Images lifted off the system clipboard so an agent can be handed one as a
+ * path. Under `stateDir` rather than the OS temp dir on purpose: this path is
+ * typed into a prompt and read back out of a transcript weeks later, and a
+ * `/var/folders/.../T/` that the OS emptied under it is a broken sentence
+ * nobody can diagnose. See `main/attach.ts` for the sweep that keeps it from
+ * becoming an archive of every screenshot ever pasted.
+ */
+export const attachmentsDir = path.join(stateDir, 'attachments')
+/**
  * Neural TTS (Matcha) weights, downloaded on first run. Override to reuse an
  * existing checkout across dev runs: `CODEWAIFU_MATCHA_DIR=/path/to/models`.
  */
