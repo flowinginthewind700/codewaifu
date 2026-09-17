@@ -86,6 +86,28 @@ what v0.4.2, v0.4.6 and v0.4.7 do not, because no mac pass happened for those.
 A release with linux and windows assets but no mac ones means this step was
 never done, not that the mac build failed.
 
+### When the uplink cannot carry it
+
+The mac set is ~435 MB and `gh release upload` has no resume: a proxy that
+resets mid-POST starts the file over from byte zero. v0.4.12 spent an hour at
+~100 KB/s with millions of retransmits and never landed, so that release went
+out with CI's mac artifacts instead:
+
+```bash
+gh workflow run release.yml --ref main -f tag=v0.4.12 -f publish_mac=true
+```
+
+A dispatch runs on a branch rather than on the tag, so the tag is an input and
+the build is a full rebuild of all three platforms from that ref. Point it at a
+ref whose `package.json` matches the tag, or the assets come out under the wrong
+name. The publish job re-uploads the linux and windows assets as well
+(`--clobber`, same commit, same bytes); `latest-mac.yml` stays out either way.
+
+Those mac bytes are unsigned exactly like the local ones (`identity: null`,
+ad-hoc, no notarization), so nothing about installing changes. What does change
+is that no human has opened them: download the published arm64 dmg and run the
+checks above against it before calling the release done.
+
 Known mac gaps at this version: no LoginItems autostart (Linux has
 `install.sh --autostart`), and no CI runtime check - the manual pass above is
 the only gate the mac build has.

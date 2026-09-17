@@ -5,6 +5,14 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'release tag to publish, e.g. v0.4.12'
+        required: true
+      publish_mac:
+        description: 'attach the CI-built mac artifacts too'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -113,8 +121,12 @@ jobs:
   publish:
     name: publish release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # A tag push carries its own name in the ref. A dispatch runs on a branch,
+    # so the tag it should publish has to be said out loud.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -124,15 +136,25 @@ jobs:
       - name: list artifacts
         run: ls -la release
 
-      # Linux and Windows ship from this run. The mac artifacts stay in CI:
-      # they are unsigned and no mac has ever opened them, so the mac release
-      # is a human on a mac attaching them after a manual pass
-      # (docs/RELEASE.md). Building them here still matters - it is the only
-      # compile-and-package check the mac target gets.
+      # Updater metadata. The published mac set is three files - arm64 dmg plus
+      # arm64 and x64 zips - and this is not one of them, so it goes whether or
+      # not mac ships from this run.
+      - name: drop latest-mac.yml
+        run: rm -f release/latest-mac.yml
+
+      # Linux and Windows ship from every run. The mac artifacts ship only when
+      # a maintainer asks for them on a dispatch, because they are unsigned and
+      # no mac has opened them: the normal mac release is a person on a mac
+      # attaching the build they verified by hand (docs/RELEASE.md). The escape
+      # hatch exists because 435 MB over a bad uplink is not a release plan -
+      # v0.4.12 went this way after the local proxy reset mid-upload for an
+      # hour at ~100 KB/s. Building them here matters either way: it is the
+      # only compile-and-package check the mac target gets.
       - name: drop the mac artifacts from the publish set
+        if: ${{ !inputs.publish_mac }}
         run: |
           shopt -s nullglob
-          for f in release/*-mac-* release/*.dmg release/latest-mac.yml; do
+          for f in release/*-mac-* release/*.dmg; do
             rm -f -- "$f"
           done
           ls -la release
@@ -145,12 +167,12 @@ jobs:
           # release from a local build so early adopters get artifacts before
           # CI finishes. Create only when missing, then always upload --clobber
           # so the tag ends up with exactly the CI-built files.
-          if ! gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" \
+          if ! gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --title "CodeWaifu ${GITHUB_REF_NAME}" \
+              --title "CodeWaifu ${TAG}" \
               --generate-notes \
-              $([ "${GITHUB_REF_NAME}" = "${GITHUB_REF_NAME#*-}" ] || echo --prerelease)
+              $([ "${TAG}" = "${TAG#*-}" ] || echo --prerelease)
           fi
-          gh release upload "${GITHUB_REF_NAME}" release/* \
+          gh release upload "${TAG}" release/* \
             --repo "${GITHUB_REPOSITORY}" --clobber
