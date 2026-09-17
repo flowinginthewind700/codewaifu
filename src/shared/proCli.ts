@@ -65,6 +65,14 @@ export interface ProCliCall {
   path: string
   /** null for a GET: the relay rejects a body it did not ask for. */
   body: Record<string, unknown> | null
+  /**
+   * The one value argv may not carry. `'password'` tells the runner to read a
+   * secret off fd 0 - masked when that is a terminal - and put it in
+   * `body.secret` after parsing. This module stays pure by asking rather than
+   * reading, and the secret stays out of argv because argv is in `ps` for
+   * every local user and in shell history for as long as the file lives.
+   */
+  secret?: 'password'
 }
 
 export interface ProCliHelp {
@@ -230,11 +238,15 @@ Machines:
     --dir <path>              where the pane starts (default: here)
   ssh add <target>            pin it to the roster without connecting
   ssh edit <target>           rename it, or change what ssh dials
+  ssh passwd <target>         keep its password in the OS keychain, so connect
+                              answers the prompt instead of waiting on you
+                              (read from stdin; never accepted as a flag)
+    --clear                   forget it again
   ssh rm <target>             dismiss it: a pinned row is deleted, a row read
                               from ~/.ssh/config is only hidden (that file is
                               ours to read, never to rewrite)
   ssh restore <key>           bring a hidden row back (keys: ssh ls --hidden)
-  ssh test <target>           can we get in without typing a password?
+  ssh test <target>           can we get in - by key, or by a stored password?
   ssh setup <target>          make it passwordless
     --key <path.pub>          publish this public key instead of the default
     --plan                    print the lines it would type, and type nothing
@@ -363,6 +375,8 @@ const SSH_SUBS = new Set([
   'pin',
   'edit',
   'rename',
+  'passwd',
+  'password',
   'rm',
   'remove',
   'hide',
@@ -396,6 +410,17 @@ const SSH_FIELDS: ReadonlyArray<readonly [flag: string, field: keyof MachineEdit
 function namedFields(flags: Map<string, string>): string[] {
   return SSH_FIELDS.filter(([flag]) => flags.has(flag)).map(([flag]) => `--${flag}`)
 }
+
+/**
+ * Spellings of "here is the password" that `passwd` refuses on purpose. The
+ * refusal is the feature: a secret in argv is readable by every local user in
+ * `ps` until the process exits, and outlives the command in shell history and
+ * in the scrollback of anybody who watched it being typed. `split()` has
+ * already turned such a flag's *value* into a positional, so the complaint
+ * names the flag and never the target - repeating the target would print the
+ * secret back to the terminal that was trying to hand it over.
+ */
+const SECRET_FLAGS = ['password', 'passwd', 'pass', 'pw', 'secret'] as const
 
 /**
  * The fields named beside a destination.
@@ -536,6 +561,51 @@ function parseSsh(
       const stray = strayFields(sub, flags)
       if (stray) return stray
       return call('ssh', 'POST', '/pro/ssh', { op: 'unhide', key: target }, json)
+    }
+
+    // One verb for both directions, because the keychain holds at most one
+    // password per row and "store this" and "forget it" are the two ways to end
+    // up with what the roster should hold. `--clear` sends no secret at all;
+    // anything else marks the call for the runner to read one off fd 0. No
+    // patch rides along: the far side's `set-password` reads machine, target,
+    // id and secret, and a field it would drop is a field this parser refuses.
+    case 'passwd':
+    case 'password': {
+      const leaked = SECRET_FLAGS.filter((flag) => switches.has(flag))
+      if (leaked.length) {
+        return reject(
+          'bad-arg',
+          `a password is never an argument: ${leaked
+            .map((flag) => `--${flag}`)
+            .join(' ')} would sit in shell history and in every process listing ` +
+            'until this command exits. It is read from stdin instead: ' +
+            'codewaifu pro ssh passwd <target>'
+        )
+      }
+      if (!target) return needsTarget(sub)
+      // Two positionals mean one of them was meant as the secret, and the
+      // second half of that mistake is a password printed into an error.
+      if (rest.length > 1) {
+        return reject(
+          'bad-arg',
+          `${sub} names one machine and reads the password from stdin, never from argv`
+        )
+      }
+      const stray = strayFields(sub, flags)
+      if (stray) return stray
+      if (switches.has('clear')) {
+        return call(
+          'ssh',
+          'POST',
+          '/pro/ssh',
+          { op: 'set-password', target, secret: null },
+          json
+        )
+      }
+      return {
+        ...call('ssh', 'POST', '/pro/ssh', { op: 'set-password', target }, json),
+        secret: 'password'
+      }
     }
 
     case 'test':
@@ -1354,6 +1424,7 @@ const SSH_OPENED: Record<string, string> = {
 /** What a probe verdict means, in the words that lead to the fix. */
 const PROBE_TEXT: Record<string, string> = {
   ok: 'in without a password',
+  password: 'in, with the password this roster keeps for it',
   auth: 'refused the key: this box still wants a password',
   'host-key': 'the host key did not verify, and a changed key is never trusted for you',
   timeout: 'no answer inside the probe timeout',
@@ -1369,6 +1440,19 @@ function sshLabelWidth(labels: readonly string[]): number {
     0
   )
   return Math.max(SSH_LABEL_MIN, Math.min(SSH_LABEL_MAX, longest + 2))
+}
+
+/**
+ * The source column, carrying the one mark that changes what connecting to
+ * this row will feel like: `*` says a password is stored for it, so
+ * `pro ssh <label>` gets in without anybody at the keyboard. It rides in the
+ * source column because that column already answers "what kind of row is this",
+ * and it is footnoted below the table because an unexplained asterisk in a
+ * listing is a rumour rather than information.
+ */
+function sshTag(machine: SshMachine): string {
+  const source = SSH_SOURCE[machine.source] ?? machine.source
+  return machine.hasPassword ? `${source}*` : source
 }
 
 /** One roster row: the name, who owns it, and the line that dials it. */
@@ -1404,14 +1488,18 @@ function rosterText(data: Record<string, unknown>, width: number): string {
   const rows = machines.map((machine) =>
     sshRow(
       machine.label,
-      SSH_SOURCE[machine.source] ?? machine.source,
+      sshTag(machine),
       sshLine(machine, { home }),
       width,
       labelW
     )
   )
   const head = `${machines.length} machine${machines.length === 1 ? '' : 's'}`
-  const foot = hidden.length ? [`${hidden.length} hidden   codewaifu pro ssh ls --hidden`] : []
+  const foot: string[] = []
+  if (machines.some((machine) => machine.hasPassword)) {
+    foot.push('* a password is stored for it, in the OS keychain')
+  }
+  if (hidden.length) foot.push(`${hidden.length} hidden   codewaifu pro ssh ls --hidden`)
   return [head, ...rows, ...foot].join('\n')
 }
 
@@ -1486,9 +1574,31 @@ function probeText(data: Record<string, unknown>, home: string, width: number): 
     // The one verdict with a one-command fix, so the fix is printed with it.
     if (status === 'auth' && label) {
       lines.push(`  make it passwordless: codewaifu pro ssh setup ${clip(label, 40)}`)
+      lines.push(`  or store its password: codewaifu pro ssh passwd ${clip(label, 40)}`)
     }
   }
   return lines.join('\n')
+}
+
+/**
+ * What putting a password in the keychain, or taking it back out, did.
+ *
+ * Both replies are short on purpose and neither repeats anything sensitive:
+ * not the secret, not the row id the keychain keys it by. What a human needs
+ * back from this command is which of the two happened and what it now means
+ * for the next connect - and the words are padded to the same nine columns the
+ * roster's other writes use, so `stored` lines up with `edited` and `removed`.
+ */
+function passwordText(cleared: unknown): string {
+  return cleared
+    ? [
+        `${pad('cleared', 9)}no password is stored for it any more`,
+        '  the pane will ask, and a human answers it'
+      ].join('\n')
+    : [
+        `${pad('stored', 9)}encrypted in the OS keychain, and in no file of ours`,
+        '  connect answers the prompt with it, and so does test'
+      ].join('\n')
 }
 
 /**
@@ -1557,6 +1667,7 @@ export function renderProSsh(payload: unknown, width = 100): string {
   if (Array.isArray(data.hidden)) return hiddenText(data.hidden as HiddenMachine[], width)
   if (Array.isArray(data.keys)) return keysText(data.keys as string[], str(data.key))
   if (Array.isArray(data.lines)) return setupText(result, data)
+  if (typeof data.cleared === 'boolean') return passwordText(data.cleared)
   if (data.status) return probeText(data, home, width)
   if (data.machine) return machineText(result, data, home, width)
   if (data.paneId) return sessionText(result, data, width)

@@ -7,11 +7,12 @@
  * descriptors. That split is what lets the verb table be unit-tested without an
  * app running, and the round trip be tested against the real relay.
  */
-import { cliStderr, cliStdout, readEndpoint } from '../cliIo'
+import { cliStderr, cliStdout, readEndpoint, readSecret } from '../cliIo'
 import { log } from '../log'
 import { isCodeWaifuPort, requestJson, streamNdjson } from '../probe'
 import type { Endpoint } from '../../shared/endpoint'
 import {
+  clip,
   diffProViews,
   exitForStatus,
   failureFor,
@@ -71,10 +72,24 @@ export async function runProCli(args: readonly string[]): Promise<number> {
   // wrong.
   if (parsed.verb === 'watch') return await runProWatch(point, parsed.path, parsed.json)
 
+  // The one value that is deliberately not in argv, read here because the
+  // parser is pure and read before the request because a body without its
+  // secret is a body the far side rejects - and asking twice for a password is
+  // how a human ends up typing it as an argument instead.
+  const secret = parsed.secret === 'password' ? await readSecret(promptFor(parsed)) : null
+  if (parsed.secret === 'password' && !secret) {
+    cliStderr(
+      secret === ''
+        ? 'an empty password is not one, so nothing was stored: --clear forgets a stored one\n'
+        : 'nothing was read, so nothing was stored\n'
+    )
+    return PRO_EXIT.usage
+  }
+
   try {
     const { status, json } = await requestJson(parsed.method, point.port, parsed.path, {
       token: point.token,
-      body: bodyFor(parsed),
+      body: bodyFor(parsed, secret),
       timeoutMs: parsed.method === 'GET' ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS
     })
     // Refusals and "nobody home" get their words from the status code, not from
@@ -105,12 +120,25 @@ export async function runProCli(args: readonly string[]): Promise<number> {
  * means a shell there rather than one in the home directory. Only this process
  * can say where that is, so the field is filled on this side of the socket.
  */
-function bodyFor(parsed: ProCliCall): Record<string, unknown> | undefined {
+function bodyFor(parsed: ProCliCall, secret: string | null): Record<string, unknown> | undefined {
   if (parsed.body === null) return undefined
   const body = { ...parsed.body }
   if (parsed.verb === 'new' && !String(body.workdir ?? '').trim()) body.workdir = process.cwd()
   if (parsed.verb === 'term' && !String(body.cwd ?? '').trim()) body.cwd = process.cwd()
+  // Joined to the body this late, and only in memory: the secret never rides in
+  // the parsed call a test snapshots, never in a log line, and never back out.
+  if (secret) body.secret = secret
   return body
+}
+
+/**
+ * The prompt names the machine, so a mistyped target is caught before the
+ * typing rather than after the storing. Clipped because a pasted `ssh ...`
+ * line is a legal target and is not a label.
+ */
+function promptFor(parsed: ProCliCall): string {
+  const target = String(parsed.body?.target ?? '').trim()
+  return target ? `password for ${clip(target, 40)}: ` : 'password: '
 }
 
 function render(parsed: ProCliCall, json: unknown, width: number): string {

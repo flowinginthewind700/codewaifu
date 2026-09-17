@@ -277,6 +277,19 @@ export const proApi = {
     ): Promise<ProResult<{ machine: SshMachine }>> =>
       call<{ machine: SshMachine }>(CH.proSsh, { op: 'edit', machine, target, patch }),
     /**
+     * Put a password in the OS keychain, or take one out (`null`).
+     *
+     * Its own verb rather than a field of `edit`, because a password is not a
+     * field of the row: it is kept under the row's id in a store no renderer can
+     * read back. The form sends one once and never sees it again, so `id` is the
+     * whole addressing this call needs.
+     */
+    setPassword: (
+      id: string,
+      secret: string | null
+    ): Promise<ProResult<{ id: string; cleared: boolean }>> =>
+      call<{ id: string; cleared: boolean }>(CH.proSsh, { op: 'set-password', id, secret }),
+    /**
      * Dismiss a row: delete when it is ours, hide when its source is a file we
      * only read. `code` tells the two apart, and the toast says so.
      */

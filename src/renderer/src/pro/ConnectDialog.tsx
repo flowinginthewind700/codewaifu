@@ -48,9 +48,12 @@ import {
 import {
   Activity,
   ArrowLeft,
+  Eraser,
+  Eye,
   EyeOff,
   FileText,
   KeyRound,
+  Lock,
   Pencil,
   Pin,
   Plug,
@@ -122,6 +125,13 @@ interface EditForm {
   identityFile: string
   proxyJump: string
   alias: string
+  /**
+   * The password to store, and the one field here that is not part of the
+   * machine patch: it goes to the keychain under the row's id after the edit
+   * lands, and it is always opened empty because main never hands a stored
+   * secret back to a renderer. Empty means "leave the keychain alone".
+   */
+  password: string
 }
 
 interface EditDraft {
@@ -129,11 +139,16 @@ interface EditDraft {
   form: EditForm
   /** Inline validation, shown in the foot where the other dialogs show it. */
   error: string
+  /** Whether the password field shows what was typed. Per-draft, so it never survives into the next row. */
+  reveal: boolean
+  /** "Remove the stored password when this form is saved", and undoable until then. */
+  clearPassword: boolean
 }
 
 const PROBE_KEY: Record<ProbeStatus, StringKey> = {
   unknown: 'sshProbeUnknown',
   ok: 'sshProbeOk',
+  password: 'sshProbePassword',
   auth: 'sshProbeAuth',
   'host-key': 'sshProbeHostKey',
   timeout: 'sshProbeTimeout',
@@ -187,6 +202,11 @@ export function ConnectDialog({
   const [draft, setDraft] = useState<EditDraft | null>(null)
   /** Private halves of the keys in `~/.ssh`, for the identity-file datalist. */
   const [identities, setIdentities] = useState<readonly string[]>([])
+  /**
+   * Whether this machine has a keychain at all. False disables the password
+   * field and says why, which beats offering a field that refuses on save.
+   */
+  const [keychain, setKeychain] = useState(false)
 
   // Guards an out-of-order answer: a slow `list` for an old query must not
   // overwrite the roster that matches what is on screen right now.
@@ -211,6 +231,7 @@ export function ConnectDialog({
     setHidden(roster.hidden ?? [])
     setConfigPath(roster.configPath ?? '')
     setHome(roster.home ?? '')
+    setKeychain(roster.keychain === true)
   }, [])
 
   useEffect(() => {
@@ -447,9 +468,12 @@ export function ConnectDialog({
           user: values.user,
           identityFile: values.identityFile,
           proxyJump: values.proxyJump,
-          alias: values.alias
+          alias: values.alias,
+          password: ''
         },
-        error: ''
+        error: '',
+        reveal: false,
+        clearPassword: false
       })
       if (identities.length) return
       void proApi.ssh.keys().then((result) => {
@@ -521,12 +545,34 @@ export function ConnectDialog({
       edit.patch,
       draft.row.kind === 'typed' ? draft.row.target : ''
     )
+    if (!report(result)) {
+      setBusy('')
+      return
+    }
+    const stored = result.data?.machine
+    const label = stored?.label || edit.machine.label
+    // Second half of the save, and the reason the password is not a field of
+    // `patch`: the secret is stored against the id the *edit* produced. Editing
+    // a config alias forks it into our roster under a fresh id, and main moves
+    // an existing secret across with it, so that id is the one that owns the
+    // password from here on.
+    const id = stored?.id ?? ''
+    const clearing = draft.clearPassword
+    const wantsPassword = clearing || draft.form.password !== ''
+    let passwordText = ''
+    let passwordTone: Tone = 'ok'
+    if (id && wantsPassword) {
+      const saved = await proApi.ssh.setPassword(id, clearing ? null : draft.form.password)
+      passwordTone = saved.ok ? 'ok' : 'error'
+      passwordText = t(
+        saved.ok ? (clearing ? 'sshPasswordCleared' : 'sshPasswordStored') : 'sshPasswordFailed'
+      )
+    }
     setBusy('')
-    if (!report(result)) return
-    const label = result.data?.machine.label || edit.machine.label
     // `forked` is the outcome that has to be spelled out: the config row is now
     // hidden and the copy we dial is ours.
     onNotify(fill(t, result.code === 'forked' ? 'sshForked' : 'sshEdited', { label }), 'ok')
+    if (passwordText) onNotify(passwordText, passwordTone)
     setDraft(null)
     await load(queryRef.current)
   }, [busy, draft, edit, load, onNotify, report, t])
@@ -707,6 +753,15 @@ export function ConnectDialog({
             onField={(field, value) =>
               setDraft((current) =>
                 current ? { ...current, error: '', form: { ...current.form, [field]: value } } : current
+              )
+            }
+            keychain={keychain}
+            onToggleReveal={() =>
+              setDraft((current) => (current ? { ...current, reveal: !current.reveal } : current))
+            }
+            onToggleClear={() =>
+              setDraft((current) =>
+                current ? { ...current, error: '', clearPassword: !current.clearPassword } : current
               )
             }
             onCancel={closeEdit}
@@ -910,6 +965,20 @@ export function ConnectDialog({
                         <Activity />
                         {probeText}
                       </span>
+                      {/* A stored password is worth an icon on the row: it is
+                          the difference between "connect" and "connect, and it
+                          will answer for you". Named by its title, since an
+                          icon alone is a guess. */}
+                      {row.machine.hasPassword ? (
+                        <span
+                          className="pill quiet connect-lock"
+                          role="img"
+                          aria-label={t('sshHasPassword')}
+                          title={t('sshHasPassword')}
+                        >
+                          <Lock />
+                        </span>
+                      ) : null}
                       <span className="pill quiet">{t(sourceKey)}</span>
                       <span className="connect-verbs" onClick={(event) => event.stopPropagation()}>
                         <button
@@ -1009,6 +1078,10 @@ interface EditViewProps {
   busy: boolean
   composition: { onCompositionStart: () => void; onCompositionEnd: () => void }
   onField: (field: EditField, value: string) => void
+  /** Whether this machine can keep a secret at all; false disables the field. */
+  keychain: boolean
+  onToggleReveal: () => void
+  onToggleClear: () => void
   onCancel: () => void
   onSave: () => void
 }
@@ -1032,6 +1105,9 @@ function EditView({
   busy,
   composition,
   onField,
+  keychain,
+  onToggleReveal,
+  onToggleClear,
   onCancel,
   onSave
 }: EditViewProps): ReactElement {
@@ -1047,6 +1123,21 @@ function EditView({
     : forks && machine.source === 'config'
       ? t('sshEditConfigHint')
       : ''
+  const hasPassword = machine.hasPassword === true
+  // One line under the field, and it always says which of the three states the
+  // form is in: nothing stored, something stored and being kept, or something
+  // stored and about to go. Guessing that from an empty input is not possible,
+  // because empty is exactly how "keep it" is spelled.
+  const passwordHint = !keychain
+    ? t('sshNoKeychain')
+    : draft.clearPassword
+      ? t('sshPasswordWillClear')
+      : hasPassword
+        ? form.password
+          ? t('sshPasswordReplace')
+          : t('sshPasswordKept')
+        : t('sshPasswordHint')
+  const passwordTone = !keychain ? 'bad' : draft.clearPassword ? 'warn' : undefined
 
   return (
     <>
@@ -1062,6 +1153,12 @@ function EditView({
           </span>
           {machine.alias ? <span className="pill connect-alias mono">{machine.alias}</span> : null}
           {edit.detached ? <span className="pill connect-detached">{t('sshFieldAlias')}</span> : null}
+          {hasPassword ? (
+            <span className="pill connect-lock" title={t('sshHasPassword')}>
+              <Lock />
+              {t('sshHasPassword')}
+            </span>
+          ) : null}
         </span>
         <span className="connect-preview mono" title={line}>
           {line}
@@ -1153,6 +1250,57 @@ function EditView({
             {...composition}
             onChange={(event) => onField('alias', event.target.value)}
           />
+        </Field>
+
+        <Field className="wide" label={t('sshFieldPassword')}>
+          {/* A div, not a span: `.field > span` is the label's own styling, and
+              the cell holding the input must not inherit it. */}
+          <div className="password-cell">
+            <div className="password-row">
+              <input
+                className="input mono"
+                type={draft.reveal ? 'text' : 'password'}
+                value={draft.clearPassword ? '' : form.password}
+                spellCheck={false}
+                autoComplete="off"
+                disabled={!keychain || draft.clearPassword}
+                placeholder={hasPassword ? t('sshPasswordPlaceholder') : t('sshPasswordPlaceholderNew')}
+                aria-describedby="connect-password-hint"
+                {...composition}
+                onChange={(event) => onField('password', event.target.value)}
+              />
+              <button
+                type="button"
+                className="btn ghost icon sm"
+                title={draft.reveal ? t('sshPasswordHide') : t('sshPasswordReveal')}
+                aria-label={draft.reveal ? t('sshPasswordHide') : t('sshPasswordReveal')}
+                aria-pressed={draft.reveal}
+                disabled={!keychain}
+                onClick={onToggleReveal}
+              >
+                {draft.reveal ? <EyeOff /> : <Eye />}
+              </button>
+              {hasPassword ? (
+                <button
+                  type="button"
+                  className="btn ghost icon sm"
+                  title={draft.clearPassword ? t('sshPasswordKeep') : t('sshPasswordClear')}
+                  aria-label={draft.clearPassword ? t('sshPasswordKeep') : t('sshPasswordClear')}
+                  aria-pressed={draft.clearPassword}
+                  data-danger={draft.clearPassword || undefined}
+                  // Typing a new password already replaces the stored one, so
+                  // "remove it" is not a second thing to decide at that point.
+                  disabled={!keychain || Boolean(form.password)}
+                  onClick={onToggleClear}
+                >
+                  {draft.clearPassword ? <Undo2 /> : <Eraser />}
+                </button>
+              ) : null}
+            </div>
+            <p className="note-line" id="connect-password-hint" data-tone={passwordTone}>
+              {passwordHint}
+            </p>
+          </div>
         </Field>
       </div>
 

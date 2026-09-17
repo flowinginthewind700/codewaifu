@@ -2344,7 +2344,24 @@ const SSH: Array<
 
   ['term opens a shell, with the directory left to the runner', ['pro', 'term'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '' }],
   ['shell is an alias', ['pro', 'shell'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '' }],
-  ['term --dir', ['pro', 'term', '--dir', '/tmp'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '/tmp' }]
+  ['term --dir', ['pro', 'term', '--dir', '/tmp'], 'POST', '/pro/ssh', { op: 'terminal', cwd: '/tmp' }],
+  // Clearing is the one password spelling that carries no secret, so it fits the
+  // table: the body it sends is the whole of what it means. Storing one does not,
+  // and lives in the block below where the stdin marker is the thing under test.
+  [
+    'passwd --clear forgets the stored password',
+    ['pro', 'ssh', 'passwd', 'prod', '--clear'],
+    'POST',
+    '/pro/ssh',
+    { op: 'set-password', target: 'prod', secret: null }
+  ],
+  [
+    'password is an alias, and so is the clearing',
+    ['pro', 'ssh', 'password', 'prod', '--clear'],
+    'POST',
+    '/pro/ssh',
+    { op: 'set-password', target: 'prod', secret: null }
+  ]
 ]
 
 /**
@@ -2363,5 +2380,87 @@ describe('parseProCli: machines and terminals', () => {
 
   it('leaves the terminal directory empty for the runner, which is the only layer that knows cwd', () => {
     expect(parsedCall(['pro', 'term']).body).toMatchObject({ cwd: '' })
+  })
+})
+
+/**
+ * `pro ssh passwd`: the one verb that takes a secret.
+ *
+ * The shape is the point. A parser cannot read a password without somebody
+ * handing it one, and every way of handing it one on a command line is a way of
+ * publishing it - argv is in shell history, in `ps`, and in the audit log of a
+ * machine that keeps one. So the parser refuses all of them and marks the call
+ * instead: `secret: 'password'` is an instruction to the runner to read stdin,
+ * and the body it produces has no secret key at all. A test that only checked
+ * the body would pass on an implementation that put the password in it, which is
+ * the exact bug this verb exists to not have.
+ */
+describe('parseProCli: ssh passwd', () => {
+  it('marks the call for the runner to read stdin, and keeps the secret out of the body', () => {
+    const parsed = parsedCall(['pro', 'ssh', 'passwd', 'prod'])
+    expect(parsed.secret).toBe('password')
+    expect(parsed.body).toEqual({ op: 'set-password', target: 'prod' })
+    expect(Object.keys(parsed.body ?? {})).not.toContain('secret')
+  })
+
+  it('sends no marker with --clear, since there is nothing to read', () => {
+    expect(parsedCall(['pro', 'ssh', 'passwd', 'prod', '--clear']).secret).toBeUndefined()
+  })
+
+  it('rides a pasted ssh line the way every other ssh verb does', () => {
+    const parsed = parsedCall(['pro', 'ssh', 'passwd', 'ssh wanlian@172.18.29.206 -p 2222'])
+    expect(parsed.secret).toBe('password')
+    expect(parsed.body).toEqual({
+      op: 'set-password',
+      target: 'ssh wanlian@172.18.29.206 -p 2222'
+    })
+  })
+
+  // One case per spelling a human reaches for, because the refusal is the
+  // feature: `--password hunter2` is what everybody types first.
+  it.each(['password', 'passwd', 'pass', 'pw', 'secret'])(
+    'refuses --%s, and the refusal never repeats what was typed after it',
+    (flag) => {
+      const parsed = parseProCli(['pro', 'ssh', 'passwd', 'prod', `--${flag}`, 'hunter2'])
+      expect(parsed).toMatchObject({ kind: 'reject', code: 'bad-arg' })
+      if (parsed.kind !== 'reject') return
+      expect(parsed.error).toContain(`--${flag}`)
+      expect(parsed.error, 'the secret is the one thing the message must not carry').not.toContain(
+        'hunter2'
+      )
+      expect(parsed.error).toContain('stdin')
+    }
+  )
+
+  it('refuses the inline spelling too, where the secret is inside the flag', () => {
+    const parsed = parseProCli(['pro', 'ssh', 'passwd', 'prod', '--password=hunter2'])
+    expect(parsed).toMatchObject({ kind: 'reject', code: 'bad-arg' })
+    if (parsed.kind === 'reject') expect(parsed.error).not.toContain('hunter2')
+  })
+
+  it('refuses a second positional instead of reading it as the password', () => {
+    const parsed = parseProCli(['pro', 'ssh', 'passwd', 'prod', 'hunter2'])
+    expect(parsed).toMatchObject({ kind: 'reject', code: 'bad-arg' })
+    if (parsed.kind !== 'reject') return
+    // Half of this mistake is a password in argv; the other half is a password in
+    // an error message, which is the same publication with extra steps.
+    expect(parsed.error).not.toContain('hunter2')
+    expect(parsed.error).toContain('stdin')
+  })
+
+  it('needs a machine to store against', () => {
+    expect(parseProCli(['pro', 'ssh', 'passwd'])).toMatchObject({
+      kind: 'reject',
+      code: 'needs-target'
+    })
+  })
+
+  it('refuses a field that set-password has nowhere to put', () => {
+    // `edit` takes `--label`; this verb has no patch, and a flag this module
+    // quietly drops is a flag the human believes took effect.
+    expect(parseProCli(['pro', 'ssh', 'passwd', 'prod', '--label', 'lab'])).toMatchObject({
+      kind: 'reject',
+      code: 'bad-arg'
+    })
   })
 })

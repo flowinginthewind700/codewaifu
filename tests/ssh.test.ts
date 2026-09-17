@@ -26,6 +26,8 @@ import {
   parseSshConfig,
   parseSshCommand,
   parseTarget,
+  passwordProbeArgv,
+  looksLikePasswordPrompt,
   probeArgv,
   rankMachines,
   setupLines,
@@ -324,6 +326,75 @@ describe('probeArgv', () => {
     const argv = probeArgv(makeMachine({ host: 'h', alias: 'myserver' }))
     expect(argv).toContain('myserver')
     expect(argv.join(' ')).not.toContain('-p')
+  })
+})
+
+describe('passwordProbeArgv', () => {
+  it('drops BatchMode, which is the very option that forbids a prompt', () => {
+    const argv = passwordProbeArgv(makeMachine({ host: 'box', user: 'alice', port: 2222 }))
+    expect(argv.join(' ')).not.toContain('BatchMode')
+    expect(argv).toContain('StrictHostKeyChecking=accept-new')
+    expect(argv[argv.length - 1]).toBe('exit')
+  })
+
+  it('asks for the method under test, once, so a wrong password cannot exhaust the box', () => {
+    const argv = passwordProbeArgv(makeMachine({ host: 'box' }))
+    expect(argv).toContain('PreferredAuthentications=keyboard-interactive,password')
+    expect(argv).toContain('NumberOfPasswordPrompts=1')
+  })
+
+  it('dials exactly where the key probe dialled, or its verdict is about another box', () => {
+    const machine = makeMachine({
+      host: 'box',
+      user: 'alice',
+      port: 2222,
+      identityFile: '~/.ssh/id_ed25519',
+      proxyJump: 'bastion'
+    })
+    const dial = passwordProbeArgv(machine, { home: HOME })
+    expect(dial).toContain('alice@box')
+    expect(dial).toContain('2222')
+    expect(dial).toContain(`${HOME}/.ssh/id_ed25519`)
+    expect(dial).toContain('bastion')
+    // The two probes differ only in the options, never in the destination.
+    expect(dial.slice(-6)).toEqual(probeArgv(machine, { home: HOME }).slice(-6))
+  })
+
+  it('honours an alias the same way the key probe does', () => {
+    const argv = passwordProbeArgv(makeMachine({ host: 'h', alias: 'myserver' }))
+    expect(argv).toContain('myserver')
+    expect(argv.join(' ')).not.toContain('-p')
+  })
+})
+
+describe('looksLikePasswordPrompt', () => {
+  it('recognises the shapes ssh and sudo actually print', () => {
+    expect(looksLikePasswordPrompt('alice@box\'s password:')).toBe(true)
+    expect(looksLikePasswordPrompt('Password for alice@box:')).toBe(true)
+    expect(looksLikePasswordPrompt('Password:')).toBe(true)
+    expect(looksLikePasswordPrompt('password:\r')).toBe(true)
+    expect(looksLikePasswordPrompt('(sudo) Password: ')).toBe(true)
+  })
+
+  it('reads only the last non-empty line, so scrollback cannot trigger a typed secret', () => {
+    expect(looksLikePasswordPrompt('Password:\n$ ls\ntotal 0')).toBe(false)
+    expect(looksLikePasswordPrompt('man page mentions password:\n$ ')).toBe(false)
+    expect(looksLikePasswordPrompt('noise\n\n   Password:\n')).toBe(true)
+  })
+
+  it('refuses the lines that mention a password while saying no', () => {
+    expect(looksLikePasswordPrompt('Permission denied (publickey,password).')).toBe(false)
+    expect(looksLikePasswordPrompt('Too many authentication failures')).toBe(false)
+    expect(looksLikePasswordPrompt('password incorrect')).toBe(false)
+    expect(looksLikePasswordPrompt('Connection closed by remote host')).toBe(false)
+  })
+
+  it('says no to nothing at all, which is the common case on a busy pane', () => {
+    expect(looksLikePasswordPrompt('')).toBe(false)
+    expect(looksLikePasswordPrompt('\n\n')).toBe(false)
+    expect(looksLikePasswordPrompt('$ npm test')).toBe(false)
+    // A sentence that merely contains the word is not a question.
+    expect(looksLikePasswordPrompt('set a password: it is the least you can do')).toBe(false)
   })
 })
 

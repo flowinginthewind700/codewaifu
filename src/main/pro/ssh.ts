@@ -1,22 +1,25 @@
 /**
  * The SSH roster: what the connect palette can reach, and how it knows.
  *
- * This service owns three reads and one write, and nothing else:
+ * This service owns four reads and two writes, and nothing else:
  *
  * - read `~/.ssh/config` (the user's own aliases, parsed read-only),
  * - read `machines.json` (the machines pinned in the Bench - the only file we
  *   write, and we write it the same crash-proof way the task registry does),
  * - ask herdr for machines it already knows (best-effort, via an injected
  *   provider, because herdr's machine list is a separate subsystem),
- * - run a non-interactive `ssh` probe to answer "can I get in without a
- *   password?".
+ * - read the OS keychain (`SecretStoreLike`, injected - `secrets.ts` holds the
+ *   policy and `main/keychain.ts` the Electron behind it) for the passwords
+ *   those rows can carry, and write it when the edit form saves one,
+ * - run a non-interactive `ssh` probe to answer "can I get in?" - once with a
+ *   key, and a second time with a saved password when the first says the box
+ *   wants one.
  *
  * Every rule about *what a machine is* and *what to type* lives in
  * `shared/ssh.ts`; this file is the impure edge - disk, child processes, the
  * platform - and it is built so a test can inject all three and never touch a
  * real `ssh` or a real `~/.ssh`.
  */
-import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -34,6 +37,7 @@ import {
   normalizeHidden,
   parseSshConfig,
   parseTarget,
+  passwordProbeArgv,
   probeArgv,
   rankMachines,
   setupLines,
@@ -44,6 +48,8 @@ import {
   type HiddenMachine,
   type SshMachine
 } from '../../shared/ssh'
+import { Askpass } from './askpass'
+import { runSsh, type ChildRunner, type SshRunResult } from './child'
 import { proDir, readJson, writeJsonAtomic } from './env'
 
 /** Pinned machines live beside the task registry; same ownership, same writer. */
@@ -74,19 +80,55 @@ export interface SaveMachineInput extends Partial<MachineInput> {
   target?: string
 }
 
-export interface SshRunResult {
-  code: number
-  stdout: string
-  stderr: string
-  /** True when we killed the child for exceeding the timeout. */
-  timedOut: boolean
-}
-
 export interface ProbeResult {
   status: ProbeStatus
   /** A short human line for the palette tooltip; '' when there is nothing to add. */
   detail: string
 }
+
+/**
+ * Where passwords live. Structural, so the store can be faked in a test and so
+ * this service never has to know that Electron's `safeStorage` exists.
+ */
+export interface SecretStoreLike {
+  /** False when this machine has no keychain, which the edit form has to say. */
+  available(): boolean
+  has(id: string): boolean
+  get(id: string): string | null
+  set(id: string, secret: string): boolean
+  remove(id: string): boolean
+}
+
+/**
+ * Runs an ssh child with a password available to it and to nothing else. The
+ * real one is `Askpass` (`./askpass.ts`), which wires `SSH_ASKPASS`; a test
+ * hands back a canned result and keeps the argv it was given.
+ */
+export interface PasswordRunner {
+  run(
+    argv: readonly string[],
+    password: string,
+    timeoutMs: number
+  ): Promise<SshRunResult>
+}
+
+/** The store that holds nothing and can hold nothing: no keychain on this box. */
+const NO_SECRETS: SecretStoreLike = {
+  available: () => false,
+  has: () => false,
+  get: () => null,
+  set: () => false,
+  remove: () => false
+}
+
+/**
+ * What a probe says when the second pass settled the question either way. The
+ * refused line leads the detail rather than replacing ssh's own, because
+ * "Permission denied" reads as a key problem to somebody who just stored a
+ * password - and the key is what pass 1 was already about.
+ */
+export const PASSWORD_ACCEPTED_DETAIL = 'saved password accepted'
+export const PASSWORD_REFUSED_DETAIL = 'saved password refused'
 
 export interface SshDeps {
   file?: string
@@ -94,8 +136,13 @@ export interface SshDeps {
   /** Defaults to `<home>/.ssh/config`. */
   sshConfigPath?: string
   platform?: 'posix' | 'windows'
-  /** Injectable child runner; the real one is `execFile`. */
-  run?: (cmd: string, args: readonly string[], timeoutMs: number) => Promise<SshRunResult>
+  /** Injectable child runner; the real one is `execFile`. `env` is added to the parent's. */
+  run?: (
+    cmd: string,
+    args: readonly string[],
+    timeoutMs: number,
+    env?: Record<string, string>
+  ) => Promise<SshRunResult>
   readFile?: (file: string) => string | null
   listDir?: (dir: string) => string[]
   read?: (file: string) => MachinesFile | null
@@ -105,61 +152,20 @@ export interface SshDeps {
   /** herdr's own machines, mapped into our model. Defaults to none. */
   herdrMachines?: () => Promise<SshMachine[]>
   probeTimeoutMs?: number
+  /** The keychain. Defaults to "none available", never to plaintext on disk. */
+  secrets?: SecretStoreLike | null
+  /** How a password reaches ssh. Defaults to the real askpass runner. */
+  askpass?: PasswordRunner | null
 }
 
 const DEFAULT_PROBE_TIMEOUT = 8000
 
 /** `m` + base36 time + 4 hex: sortable, file-safe, unique enough. Mirrors newTaskId. */
 export function newMachineId(now = Date.now()): string {
-  // Lazy require keeps the import list honest without pulling crypto at module
-  // scope into the renderer's reach (this file is main-only anyway).
   const rand = Math.floor(Math.random() * 0xffff)
     .toString(16)
     .padStart(4, '0')
   return `m${now.toString(36)}${rand}`
-}
-
-/**
- * The real child runner. `execFile` reports a timeout as a killed child and a
- * spawn failure (no `ssh` on PATH) as a string `code`, so both are folded into
- * the one `SshRunResult` shape `classifyProbe` understands: a timeout sets
- * `timedOut`, a spawn failure becomes exit 127 ("command not found").
- */
-export function runSsh(
-  cmd: string,
-  args: readonly string[],
-  timeoutMs: number
-): Promise<SshRunResult> {
-  return new Promise((resolve) => {
-    execFile(
-      cmd,
-      [...args],
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true, encoding: 'utf8' },
-      (error, stdout, stderr) => {
-        const out = typeof stdout === 'string' ? stdout : ''
-        const err = typeof stderr === 'string' ? stderr : ''
-        if (!error) {
-          resolve({ code: 0, stdout: out, stderr: err, timedOut: false })
-          return
-        }
-        const e = error as NodeJS.ErrnoException & { code?: number | string; killed?: boolean; signal?: string }
-        if (e.killed || e.signal === 'SIGTERM' || e.signal === 'SIGKILL') {
-          resolve({
-            code: typeof e.code === 'number' ? e.code : 255,
-            stdout: out,
-            stderr: err,
-            timedOut: true
-          })
-          return
-        }
-        if (typeof e.code === 'number') {
-          resolve({ code: e.code, stdout: out, stderr: err, timedOut: false })
-          return
-        }
-        resolve({ code: 127, stdout: out, stderr: err || String(error.message || error), timedOut: false })
-      }
-    )
-  })
 }
 
 export class SshService {
@@ -167,7 +173,7 @@ export class SshService {
   private readonly home: string
   private readonly sshConfigPath: string
   private readonly platform: 'posix' | 'windows'
-  private readonly run: (cmd: string, args: readonly string[], timeoutMs: number) => Promise<SshRunResult>
+  private readonly run: ChildRunner
   private readonly readFile: (file: string) => string | null
   private readonly listDir: (dir: string) => string[]
   private readonly read: (file: string) => MachinesFile | null
@@ -176,6 +182,8 @@ export class SshService {
   private readonly newId: () => string
   private readonly herdrMachines: () => Promise<SshMachine[]>
   private readonly probeTimeoutMs: number
+  private readonly secrets: SecretStoreLike
+  private readonly askpass: PasswordRunner | null
 
   constructor(deps: SshDeps = {}) {
     this.file = deps.file ?? machinesFile
@@ -219,6 +227,16 @@ export class SshService {
     this.newId = deps.newId ?? newMachineId
     this.herdrMachines = deps.herdrMachines ?? (() => Promise.resolve([]))
     this.probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT
+    this.secrets = deps.secrets ?? NO_SECRETS
+    // `undefined` means "pick the real one", an explicit `null` means "no
+    // password support here" (a test, or a box with no keychain). The askpass
+    // helper is only worth writing when there is a secret to hand it.
+    this.askpass =
+      deps.askpass !== undefined
+        ? deps.askpass
+        : this.secrets.available()
+          ? new Askpass({ platform: this.platform })
+          : null
   }
 
   /* ---------------------------------------------------------------- *
@@ -262,7 +280,16 @@ export class SshService {
       dedupeMachines([...this.saved(), ...this.config(), ...herdr]),
       this.hidden()
     )
-    return rankMachines(merged, query)
+    return rankMachines(merged.map((machine) => this.withPasswordMark(machine)), query)
+  }
+
+  /**
+   * The keychain badge, computed on the way out rather than stored. Adding the
+   * key only when it is true keeps a row without a password byte-identical to
+   * the rows this service produced before passwords existed.
+   */
+  private withPasswordMark(machine: SshMachine): SshMachine {
+    return this.secrets.has(machine.id) ? { ...machine, hasPassword: true } : machine
   }
 
   /** The dismissed identities, as stored. Never throws. */
@@ -333,7 +360,14 @@ export class SshService {
       machines: list,
       hidden: this.hidden().filter((key) => key !== machineKey(stored).toLowerCase())
     }
-    return this.write(this.file, file) ? stored : null
+    if (!this.write(this.file, file)) return null
+    // A row that was not ours gets a fresh id when it is pinned, and a password
+    // is keyed by id - so the secret follows the row. Without this, pinning a
+    // `~/.ssh/config` alias would quietly cost the human the login they had
+    // already saved for it, and would leave that secret in the keychain with no
+    // row left able to name it.
+    if (id !== machine.id) this.moveSecret(machine.id, id)
+    return stored
   }
 
   /**
@@ -364,7 +398,12 @@ export class SshService {
       machines: next,
       hidden: this.hidden()
     }
-    return this.write(this.file, file)
+    if (!this.write(this.file, file)) return false
+    // The row is gone, so the secret that only it could use is gone too. Left
+    // behind it would sit in the keychain with nothing to name it, and a later
+    // machine reusing the id would inherit somebody else's password.
+    this.secrets.remove(id)
+    return true
   }
 
   /**
@@ -402,24 +441,112 @@ export class SshService {
   }
 
   /* ---------------------------------------------------------------- *
+  * Passwords
+  * ---------------------------------------------------------------- */
+
+  /** Can this machine keep a secret at all? The edit form says so in words. */
+  keychainAvailable(): boolean {
+    return this.secrets.available()
+  }
+
+  /** Whether a password is stored for `id`. Never the password. */
+  hasPassword(id: string): boolean {
+    return this.secrets.has(String(id ?? '').trim())
+  }
+
+  /**
+   * The plaintext, or null. Deliberately the only method here that returns
+   * bytes, and it has exactly two callers: the probe's second pass, and typing
+   * the answer into a prompt the human just opened.
+   */
+  passwordFor(id: string): string | null {
+    return this.secrets.get(String(id ?? '').trim())
+  }
+
+  /**
+   * Store or clear a password. Empty and `null` both mean *clear*, so the edit
+   * form needs one verb: an emptied field empties the keychain. False when
+   * nothing changed - no keychain on this box, or a write that failed.
+   */
+  setPassword(id: string, secret: string | null): boolean {
+    const key = String(id ?? '').trim()
+    if (!key) return false
+    if (!secret) return this.secrets.remove(key)
+    return this.secrets.set(key, secret)
+  }
+
+  /**
+   * Follow a row's password to its new id, dropping the old entry. Called by
+   * `save`, which is the only place an id is ever reassigned. Best-effort: a
+   * keychain that will not take the copy leaves the original alone rather than
+   * deleting a password it failed to move.
+   */
+  private moveSecret(from: string, to: string): void {
+    const source = String(from ?? '').trim()
+    const target = String(to ?? '').trim()
+    if (!source || !target || source === target) return
+    const secret = this.secrets.get(source)
+    if (!secret) return
+    if (this.secrets.set(target, secret)) this.secrets.remove(source)
+  }
+
+  /* ---------------------------------------------------------------- *
   * Probe
   * ---------------------------------------------------------------- */
 
   /**
-   * Can we get in without a password? Runs the real `ssh` in BatchMode, so a
-   * key-auth host is `ok` and a password-only host is `auth` - the cue to offer
-   * passwordless setup. Never throws: a missing `ssh` is `no-ssh`, not a crash.
+   * Can we get in?
+   *
+   * Two passes, because the question has two parts and only the first is free:
+   *
+   * 1. the key probe (`probeArgv`, BatchMode) - the honest answer to "can I get
+   *    in without asking anybody anything", and the only one that runs when
+   *    there is no saved password;
+   * 2. only when pass 1 concluded `auth` *and* we hold a password for this row,
+   *    the password probe (`passwordProbeArgv` + askpass). Accepted is a second
+   *    green - `password` - because the box is reachable, but it is a different
+   *    green: it says "one `setup` away from never typing this again".
+   *
+   * Pass 2 never upgrades a verdict pass 1 already settled: a timeout, an
+   * unknown host key or a missing `ssh` is reported as what it was, since the
+   * second pass proved nothing about it. Never throws.
    */
   async probe(machine: SshMachine): Promise<ProbeResult> {
-    const argv = probeArgv(machine, { home: this.home, timeoutSec: Math.ceil(this.probeTimeoutMs / 1000) })
+    const timeoutSec = Math.ceil(this.probeTimeoutMs / 1000)
+    const argv = probeArgv(machine, { home: this.home, timeoutSec })
     const [cmd, ...args] = argv
+    let first: SshRunResult
     try {
-      const result = await this.run(cmd, args, this.probeTimeoutMs)
-      const status = classifyProbe(result.code, result.stderr, result.timedOut)
-      return { status, detail: firstLine(result.stderr) }
+      first = await this.run(cmd, args, this.probeTimeoutMs)
     } catch (error) {
       return { status: 'error', detail: String(error) }
     }
+    const status = classifyProbe(first.code, first.stderr, first.timedOut)
+    if (status !== 'auth') return { status, detail: firstLine(first.stderr) }
+
+    const password = this.passwordFor(machine.id)
+    if (!password || !this.askpass) return { status, detail: firstLine(first.stderr) }
+    try {
+      const second = await this.askpass.run(
+        passwordProbeArgv(machine, { home: this.home, timeoutSec }),
+        password,
+        this.probeTimeoutMs
+      )
+      const verdict = classifyProbe(second.code, second.stderr, second.timedOut)
+      if (verdict === 'ok') return { status: 'password', detail: PASSWORD_ACCEPTED_DETAIL }
+      if (verdict === 'auth') {
+        const why = firstLine(second.stderr)
+        return {
+          status: 'auth',
+          detail: why ? `${PASSWORD_REFUSED_DETAIL}: ${why}` : PASSWORD_REFUSED_DETAIL
+        }
+      }
+      if (verdict === 'timeout') return { status: 'timeout', detail: firstLine(second.stderr) }
+    } catch {
+      // Fall through to the verdict pass 1 already proved: a second pass that
+      // could not even be classified has nothing to add to it.
+    }
+    return { status, detail: firstLine(first.stderr) }
   }
 
   /* ---------------------------------------------------------------- *

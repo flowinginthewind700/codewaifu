@@ -11,6 +11,7 @@ import { binDirOnPath, ensureCliLauncher, pathHint } from './cliLauncher'
 import { Core } from './core'
 import { isLinux, isMac } from './env'
 import { IPC, registerIpc, send } from './ipc'
+import { safeStorageCipher } from './keychain'
 import { closeLog, log } from './log'
 import { getMediaState, platformSupportsMedia } from './media'
 import * as neuralTts from './neuralTts'
@@ -401,7 +402,12 @@ async function boot(): Promise<void> {
   // Pro is constructed before the widget exists so a hook that arrives during
   // startup still has a claimant. `start()` waits for the end of boot, when
   // there is a window for its first announcement to land in.
-  const service = new ProService({ host: proHost(instance) })
+  // The keychain is handed in rather than reached for: `pro/service.ts` keeps
+  // itself free of Electron so its policies stay testable, and this is the one
+  // line where the two meet. Null on a box with no keyring, which the SSH
+  // roster reports as "cannot save a password here" instead of storing one in
+  // plaintext.
+  const service = new ProService({ host: proHost(instance), cipher: safeStorageCipher() })
   pro = service
   registerProIpc(service)
   // One authority, three surfaces: the bench window, the widget and `/pro/*`

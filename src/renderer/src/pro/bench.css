@@ -2634,7 +2634,12 @@ button.plan-title:focus-visible {
    "you are in", amber is "it needs something from you", coral is "this will not
    work". `unknown` and `busy` stay neutral - neither is an answer yet, and
    colouring an unanswered question is how a palette starts lying. */
-.connect-probe[data-probe='ok'] {
+/* `password` is green, not amber, and the distinction is the whole point: amber
+   means the connection is still waiting on the human, while a stored password
+   means the answer is already in hand and main will give it on request. Same
+   outcome, different colour, because the two states ask for different things. */
+.connect-probe[data-probe='ok'],
+.connect-probe[data-probe='password'] {
   background: rgba(var(--ok-rgb), 0.16);
   color: var(--ok);
 }
@@ -2655,6 +2660,19 @@ button.plan-title:focus-visible {
 .connect-probe[data-probe='error'] {
   background: rgba(var(--coral-rgb), 0.16);
   color: var(--coral);
+}
+
+/* The lock badge. It is quiet by class and stays quiet here: a stored password
+   is an ordinary fact about a row, not an alert, and a second loud pill next to
+   the probe verdict would outshout the thing the human is actually scanning
+   for. Gap only matters on the edit view, where the icon has a word beside it. */
+.connect-lock {
+  gap: 3px;
+}
+
+.connect-lock svg {
+  width: 10px;
+  height: 10px;
 }
 
 /* ------------------------------------------------- edit form + hidden list
@@ -2715,6 +2733,52 @@ button.plan-title:focus-visible {
 
 .note-line[data-tone='warn'] {
   color: var(--warn);
+}
+
+/* Coral for the one hint that says "this cannot be done here": no OS keychain,
+   so there is nowhere to put a password at all. Warn would promise a way out
+   that this machine does not have. */
+.note-line[data-tone='bad'] {
+  color: var(--coral);
+}
+
+/* Password cell: the input carries the row and the two icon buttons are pinned
+   beside it, then the hint sits under both. `min-width: 0` is what keeps a long
+   placeholder from pushing the buttons out of the grid column. */
+.password-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.password-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.password-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Both buttons are on/off controls, and this bench already lights a control
+   that is on: an unlit toggle whose icon merely happens to have changed is a
+   state you only discover by clicking it twice. */
+.password-row .btn[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  color: var(--accent);
+}
+
+/* Armed-to-remove outranks merely-on. The eraser is not a preference, it is a
+   destructive action already queued for the next save, so it wears danger
+   instead of accent and reads as such before it is confirmed. */
+.password-row .btn[data-danger] {
+  background: rgba(var(--danger-rgb), 0.14);
+  border-color: rgba(var(--danger-rgb), 0.4);
+  color: var(--danger);
 }
 
 /* A hidden identity no source reports any more. Dimmed rather than struck

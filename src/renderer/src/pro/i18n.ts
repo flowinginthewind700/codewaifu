@@ -484,8 +484,13 @@ const STRINGS = {
    */
   sshConnect: { zh: '连接', en: 'Connect' },
   sshTerminal: { zh: '终端', en: 'Terminal' },
-  sshConnectTitle: { zh: '连接机器（c）', en: 'Connect to a machine (c)' },
-  sshTerminalTitle: { zh: '在选中任务的目录开一个 shell（t）', en: 'Open a shell in the selected task directory (t)' },
+  // The key itself travels as a keycap in the tooltip (`kbd` on Tip), so the
+  // label stays plain prose and `aria-keyshortcuts` carries the binding.
+  sshConnectTitle: { zh: '连接机器', en: 'Connect to a machine' },
+  sshTerminalTitle: {
+    zh: '在选中任务的目录开一个 shell',
+    en: 'Open a shell in the selected task directory'
+  },
   sshTitle: { zh: '连接', en: 'Connect' },
   sshHint: {
     zh: '筛选已保存的机器和 ~/.ssh/config 里的别名，输入 user@host[:port]，或直接粘贴一整条 ssh 命令',
@@ -509,6 +514,11 @@ const STRINGS = {
      so every status is phrased as that answer rather than as an exit code. */
   sshProbeUnknown: { zh: '未测试', en: 'untested' },
   sshProbeOk: { zh: '可免密登录', en: 'passwordless' },
+  /* The second green. Reachable, and worth the same colour, but a different
+     fact: a key would need nothing from anybody, while this one is answered by
+     a password we keep - and is therefore one `ssh-copy-id` from never being
+     asked again. */
+  sshProbePassword: { zh: '密码可登录', en: 'password works' },
   sshProbeAuth: { zh: '需要密码', en: 'needs a password' },
   sshProbeHostKey: { zh: '主机密钥未确认', en: 'host key not trusted' },
   sshProbeTimeout: { zh: '连接超时', en: 'timed out' },
@@ -556,6 +566,35 @@ const STRINGS = {
   sshFieldAlias: { zh: 'config 别名', en: 'config alias' },
   sshPortDefault: { zh: '留空 = 22', en: 'blank = 22' },
   sshKeyNone: { zh: '不指定（用默认密钥）', en: 'none (use the default key)' },
+  sshFieldPassword: { zh: '密码', en: 'Password' },
+  /* ------------------------------------------------- a saved password
+
+     The one secret this app keeps, and the wording is careful about what it
+     promises. The keychain belongs to the OS, the field is never prefilled
+     (main does not hand the plaintext to a renderer), and blank means "leave
+     it alone" rather than "delete it" - deleting is its own button, so saving
+     a half-filled form cannot quietly cost somebody a login. */
+  sshPasswordPlaceholder: { zh: '留空 = 不改动', en: 'blank = unchanged' },
+  sshPasswordPlaceholderNew: { zh: '可选，存进钥匙串', en: 'optional, kept in the keychain' },
+  sshPasswordHint: {
+    zh: '存进系统钥匙串，连接时自动应答密码提示；配好免密之后就可以清掉。',
+    en: 'Kept in your OS keychain and typed for you when ssh asks; clear it once passwordless setup works.'
+  },
+  sshPasswordKept: { zh: '已存密码，留空则保持不变', en: 'A password is saved; leave blank to keep it' },
+  sshPasswordReplace: { zh: '保存后替换已存的密码', en: 'Replaces the saved password' },
+  sshPasswordWillClear: { zh: '保存后从钥匙串移除', en: 'Removed from the keychain on save' },
+  sshPasswordReveal: { zh: '显示密码', en: 'Show password' },
+  sshPasswordHide: { zh: '隐藏密码', en: 'Hide password' },
+  sshPasswordClear: { zh: '移除已存密码', en: 'Remove the saved password' },
+  sshPasswordKeep: { zh: '保留已存密码', en: 'Keep the saved password' },
+  sshHasPassword: { zh: '已存密码', en: 'password saved' },
+  sshPasswordStored: { zh: '密码已存进钥匙串', en: 'Password saved to the keychain' },
+  sshPasswordCleared: { zh: '已从钥匙串移除密码', en: 'Password removed from the keychain' },
+  sshPasswordFailed: { zh: '密码没能存进钥匙串', en: 'The password could not be saved to the keychain' },
+  sshNoKeychain: {
+    zh: '这台机器没有可用的系统钥匙串，密码无法保存——我们不会把它明文写到磁盘上。',
+    en: 'This machine has no usable keychain, so a password cannot be saved - it will not be written to disk in plaintext.'
+  },
   sshEditSave: { zh: '保存', en: 'Save' },
   sshEditNeedsHost: { zh: '主机不能为空', en: 'A host is required' },
   sshEditBadPort: {

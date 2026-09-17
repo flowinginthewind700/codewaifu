@@ -25,12 +25,30 @@ export interface SshMachine {
    * wins: `ssh <alias>` resolves HostName/Port/User/IdentityFile from config.
    */
   alias: string
+  /**
+   * Whether a password for this row is sitting in the OS keychain.
+   *
+   * A *marker*, never the secret, and never written to `machines.json`: the
+   * roster computes it on the way out (`SshService.roster`) from the keychain's
+   * own answer, so a stored row cannot claim a password that is not there and
+   * cannot carry one that outlived its deletion. Absent means "no password",
+   * which keeps every machine that predates this field byte-identical.
+   */
+  hasPassword?: boolean
 }
 
-/** What a reachability/auth probe concluded. `ok` is the only green. */
+/**
+ * What a reachability/auth probe concluded.
+ *
+ * Two greens, because "can I get in" has two honest answers: `ok` needed
+ * nothing from anybody (a key), while `password` means the password we hold was
+ * accepted - reachable, and worth the same colour, but one `setup` away from
+ * never having to be typed again.
+ */
 export type ProbeStatus =
   | 'unknown'
   | 'ok'
+  | 'password'
   | 'auth'
   | 'host-key'
   | 'timeout'
@@ -41,6 +59,7 @@ export type ProbeStatus =
 export const PROBE_STATUSES: readonly ProbeStatus[] = [
   'unknown',
   'ok',
+  'password',
   'auth',
   'host-key',
   'timeout',
@@ -503,6 +522,28 @@ export function sshLine(machine: SshMachine, opts: { home?: string } = {}): stri
 }
 
 /**
+ * The dial half of a probe argv: everything after the `-o` options.
+ *
+ * One helper for both probes, because the two must never disagree about *where*
+ * they are dialling - a password probe that dropped ProxyJump would test a
+ * different box than the key probe that ran a moment before it, and the second
+ * verdict would be about nothing.
+ */
+function probeDestination(machine: SshMachine, home: string): string[] {
+  if (machine.alias) return [machine.alias, 'exit']
+  const argv: string[] = []
+  if (machine.port) argv.push('-p', String(machine.port))
+  if (machine.identityFile) argv.push('-i', expandHome(machine.identityFile, home))
+  if (machine.proxyJump) argv.push('-J', machine.proxyJump)
+  argv.push(destination(machine), 'exit')
+  return argv
+}
+
+function probeTimeoutSec(timeoutSec: number | undefined): number {
+  return Math.max(1, Math.min(60, Math.trunc(timeoutSec ?? 6)))
+}
+
+/**
  * A non-interactive reachability + auth probe.
  *
  * `BatchMode=yes` is the point: it forbids every password prompt, so the probe
@@ -517,25 +558,86 @@ export function probeArgv(
   machine: SshMachine,
   opts: { home?: string; timeoutSec?: number } = {}
 ): string[] {
-  const timeout = Math.max(1, Math.min(60, Math.trunc(opts.timeoutSec ?? 6)))
-  const argv = [
+  const home = opts.home ?? ''
+  return [
     'ssh',
     '-o',
     'BatchMode=yes',
     '-o',
-    `ConnectTimeout=${timeout}`,
+    `ConnectTimeout=${probeTimeoutSec(opts.timeoutSec)}`,
     '-o',
-    'StrictHostKeyChecking=accept-new'
+    'StrictHostKeyChecking=accept-new',
+    ...probeDestination(machine, home)
   ]
-  if (machine.alias) {
-    argv.push(machine.alias, 'exit')
-    return argv
-  }
-  if (machine.port) argv.push('-p', String(machine.port))
-  if (machine.identityFile) argv.push('-i', expandHome(machine.identityFile, opts.home ?? ''))
-  if (machine.proxyJump) argv.push('-J', machine.proxyJump)
-  argv.push(destination(machine), 'exit')
-  return argv
+}
+
+/**
+ * The same probe, asking the password question instead: "does the password we
+ * hold get me in?"
+ *
+ * Three differences from `probeArgv`, each of them load-bearing:
+ *
+ * - **no `BatchMode`**, which is exactly the option that forbids a prompt;
+ * - **`PreferredAuthentications=keyboard-interactive,password`**, so ssh goes
+ *   straight to the method under test instead of burning the server's attempt
+ *   budget on every key in the agent first (a box that allows three tries would
+ *   answer "denied" about a password that was never asked for);
+ * - **`NumberOfPasswordPrompts=1`**, so a wrong password ends the probe on the
+ *   first refusal rather than re-prompting a child process that has nobody
+ *   watching it.
+ *
+ * The password itself is never in this argv: ssh reads it from an `SSH_ASKPASS`
+ * helper, which is what keeps it out of `ps`, out of the shell history and out
+ * of the pane's scrollback.
+ */
+export function passwordProbeArgv(
+  machine: SshMachine,
+  opts: { home?: string; timeoutSec?: number } = {}
+): string[] {
+  const home = opts.home ?? ''
+  return [
+    'ssh',
+    '-o',
+    `ConnectTimeout=${probeTimeoutSec(opts.timeoutSec)}`,
+    '-o',
+    'StrictHostKeyChecking=accept-new',
+    '-o',
+    'NumberOfPasswordPrompts=1',
+    '-o',
+    'PreferredAuthentications=keyboard-interactive,password',
+    ...probeDestination(machine, home)
+  ]
+}
+
+/**
+ * Is the last thing a pane printed a password prompt?
+ *
+ * This is the trigger for typing a saved password into a fresh `ssh`, so it is
+ * deliberately narrow and reads only the **last non-empty line**: the prompt is
+ * always the newest thing on screen, and anything older is scrollback that may
+ * well contain the word in a log line, a man page or a refused attempt.
+ *
+ * A prompt is a question ending in `:`. The refusals that also mention the word
+ * - `Permission denied (publickey,password).`, `Too many authentication
+ * failures` - are statements, and answering one of them with a secret would
+ * type it into a connection that is already closed. They are excluded by name
+ * rather than left to punctuation, because sshd's wording is not ours to pin
+ * down and a second password typed after a first rejection is how an account
+ * gets locked out.
+ *
+ * Two-factor prompts (`Verification code:`, `OTP:`) never match, on purpose: the
+ * saved password is not the answer to those, and a wrong guess there costs the
+ * human the login as well.
+ */
+export function looksLikePasswordPrompt(text: string): boolean {
+  const lines = String(text ?? '')
+    .split('\n')
+    .map((line) => line.replace(/\r$/, '').trim())
+    .filter((line) => line !== '')
+  const last = lines[lines.length - 1] ?? ''
+  if (!last) return false
+  if (/denied|refused|failure|failed|closed|incorrect|invalid/i.test(last)) return false
+  return /(?:^|[\s"'(\[])password(?:\s+for\s+[^:\n]{1,120})?\s*:\s*$/i.test(last)
 }
 
 /**

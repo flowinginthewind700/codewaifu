@@ -710,6 +710,26 @@ export type ProSshRequest =
   | { op: 'unhide'; key: string }
   | { op: 'hidden' }
   /**
+   * Put a password in the OS keychain, or take one out.
+   *
+   * `secret: null` (or `''`) clears; the *absence* of the key is a caller bug
+   * and is rejected rather than read as a clear, because "the form forgot to
+   * send the field" silently deleting a stored login is the kind of mistake
+   * nobody can see. The value is never trimmed - trailing space is a legal
+   * character in a password and a form that decided otherwise would be
+   * untyping part of somebody's secret.
+   *
+   * `id` is the keychain key: the row's own id. A config alias has a stable
+   * derived one, so an alias can carry a password before it is ever pinned.
+   */
+  | {
+      op: 'set-password'
+      machine: SshMachine | null
+      target: string
+      id: string
+      secret: string | null
+    }
+  /**
    * Open a session: a pane, a task record, and the connect line typed into it.
    * `save` pins the machine as a side effect, which is what makes the second
    * connect to the same box one keystroke.
@@ -752,6 +772,12 @@ export interface ProSshRoster {
    * rewrite is a row the human should still be able to reach in one keystroke.
    */
   configPath: string
+  /**
+   * Whether this machine can keep a password at all (macOS Keychain, Windows
+   * DPAPI, a Linux keyring). The edit form reads it to say "cannot be saved
+   * here" instead of offering a field that would refuse the moment it is used.
+   */
+  keychain: boolean
 }
 
 /** One probe's verdict. `detail` is the last line ssh printed, for a tooltip. */
@@ -795,6 +821,13 @@ export interface ProSshSetup {
 }
 
 const MACHINE_SOURCES: readonly string[] = ['saved', 'config', 'herdr']
+
+/**
+ * The length cap on a stored password, mirrored from `main/pro/secrets.ts`.
+ * Duplicated rather than imported because that module reads the filesystem and
+ * this one is bundled into the renderer; a shared constant would drag node in.
+ */
+const SECRET_MAX = 512
 
 function machineSourceOf(value: unknown): MachineSource {
   const raw = str(value, 10).trim().toLowerCase()
@@ -902,6 +935,26 @@ export function parseProSsh(payload: unknown): ProSshParse {
     }
     case 'hidden':
       return { op }
+    case 'set-password': {
+      const machine = machineOf(raw.machine)
+      const target = targetOf(raw.target)
+      const id = str(raw.id, 120).trim()
+      if (!machine && !target && !id) {
+        return reject('bad-machine', 'a machine id is required')
+      }
+      if (!Object.prototype.hasOwnProperty.call(raw, 'secret')) {
+        return reject('bad-payload', 'secret is required; send null to clear it')
+      }
+      const value = raw.secret
+      if (value !== null && typeof value !== 'string') {
+        return reject('bad-payload', 'secret must be a string or null')
+      }
+      const secret = value === null ? null : value
+      if (secret !== null && secret.length > SECRET_MAX) {
+        return reject('bad-payload', `a password longer than ${SECRET_MAX} characters is not stored`)
+      }
+      return { op, machine, target, id, secret }
+    }
     case 'terminal':
       return { op, cwd: cwdOf(raw.cwd ?? raw.workdir ?? raw.path) }
     case 'probe':

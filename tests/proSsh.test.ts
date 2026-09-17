@@ -6,7 +6,16 @@
  * means, how an id is assigned) without a real `~/.ssh` or a real `ssh`.
  */
 import { describe, expect, it } from 'vitest'
-import { SshService, type MachinesFile, type SshDeps, type SshRunResult } from '../src/main/pro/ssh'
+import {
+  PASSWORD_ACCEPTED_DETAIL,
+  PASSWORD_REFUSED_DETAIL,
+  SshService,
+  type MachinesFile,
+  type PasswordRunner,
+  type SecretStoreLike,
+  type SshDeps
+} from '../src/main/pro/ssh'
+import type { SshRunResult } from '../src/main/pro/child'
 import { machineKey, type SshMachine } from '../src/shared/ssh'
 
 const HOME = '/home/tester'
@@ -54,6 +63,68 @@ function service(w: FakeWorld, extra: Partial<SshDeps> = {}): SshService {
 }
 
 const CONFIG = ['Host prod', '  HostName 10.0.0.5', '  User deploy', '  Port 2200'].join('\n')
+
+/**
+ * A keychain: a map, plus a log of what was asked of it. The log matters as
+ * much as the contents, because two of the rules here are about *not* asking -
+ * a probe with no stored password must not reach for the askpass runner, and a
+ * roster listing must never call `get`.
+ */
+interface FakeSecrets extends SecretStoreLike {
+  map: Record<string, string>
+  calls: string[]
+}
+
+function fakeSecrets(available = true, map: Record<string, string> = {}): FakeSecrets {
+  const calls: string[] = []
+  return {
+    map,
+    calls,
+    available: () => available,
+    has: (id) => Object.prototype.hasOwnProperty.call(map, id),
+    get: (id) => {
+      calls.push(`get ${id}`)
+      return Object.prototype.hasOwnProperty.call(map, id) ? map[id] : null
+    },
+    set: (id, secret) => {
+      calls.push(`set ${id}`)
+      if (!available) return false
+      map[id] = secret
+      return true
+    },
+    remove: (id) => {
+      calls.push(`remove ${id}`)
+      if (!Object.prototype.hasOwnProperty.call(map, id)) return false
+      delete map[id]
+      return true
+    }
+  }
+}
+
+/** The second pass of a probe, canned, with the argv and password it was given. */
+interface FakeAskpass extends PasswordRunner {
+  calls: Array<{ argv: string[]; password: string }>
+}
+
+function fakeAskpass(result: Partial<SshRunResult> = {}): FakeAskpass {
+  const calls: Array<{ argv: string[]; password: string }> = []
+  const full: SshRunResult = { code: 0, stdout: '', stderr: '', timedOut: false, ...result }
+  return {
+    calls,
+    run: (argv, password) => {
+      calls.push({ argv: [...argv], password })
+      return Promise.resolve(full)
+    }
+  }
+}
+
+/** What ssh prints when the key was not enough. Pass 1's `auth` verdict. */
+const REFUSED: SshRunResult = {
+  code: 255,
+  stdout: '',
+  stderr: 'Permission denied (publickey).',
+  timedOut: false
+}
 
 describe('roster', () => {
   it('merges saved, config and herdr, ranking saved first', async () => {
@@ -398,5 +469,155 @@ describe('hiddenMachines', () => {
     const rows = await svc.hiddenMachines()
     expect(rows.map((row) => row.machine.label)).toEqual(['herdr-box'])
     expect(rows[0].stale).toBe(false)
+  })
+})
+
+describe('passwords', () => {
+  it('answers a refused key with the stored password, and calls that green', async () => {
+    const secrets = fakeSecrets(true, { mTEST: 'hunter2' })
+    const askpass = fakeAskpass({ code: 0 })
+    const svc = service(world({ runResult: REFUSED }), { secrets, askpass })
+    const result = await svc.probe(svc.save({ host: 'box', user: 'alice' })!)
+    expect(result.status).toBe('password')
+    expect(result.detail).toBe(PASSWORD_ACCEPTED_DETAIL)
+    expect(askpass.calls).toHaveLength(1)
+    expect(askpass.calls[0].password).toBe('hunter2')
+    // The second pass asks a different question, so it must not forbid prompts.
+    expect(askpass.calls[0].argv.join(' ')).not.toContain('BatchMode')
+    // And the secret reaches ssh as an askpass answer, never as an argument:
+    // argv is a public listing on a shared box.
+    expect(askpass.calls[0].argv.join(' ')).not.toContain('hunter2')
+  })
+
+  it('reports a refused stored password as auth, and leads with that fact', async () => {
+    const askpass = fakeAskpass({ code: 255, stderr: 'Permission denied (publickey,password).' })
+    const svc = service(world({ runResult: REFUSED }), {
+      secrets: fakeSecrets(true, { mTEST: 'hunter2' }),
+      askpass
+    })
+    const result = await svc.probe(svc.save({ host: 'box' })!)
+    expect(result.status).toBe('auth')
+    // ssh's own line stays, because it is the evidence - but it no longer
+    // reads as "your key is wrong" to somebody who just stored a password.
+    expect(result.detail).toBe(
+      `${PASSWORD_REFUSED_DETAIL}: Permission denied (publickey,password).`
+    )
+  })
+
+  it('keeps pass 1 verdict when pass 2 printed nothing classifiable', async () => {
+    const svc = service(world({ runResult: REFUSED }), {
+      secrets: fakeSecrets(true, { mTEST: 'hunter2' }),
+      askpass: fakeAskpass({ code: 255, stderr: '' })
+    })
+    const result = await svc.probe(svc.save({ host: 'box' })!)
+    expect(result.status).toBe('auth')
+    // Not a guess about the password: an unclassifiable second pass proved
+    // nothing, so the report is the one the first pass earned.
+    expect(result.detail).toBe('Permission denied (publickey).')
+  })
+
+  it('runs one pass, and never reaches for the askpass runner, when nothing is stored', async () => {
+    const secrets = fakeSecrets()
+    const askpass = fakeAskpass({ code: 0 })
+    const w = world({ runResult: REFUSED })
+    const svc = service(w, { secrets, askpass })
+    const result = await svc.probe(svc.save({ host: 'box' })!)
+    expect(result.status).toBe('auth')
+    expect(askpass.calls).toHaveLength(0)
+    // One ssh child, not two: the second pass costs a real connection, so it is
+    // only worth running when there is a password to try with it.
+    expect(w.runCalls).toHaveLength(1)
+  })
+
+  it('never upgrades a verdict the first pass already settled', async () => {
+    const secrets = fakeSecrets(true, { mTEST: 'hunter2' })
+    const askpass = fakeAskpass({ code: 0 })
+    const settle = async (stderr: string, timedOut: boolean): Promise<string> => {
+      const w = world({ runResult: { code: 255, stdout: '', stderr, timedOut } })
+      const svc = service(w, { secrets, askpass })
+      return (await svc.probe(svc.save({ host: 'box' })!)).status
+    }
+    expect(await settle('Connection timed out', true)).toBe('timeout')
+    expect(await settle('Host key verification failed.', false)).toBe('host-key')
+    expect(await settle('ssh: command not found', false)).toBe('no-ssh')
+    // A second pass would have proved nothing about any of these.
+    expect(askpass.calls).toHaveLength(0)
+  })
+
+  it('keeps the verdict it had when the askpass runner itself fails', async () => {
+    const svc = service(world({ runResult: REFUSED }), {
+      secrets: fakeSecrets(true, { mTEST: 'hunter2' }),
+      askpass: { run: () => Promise.reject(new Error('no helper')) }
+    })
+    const result = await svc.probe(svc.save({ host: 'box' })!)
+    expect(result.status).toBe('auth')
+    expect(result.detail).toBe('Permission denied (publickey).')
+  })
+
+  it('says so, and stores nothing, on a box with no keychain', () => {
+    const secrets = fakeSecrets(false)
+    const svc = service(world(), { secrets })
+    expect(svc.keychainAvailable()).toBe(false)
+    expect(svc.setPassword('m1', 'hunter2')).toBe(false)
+    expect(secrets.map).toEqual({})
+    expect(svc.hasPassword('m1')).toBe(false)
+  })
+
+  it('stores, reports and clears through the one verb the form needs', () => {
+    const svc = service(world(), { secrets: fakeSecrets() })
+    expect(svc.setPassword('m1', 'hunter2')).toBe(true)
+    expect(svc.hasPassword('m1')).toBe(true)
+    expect(svc.passwordFor('m1')).toBe('hunter2')
+    // Empty means clear, so an emptied field empties the keychain.
+    expect(svc.setPassword('m1', '')).toBe(true)
+    expect(svc.hasPassword('m1')).toBe(false)
+    // Clearing twice is a miss, not a fault.
+    expect(svc.setPassword('m1', null)).toBe(false)
+    // No id, no write: an unkeyed secret could never be found again.
+    expect(svc.setPassword('   ', 'hunter2')).toBe(false)
+  })
+
+  it('marks only the rows the keychain holds something for, without reading them', async () => {
+    const secrets = fakeSecrets(true, { mTEST: 'hunter2' })
+    const svc = service(world({ config: CONFIG }), { secrets })
+    svc.save({ host: 'box', user: 'alice' })
+    // Saving migrates off a provisional id and so does read the store; the
+    // listing is the part that must not.
+    secrets.calls.length = 0
+    const roster = await svc.roster()
+    expect(roster.map((machine) => [machine.label, machine.hasPassword ?? false])).toEqual([
+      ['alice@box', true],
+      ['prod', false]
+    ])
+    // A listing is a question about existence, so it must not pull plaintext.
+    expect(secrets.calls.filter((call) => call.startsWith('get'))).toEqual([])
+  })
+
+  it('takes the password with the row when the row is deleted', () => {
+    const secrets = fakeSecrets()
+    const svc = service(world(), { secrets })
+    const saved = svc.save({ host: 'box' })!
+    svc.setPassword(saved.id, 'hunter2')
+    expect(svc.remove(saved.id)).toBe(true)
+    expect(secrets.map).toEqual({})
+  })
+
+  it('follows a password to the new id when a row that was not ours is pinned', () => {
+    const secrets = fakeSecrets(true, { 'cfg:prod': 'hunter2' })
+    const svc = service(world(), { secrets })
+    const saved = svc.save({ id: 'cfg:prod', host: '10.0.0.5', alias: 'prod' })!
+    expect(saved.id).toBe('mTEST')
+    expect(secrets.map).toEqual({ mTEST: 'hunter2' })
+    expect(svc.passwordFor(saved.id)).toBe('hunter2')
+  })
+
+  it('leaves the original alone when the keychain refuses the copy', () => {
+    // A move is copy-then-delete, so a failed copy must never become a delete:
+    // losing a login is worse than leaving one entry behind.
+    const secrets = fakeSecrets(true, { 'cfg:prod': 'hunter2' })
+    const refusing: SecretStoreLike = { ...secrets, set: () => false }
+    const svc = service(world(), { secrets: refusing })
+    svc.save({ id: 'cfg:prod', host: '10.0.0.5', alias: 'prod' })
+    expect(secrets.map).toEqual({ 'cfg:prod': 'hunter2' })
   })
 })

@@ -64,6 +64,15 @@ function hideRequest(payload: unknown): Extract<ProSshRequest, { op: 'hide' }> {
   return request
 }
 
+/** A `set-password` parse narrowed the same way. */
+function passwordRequest(
+  payload: unknown
+): Extract<ProSshRequest, { op: 'set-password' }> {
+  const request = parsed(payload)
+  if (request.op !== 'set-password') throw new Error(`expected set-password, got ${request.op}`)
+  return request
+}
+
 describe('the ops that need nothing', () => {
   it('reads an empty or nonsense payload as `list`, since asking is the default', () => {
     const empties: unknown[] = [{}, null, undefined, 'nonsense', 42, []]
@@ -343,6 +352,92 @@ describe('hide, unhide and the restore list', () => {
 
   it('takes `hidden` with no arguments and drops whatever else came along', () => {
     expect(parsed({ op: 'hidden', key: 'ignored' })).toEqual({ op: 'hidden' })
+  })
+})
+
+/**
+ * The one op whose payload carries a secret.
+ *
+ * Two rules here are not the rules the other mutating ops have, and both are
+ * about what a *missing* field means. Every other op reads an absent field as
+ * "leave it alone", which for a password would mean a caller that forgot the
+ * key silently wiped the keychain - so an absent `secret` is a refusal, and
+ * clearing is spelled `null` on purpose. The second is that the value is never
+ * trimmed: ssh compares bytes, and a password that ends in a space is a
+ * password, so normalising it here would store one that cannot log in.
+ */
+describe('set-password', () => {
+  it('takes a machine, a target, or the bare id, which is what the keychain keys by', () => {
+    // The edit form stores the row first and then sends back only the id it got,
+    // so an id on its own is the normal shape rather than a degraded one.
+    expect(passwordRequest({ op: 'set-password', id: 'm1', secret: 'x' })).toMatchObject({
+      op: 'set-password',
+      machine: null,
+      target: '',
+      id: 'm1',
+      secret: 'x'
+    })
+    expect(passwordRequest({ op: 'set-password', target: 'alice@box:2222', secret: null }).target).toBe(
+      'alice@box:2222'
+    )
+    expect(
+      passwordRequest({ op: 'set-password', machine: { host: 'box' }, secret: 'x' }).machine?.host
+    ).toBe('box')
+  })
+
+  it('refuses a payload that names no row, rather than storing a secret against a guess', () => {
+    const bad = refused({ op: 'set-password', secret: 'x' })
+    expect(bad.code).toBe('bad-machine')
+    expect(bad.error).toContain('machine')
+  })
+
+  it('reads an absent secret as a refusal and a null one as "forget it"', () => {
+    const bad = refused({ op: 'set-password', id: 'm1' })
+    expect(bad.code).toBe('bad-payload')
+    // The message is the whole fix: it has to name both the field and the way
+    // to clear it, or the caller retries with the field still missing.
+    expect(bad.error).toContain('secret is required')
+    expect(bad.error).toContain('null to clear')
+    expect(passwordRequest({ op: 'set-password', id: 'm1', secret: null }).secret).toBeNull()
+  })
+
+  it('keeps the bytes it was given: no trim, no case folding, no collapsing', () => {
+    expect(passwordRequest({ op: 'set-password', id: 'm1', secret: '  p@ss W0rd ' }).secret).toBe(
+      '  p@ss W0rd '
+    )
+    // An empty string is the edit form's "clear the field", and it survives
+    // parsing as itself - the service is the layer that reads it as a deletion.
+    expect(passwordRequest({ op: 'set-password', id: 'm1', secret: '' }).secret).toBe('')
+  })
+
+  it('refuses a secret that is neither a string nor null', () => {
+    for (const secret of [42, true, {}, [], ['x']]) {
+      const bad = refused({ op: 'set-password', id: 'm1', secret })
+      expect(bad.code, JSON.stringify(secret)).toBe('bad-payload')
+      expect(bad.error, JSON.stringify(secret)).toContain('string or null')
+    }
+  })
+
+  it('caps the length, and the refusal quotes the cap instead of the password', () => {
+    const tooLong = 'x'.repeat(513)
+    const bad = refused({ op: 'set-password', id: 'm1', secret: tooLong })
+    expect(bad.code).toBe('bad-payload')
+    expect(bad.error).toContain('512')
+    expect(bad.error, 'an error string is a log line').not.toContain('xxx')
+    expect(passwordRequest({ op: 'set-password', id: 'm1', secret: 'x'.repeat(512) }).secret).toHaveLength(512)
+  })
+
+  it('shares the target rule with the ops that dial: one destination, never a shell', () => {
+    expect(refused({ op: 'set-password', target: 'box ; rm -rf ~', secret: 'x' }).code).toBe(
+      'bad-machine'
+    )
+    expect(
+      passwordRequest({
+        op: 'set-password',
+        target: 'ssh wanlian@172.18.29.206 -p 2222',
+        secret: 'x'
+      }).target
+    ).toBe('ssh wanlian@172.18.29.206 -p 2222')
   })
 })
 

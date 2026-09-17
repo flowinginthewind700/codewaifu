@@ -102,6 +102,7 @@ import {
 import {
   editMachine,
   isHiddenRemoval,
+  looksLikePasswordPrompt,
   machineKey,
   parseTarget,
   type HiddenMachine,
@@ -135,7 +136,8 @@ import {
 } from './herdr/terminalBridge'
 import { LedgerStore, type LedgerInput } from './ledger'
 import { Recovery, type ApplyResult } from './recovery'
-import { SshService } from './ssh'
+import { SecretStore, type SecretCipher } from './secrets'
+import { SshService, type SecretStoreLike } from './ssh'
 import {
   emptyHint,
   paneReadHint,
@@ -413,6 +415,17 @@ export interface ProServiceDeps {
    * `~/.ssh`.
    */
   ssh?: SshService
+  /**
+   * The keychain cipher the roster keeps its passwords with, and the only
+   * Electron-shaped hole in this service: `main/keychain.ts` builds the real
+   * one and `main/index.ts` hands it in, so everything below it stays a policy
+   * a test can drive with a reversible fake. Absent or null means "this machine
+   * has no keychain", and the store then refuses to write rather than keeping a
+   * plaintext password on disk.
+   */
+  cipher?: SecretCipher | null
+  /** A whole store, for a test that would rather not fake a cipher. */
+  secrets?: SecretStoreLike | null
 }
 
 const DEFAULT_INTERVALS: ServiceIntervals = {
@@ -553,6 +566,8 @@ export class ProService implements CompanionApi {
   private readonly bridges = new Map<string, TerminalBridge>()
   private readonly announced = new Set<string>()
   private readonly lastGit = new Map<string, { head: string; branch: string; dirty: number }>()
+  /** Panes a connect is watching for a password prompt. See `armPasswordAssist`. */
+  private readonly assists = new Map<string, PasswordAssist>()
 
   private cached: BenchView | null = null
   private lastSignature = ''
@@ -616,7 +631,11 @@ export class ProService implements CompanionApi {
       deps.ssh ??
       new SshService({
         home: homeDir,
-        platform: process.platform === 'win32' ? 'windows' : 'posix'
+        platform: process.platform === 'win32' ? 'windows' : 'posix',
+        secrets:
+          deps.secrets !== undefined
+            ? deps.secrets
+            : new SecretStore({ cipher: deps.cipher ?? null })
       })
     this.triage =
       deps.triage ??
@@ -710,6 +729,9 @@ export class ProService implements CompanionApi {
     // for a pane nobody is watching is a lie with a click target.
     this.companion.shutdown()
     this.detachSession()
+    // A watcher is a promise to type a secret into a pane. Nothing this bench
+    // started may outlive it, least of all that.
+    this.cancelAssists()
     if (wasRunning) this.registry.save()
     this.cached = null
     this.lastSignature = ''
@@ -2705,7 +2727,8 @@ export class ProService implements CompanionApi {
           machines,
           home: homeDir,
           hidden,
-          configPath: this.ssh.configFile()
+          configPath: this.ssh.configFile(),
+          keychain: this.ssh.keychainAvailable()
         }
         return okResult(roster, '', 'roster')
       }
@@ -2788,6 +2811,32 @@ export class ProService implements CompanionApi {
         const hidden = await this.ssh.hiddenMachines()
         return okResult<{ hidden: HiddenMachine[] }>({ hidden }, '', 'hidden')
       }
+      case 'set-password': {
+        // The keychain key is a row's id, so this op resolves the row exactly
+        // the way every other machine op does and only then falls back to the id
+        // the caller sent. An id alone is the normal case: the edit form stores
+        // the row first and uses the id that came back.
+        const machine = await this.machineFor(request.machine, request.target)
+        const id = (machine ? this.currentMachine(machine).id : '') || request.id
+        if (!id) return this.noMachine()
+        if (!request.secret) {
+          // Clearing is idempotent: "there was nothing stored" is the state the
+          // caller asked for, not a failure to report.
+          this.ssh.setPassword(id, null)
+          this.invalidate()
+          return okResult({ id, cleared: true }, '', 'password-cleared')
+        }
+        if (!this.ssh.keychainAvailable()) {
+          return failResult('no-keychain', 'this machine has no keychain to keep a password in')
+        }
+        if (!this.ssh.setPassword(id, request.secret)) {
+          return failResult('no-keychain', 'the password could not be stored')
+        }
+        this.invalidate()
+        // The secret is never echoed back, never put in a detail, never logged:
+        // all a caller learns from this result is that it worked.
+        return okResult({ id, cleared: false }, '', 'password-saved')
+      }
       case 'connect': {
         const machine = this.machineWithPatch(
           await this.machineFor(request.machine, request.target),
@@ -2804,7 +2853,10 @@ export class ProService implements CompanionApi {
           cwd: request.cwd,
           goal: line,
           lines: [line],
-          code: saved ? 'connected' : 'connected-unsaved'
+          code: saved ? 'connected' : 'connected-unsaved',
+          // Pinning a config alias gives the row a new id and moves its password
+          // along with it, so the stored row is the one to watch the pane with.
+          assist: saved ?? machine
         })
       }
       case 'setup': {
@@ -2822,7 +2874,10 @@ export class ProService implements CompanionApi {
           cwd: '',
           goal: lines.join('\n'),
           lines,
-          code: 'setup'
+          code: 'setup',
+          // `ssh-copy-id` asks for the very password this plan exists to retire,
+          // and a saved one is exactly as good an answer there as anywhere.
+          assist: machine
         })
         if (!opened.ok || !opened.data) return opened
         return okResult<ProSshSetup & ProSessionOpened>(
@@ -2849,6 +2904,11 @@ export class ProService implements CompanionApi {
     goal: string
     lines: readonly string[]
     code: string
+    /**
+     * The machine whose saved password these lines may be about to need. Only a
+     * connect and a setup have one; a plain terminal has nothing to answer with.
+     */
+    assist?: SshMachine | null
   }): Promise<ProResult<ProSessionOpened>> {
     const client = this.client()
     if (!client || !this.online()) return this.offline()
@@ -2892,6 +2952,10 @@ export class ProService implements CompanionApi {
       if (await this.typeLine(client, paneId, line)) typed += 1
     }
     if (input.lines.length && !typed) this.notice(this.text(SEND_FAILED_TEXT), 'error')
+    // The connect line is on its way to a shell, and the password prompt it may
+    // produce is nobody's to watch. Arming here rather than in the two callers
+    // keeps one provisioning path, and one place that knows a pane exists.
+    if (input.assist) this.armPasswordAssist(input.assist, paneId)
 
     this.ledger.append(
       {
@@ -2932,6 +2996,118 @@ export class ProService implements CompanionApi {
     const sent = await client.sendText(paneId, line).catch(() => false)
     if (!sent) return false
     return client.sendKeys(paneId, ['enter']).catch(() => false)
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Password assist
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Watch a freshly opened pane for the password prompt its connect line is
+   * about to produce, and answer it once.
+   *
+   * This is the half of "we can keep your password" that a human actually
+   * feels: they press connect, ssh asks, and the box logs them in without a
+   * keystroke - while a box that turned out to be key-auth never sees the
+   * watcher do anything at all.
+   *
+   * Three rules keep it from being the dangerous thing it could be:
+   *
+   * - it answers **once per pane**. A prompt that comes back after our answer
+   *   means the password was wrong, and a second guess is how an account gets
+   *   locked out;
+   * - it reacts only to a line `looksLikePasswordPrompt` accepts - a question
+   *   ending in `:`, never a `Permission denied`, never a two-factor code
+   *   prompt;
+   * - it expires. A watcher that outlived the login it was armed for would be
+   *   typing a secret into whatever that pane became next.
+   *
+   * The password reaches the PTY through herdr's `sendText`. sshd turns echo off
+   * for the prompt, so it never appears in the scrollback, and it is not the
+   * ledger's business either: nothing on this path writes it down.
+   */
+  private armPasswordAssist(machine: SshMachine | null, paneId: string): void {
+    if (!machine || !paneId || this.assists.has(paneId)) return
+    const password = this.ssh.passwordFor(machine.id)
+    if (!password) return
+    const client = this.client()
+    if (!client) return
+    const assist: PasswordAssist = {
+      paneId,
+      timer: null,
+      deadline: this.timers.now() + ASSIST_WINDOW_MS
+    }
+    this.assists.set(paneId, assist)
+    this.scheduleAssist(client, assist, password, ASSIST_POLL_MS)
+  }
+
+  /**
+   * The self-rescheduling half of the watch: `after` rather than `every`, so a
+   * slow read cannot overlap the next tick and answer one prompt twice.
+   */
+  private scheduleAssist(
+    client: HerdrClientLike,
+    assist: PasswordAssist,
+    password: string,
+    delayMs: number
+  ): void {
+    assist.timer = this.timers.after(() => {
+      void this.assistTick(client, assist, password)
+    }, delayMs)
+  }
+
+  private async assistTick(
+    client: HerdrClientLike,
+    assist: PasswordAssist,
+    password: string
+  ): Promise<void> {
+    // Cancelled or replaced while a read was in flight: stop, schedule nothing.
+    if (this.assists.get(assist.paneId) !== assist) return
+    if (this.timers.now() >= assist.deadline) {
+      this.cancelAssist(assist.paneId)
+      return
+    }
+    const read = await client
+      .readPane(assist.paneId, {
+        source: 'visible',
+        lines: ASSIST_LINES,
+        format: 'text',
+        stripAnsi: true
+      })
+      .catch(() => null)
+    if (this.assists.get(assist.paneId) !== assist) return
+    if (!read) {
+      // The pane is gone - closed by the human, or dropped by herdr. There is
+      // nothing left to answer and no reason to keep polling for one.
+      this.cancelAssist(assist.paneId)
+      return
+    }
+    if (!looksLikePasswordPrompt(read.text)) {
+      this.scheduleAssist(client, assist, password, ASSIST_POLL_MS)
+      return
+    }
+    const typed = await this.typeLine(client, assist.paneId, password)
+    if (this.assists.get(assist.paneId) !== assist) return
+    this.cancelAssist(assist.paneId)
+    if (typed) {
+      this.notice(this.text(PASSWORD_TYPED_TEXT))
+      return
+    }
+    this.host.log('warn', 'pro: a saved password could not be typed', { paneId: assist.paneId })
+    this.notice(this.text(SEND_FAILED_TEXT), 'error')
+  }
+
+  /** Stop watching one pane. Idempotent, and safe to call from inside a tick. */
+  private cancelAssist(paneId: string): void {
+    const assist = this.assists.get(paneId)
+    if (!assist) return
+    this.assists.delete(paneId)
+    assist.timer?.cancel()
+    assist.timer = null
+  }
+
+  private cancelAssists(): void {
+    for (const paneId of [...this.assists.keys()]) this.cancelAssist(paneId)
   }
 
   /**
@@ -3209,6 +3385,32 @@ const CLOSE_FAILED_TEXT = {
   zh: 'herdr 没能关掉其中一些终端，它们还在运行',
   en: 'herdr did not close some of them; those shells are still running'
 }
+
+const PASSWORD_TYPED_TEXT = {
+  zh: '已把保存的密码输进这个终端',
+  en: 'typed the saved password into this terminal'
+}
+
+/** One connect's watch on one pane. See `armPasswordAssist`. */
+interface PasswordAssist {
+  paneId: string
+  /** The pending `after` tick, so a cancel can drop it. */
+  timer: ServiceTimer | null
+  /** `timers.now()` past which the watcher gives up on this pane. */
+  deadline: number
+}
+
+/**
+ * How long a connect watches its pane. ssh prints its prompt within a second or
+ * two of a TCP handshake, so most of this window is grace for a slow box or a
+ * `ProxyJump` two hops away - and all of it is a bound on how long a secret
+ * stays armed against a pane.
+ */
+const ASSIST_WINDOW_MS = 40_000
+/** Fast enough that the answer looks typed, slow enough to cost nothing. */
+const ASSIST_POLL_MS = 400
+/** The prompt is the newest thing on screen; six visible lines is ample. */
+const ASSIST_LINES = 6
 
 function recordOf(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
