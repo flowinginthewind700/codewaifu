@@ -34,13 +34,16 @@ import {
   type ProAgentsData,
   type ProBridgePush,
   type ProCompanionPush,
+  type ProNoticePush,
   type ProSessionOpened,
   type ProSshProbe,
   type ProSshRoster,
   type ProSshSetup,
+  type ProTaskCreated,
   type ProTaskRequest
 } from '../src/shared/proIpc'
 import {
+  agentName,
   parseAgentInstance,
   parseSnapshot,
   SCROLL_EVENT,
@@ -214,7 +217,8 @@ function throwingClient(): HerdrClientLike {
 function recordingClient(
   calls: ClientCall[],
   closeOk = true,
-  agents: readonly AgentInstance[] = []
+  agents: readonly AgentInstance[] = [],
+  startAgentError = ''
 ): HerdrClientLike {
   return new Proxy({} as HerdrClientLike, {
     get(_target, prop): unknown {
@@ -239,6 +243,9 @@ function recordingClient(
             worktree: { checkoutPath: '' }
           }
         }
+        // herdr validating an agent name is the one refusal a case can ask for
+        // by name: it is the failure the bench used to swallow whole.
+        if (prop === 'startAgent' && startAgentError) throw new Error(startAgentError)
         if (prop === 'startAgent' || prop === 'promptAgent') return { agentId: 'a-new' }
         // An absolute scroll answers with the pane it moved, and the number the
         // bench shows is herdr's own post-scroll offsets rather than the one we
@@ -264,6 +271,8 @@ interface FakeSessionOpts {
   closeOk?: boolean
   /** What it answers `listAgents` with: herdr's live instances. */
   agents?: readonly AgentInstance[]
+  /** What it refuses `startAgent` with; absent means it accepts the name. */
+  startAgentError?: string
 }
 
 function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
@@ -284,7 +293,7 @@ function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
     subscribedPanes: 0
   })
   const client = opts.record
-    ? recordingClient(calls, opts.closeOk ?? true, opts.agents ?? [])
+    ? recordingClient(calls, opts.closeOk ?? true, opts.agents ?? [], opts.startAgentError ?? '')
     : throwingClient()
   const snapshot = opts.snapshot ?? null
 
@@ -715,6 +724,8 @@ interface BootOpts {
   binaries?: readonly string[]
   /** What the fake herdr answers `agent.list` with. Needs `record`. */
   agents?: readonly AgentInstance[]
+  /** What the fake herdr refuses `agent.start` with; absent means it accepts. */
+  startAgentError?: string
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -723,7 +734,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
     snapshot: opts.snapshot ?? null,
     record: opts.record ?? false,
     closeOk: opts.closeOk,
-    agents: opts.agents
+    agents: opts.agents,
+    startAgentError: opts.startAgentError
   })
   const logs: string[] = []
   const announced: string[] = []
@@ -2323,5 +2335,104 @@ describe('the new-task agent picker', () => {
       'claude',
       'grok'
     ])
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Creating a task: what the form gets back, and what herdr is asked for
+ * ------------------------------------------------------------------ */
+
+/**
+ * One report - "I picked codex, a plain terminal opened, and the new task was
+ * not selected" - turned out to be two unrelated defects on the same screen.
+ *
+ * The agent: `createTask` handed herdr the task title as the agent name and
+ * caught whatever came back into a null. herdr validates that name (lowercase
+ * ASCII letter first, `[a-z0-9_-]`, 32 bytes, unique among live agents), so
+ * "Fix Login" and 论文采集 were both refused and the pane came up as a plain
+ * shell under a row that claimed to have an agent. Nothing said why, because
+ * the refusal was swallowed on the way out.
+ *
+ * The selection: `createTask` answered an envelope - `{taskId, workspaceId,
+ * paneId, task}` - while the IPC type promised a bare `TaskRecord`, so the
+ * dialog read `result.data.id`, got undefined, and the tree highlighted
+ * nothing. A payload type that lies is invisible from the window, which is the
+ * only place the consequence shows up.
+ */
+describe('ProService task creation', () => {
+  function createRequest(
+    title: string,
+    agent = '',
+    start = false
+  ): Extract<ProTaskRequest, { op: 'create' }> {
+    return {
+      op: 'create',
+      title,
+      goal: '',
+      // A directory that really exists, because the form is refused before it
+      // ever reaches herdr otherwise, and these cases are about herdr.
+      workdir: IMPORT_DIR,
+      branch: '',
+      base: '',
+      worktree: false,
+      agent,
+      start,
+      prompt: ''
+    }
+  }
+
+  /** Online and settled: an offline bench records the task and starts nothing. */
+  async function createBench(opts: { startAgentError?: string } = {}): Promise<Bench> {
+    const bench = await boot({
+      tasks: [],
+      record: true,
+      gitRoots: { [IMPORT_DIR]: IMPORT_ROOT },
+      ...opts
+    })
+    bench.session.setOnline(true)
+    await flush()
+    return bench
+  }
+
+  it('answers with the task it created, which is what the tree selects', async () => {
+    const bench = await createBench()
+    const result = await bench.service.taskOp(createRequest('the new task'))
+    expect(result.ok, result.detail).toBe(true)
+    const data = result.data as ProTaskCreated
+    expect(data.task.id).toBeTruthy()
+    expect(data.taskId).toBe(data.task.id)
+    expect(data.paneId).toBe('p-new')
+    expect(bench.registry.get(data.task.id)?.title).toBe('the new task')
+  })
+
+  it('names the agent with something herdr accepts, not the title a human typed', async () => {
+    const bench = await createBench()
+    const result = await bench.service.taskOp(createRequest('Fix Login', 'codex', true))
+    expect(result.ok, result.detail).toBe(true)
+    const started = bench.session.calls.find((call) => call.method === 'startAgent')
+    expect(started, 'the agent was never started').toBeTruthy()
+    const arg = started?.arg as { name: string; kind: string; paneId: string }
+    expect(arg.kind).toBe('codex')
+    expect(arg.paneId).toBe('p-new')
+    expect(arg.name).not.toBe('Fix Login')
+    expect(arg.name).toBe(agentName('Fix Login', (result.data as ProTaskCreated).task.id))
+    expect(/^[a-z][a-z0-9_-]*$/.test(arg.name)).toBe(true)
+    expect(arg.name.length).toBeLessThanOrEqual(32)
+    // herdr accepted it, so there is nothing to complain about and the bench
+    // stays quiet - the warning is the second half of the fix, not the first.
+    expect(bench.emits.filter((emit) => emit.channel === IPC.pushProNotice)).toHaveLength(0)
+  })
+
+  it('says why when herdr refuses the agent anyway', async () => {
+    const bench = await createBench({ startAgentError: 'invalid_agent_name' })
+    const result = await bench.service.taskOp(createRequest('Fix Login', 'codex', true))
+    // The task still exists: a refused agent leaves a pane the human can type
+    // into, which is worth more than a form that failed outright.
+    expect(result.ok, result.detail).toBe(true)
+    const notice = bench.emits.find((emit) => emit.channel === IPC.pushProNotice)
+      ?.payload as ProNoticePush
+    expect(notice?.tone).toBe('warn')
+    expect(notice?.text).toContain('invalid_agent_name')
+    expect(bench.logs.some((line) => line.includes('herdr refused to start the agent'))).toBe(true)
   })
 })

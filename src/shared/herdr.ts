@@ -33,6 +33,70 @@ export function agentStatusOf(value: unknown): AgentStatus {
   return STATUS_VALUES.includes(raw) ? (raw as AgentStatus) : 'unknown'
 }
 
+/* ------------------------------------------------------------------ *
+ * Agent names: herdr's grammar, mirrored so we never send a name it rejects
+ * ------------------------------------------------------------------ */
+
+/** herdr counts bytes, and everything `agentName` emits is ASCII, so this is both. */
+export const AGENT_NAME_MAX = 32
+
+/**
+ * Build a name `agent.start` will accept, from a title a human typed.
+ *
+ * herdr validates the name it is handed (`thirdparty/herdr/src/app/agents.rs`):
+ * it must start with a lowercase ASCII letter, hold only lowercase letters,
+ * digits, `-` and `_`, fit in 32 bytes, and not already belong to another live
+ * agent. A task title satisfies none of that by default - "论文采集", "Fix
+ * Login" and "wire up /api/v2" are all refused with `invalid_agent_name`, and
+ * two tasks both titled "fix the flaky test" collide on `duplicate_agent_name`.
+ *
+ * Passing the title through anyway is what made "start codex in this pane"
+ * silently produce a plain shell: the refusal was caught and dropped, so the
+ * bench showed a task with an agent while the pane showed a prompt. Hence this
+ * function, which is the only way Pro names an agent.
+ *
+ * The title becomes a slug so `herdr agent list` stays readable, and the task id
+ * is always the tail because it is the only part that is unique. Truncation
+ * spends the budget on the slug and never on the id: a name that lost its id
+ * would put two tasks back on one `agent.*` target. A CJK title slugifies to
+ * nothing, which is fine - the id on its own is already a valid name.
+ */
+export function agentName(title: string, taskId: string): string {
+  const id = uniqueTail(taskId)
+  const body = letterFirst(slug(title))
+  const room = AGENT_NAME_MAX - id.length - 1
+  if (body && room > 0) return `${body.slice(0, room).replace(/-+$/, '')}-${id}`
+  return id
+}
+
+/**
+ * The task id, kept whole. It is the only part of a name that is unique, so it
+ * is the part that never loses characters to truncation - but herdr wants a
+ * leading lowercase letter, and an id that happens to start with a digit gets
+ * one prepended rather than the digit dropped. Trimming the unique part is how
+ * two tasks end up addressing the same agent.
+ */
+function uniqueTail(taskId: string): string {
+  const raw = slug(taskId)
+  if (!raw) return 'task'
+  return (/^[a-z]/.test(raw) ? raw : `t${raw}`).slice(0, AGENT_NAME_MAX)
+}
+
+/** Same recipe as `suggestBranch`: fold accents, lowercase, keep alnum runs. */
+function slug(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** herdr wants a leading lowercase letter, so a digit-first slug loses its digits. */
+function letterFirst(text: string): string {
+  return text.replace(/^[^a-z]+/, '')
+}
+
 /**
  * How herdr refers to a resumable agent conversation. `id` is what the CLI
  * accepts on its resume flag; `path` is a transcript file we would have to

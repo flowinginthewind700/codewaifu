@@ -30,6 +30,7 @@
 import fs from 'node:fs'
 import { applyPatch, type AppConfig, type ProConfig } from '../../shared/config'
 import {
+  agentName,
   isScrollEvent,
   isStatusEvent,
   parseScrollChange,
@@ -97,6 +98,8 @@ import {
   type ProSshRoster,
   type ProSshSetup,
   type ProSshRequest,
+  type ProTaskCreated,
+  type ProTaskEnvelope,
   type ProTaskRequest,
   type ImportCandidate
 } from '../../shared/proIpc'
@@ -127,7 +130,7 @@ import {
   type ResolveDeps
 } from './herdr/discovery'
 import { HerdrSession, type SessionChange, type SessionStatus } from './herdr/session'
-import type { ConnectFn } from './herdr/socket'
+import { HerdrError, type ConnectFn } from './herdr/socket'
 import { HerdrLauncher, realServerSpawn } from './herdr/launcher'
 import {
   TerminalBridge,
@@ -1844,7 +1847,7 @@ export class ProService implements CompanionApi {
         if (!task) return this.noTask(request.taskId)
         this.registry.save()
         this.invalidate()
-        return okResult({ task }, '', 'patched')
+        return okResult<ProTaskEnvelope>({ task }, '', 'patched')
       }
       case 'status': {
         const task = this.registry.setStatus(request.taskId, request.status)
@@ -1860,7 +1863,7 @@ export class ProService implements CompanionApi {
         )
         this.registry.save()
         this.invalidate()
-        return okResult({ task }, '', request.status)
+        return okResult<ProTaskEnvelope>({ task }, '', request.status)
       }
       case 'remove': {
         const task = this.registry.get(request.taskId)
@@ -2004,7 +2007,9 @@ export class ProService implements CompanionApi {
    * `created-offline` so the human can still see the task and its goal, and
    * recovery will bind it to a workspace the moment herdr appears.
    */
-  private async createTask(request: Extract<ProTaskRequest, { op: 'create' }>): Promise<ProResult> {
+  private async createTask(
+    request: Extract<ProTaskRequest, { op: 'create' }>
+  ): Promise<ProResult<ProTaskCreated>> {
     // `~` and an empty field both mean home, and the expansion happens here
     // rather than in the form because this is the layer that knows whose home
     // it is. What the registry stores is always a real absolute path.
@@ -2063,13 +2068,35 @@ export class ProService implements CompanionApi {
     const paneId = paneIds[0] ?? ''
 
     if (client && paneId && request.start && request.agent) {
-      const instance = await client
-        .startAgent({ name: task.title || task.id, kind: request.agent, paneId })
-        .catch(() => null)
+      // The name is derived, not the title: herdr rejects anything that is not a
+      // lowercase ASCII slug (see `agentName`), and a CJK or capitalized title
+      // used to cost the human their agent.
+      let instance: AgentInstance | null = null
+      let refusal = ''
+      try {
+        instance = await client.startAgent({
+          name: agentName(task.title, task.id),
+          kind: request.agent,
+          paneId
+        })
+      } catch (error) {
+        // Say why. Swallowing this left a bench row that claimed an agent and a
+        // pane that was a plain shell, with nothing on screen to explain the gap.
+        refusal = error instanceof Error ? error.message : String(error)
+        this.host.log('warn', 'pro: herdr refused to start the agent', {
+          paneId,
+          kind: request.agent,
+          code: error instanceof HerdrError ? error.code : '',
+          error: refusal
+        })
+      }
       if (instance) {
         this.registry.patch(task.id, { agentKind: instance.agent || request.agent })
       } else {
-        this.notice(this.text(AGENT_START_FAILED), 'warn')
+        this.notice(
+          refusal ? `${this.text(AGENT_START_FAILED)}: ${refusal}` : this.text(AGENT_START_FAILED),
+          'warn'
+        )
       }
     }
     if (client && paneId && request.prompt) {
@@ -2094,7 +2121,7 @@ export class ProService implements CompanionApi {
     this.git.invalidate(finalWorkdir)
     if (this.session) await this.session.refresh().catch(() => null)
     this.invalidate()
-    return okResult({ taskId: task.id, workspaceId, paneId, task }, '', code)
+    return okResult<ProTaskCreated>({ taskId: task.id, workspaceId, paneId, task }, '', code)
   }
 
   /**

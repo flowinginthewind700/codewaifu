@@ -17,7 +17,6 @@ import type {
   LedgerEntry,
   LedgerKind,
   RecoveryPlan,
-  TaskRecord,
   TaskStatus
 } from '@shared/pro'
 import type {
@@ -33,6 +32,8 @@ import type {
   ProSshProbe,
   ProSshRoster,
   ProSshSetup,
+  ProTaskCreated,
+  ProTaskEnvelope,
   ImportCandidate
 } from '@shared/proIpc'
 import type { HiddenMachine, MachineEdit, SshMachine } from '@shared/ssh'
@@ -108,6 +109,11 @@ export const proApi = {
     call(CH.proCommand, { type: 'snoozeAll', minutes }),
 
   task: {
+    /**
+     * The record is nested, not the payload: `data.task` is the row and
+     * `data.paneId` is the terminal it landed in. Reading `data.id` here is
+     * exactly how the bench came to select nothing after a create.
+     */
     create: (input: {
       title: string
       goal: string
@@ -118,14 +124,15 @@ export const proApi = {
       agent?: string
       start?: boolean
       prompt?: string
-    }): Promise<ProResult<TaskRecord>> => call<TaskRecord>(CH.proTask, { op: 'create', ...input }),
+    }): Promise<ProResult<ProTaskCreated>> =>
+      call<ProTaskCreated>(CH.proTask, { op: 'create', ...input }),
     patch: (
       taskId: string,
       patch: { title?: string; goal?: string; branch?: string }
-    ): Promise<ProResult<TaskRecord>> =>
-      call<TaskRecord>(CH.proTask, { op: 'patch', taskId, ...patch }),
-    setStatus: (taskId: string, status: TaskStatus): Promise<ProResult<TaskRecord>> =>
-      call<TaskRecord>(CH.proTask, { op: 'status', taskId, status }),
+    ): Promise<ProResult<ProTaskEnvelope>> =>
+      call<ProTaskEnvelope>(CH.proTask, { op: 'patch', taskId, ...patch }),
+    setStatus: (taskId: string, status: TaskStatus): Promise<ProResult<ProTaskEnvelope>> =>
+      call<ProTaskEnvelope>(CH.proTask, { op: 'status', taskId, status }),
     /**
      * Drop the row, and - when `closeShell` is set - the terminal underneath it.
      *

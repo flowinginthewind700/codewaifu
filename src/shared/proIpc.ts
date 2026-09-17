@@ -25,6 +25,7 @@ import {
   type AttentionKind,
   type LedgerKind,
   type StateCounts,
+  type TaskRecord,
   type TaskStatus
 } from './pro'
 import type { BenchCommand } from './companionLink'
@@ -325,6 +326,31 @@ export type ProTaskRequest =
    * apart, and the bench reports whatever it says instead of guessing.
    */
   | { op: 'steer'; taskId: string; message: string }
+
+/**
+ * What the task ops answer with.
+ *
+ * These are named rather than inlined in `api.ts` because the renderer used to
+ * declare all three as `ProResult<TaskRecord>` while main returned an envelope.
+ * The lie cost a whole feature: `result.data.id` was `undefined`, so the bench
+ * selected nothing, and the effect that keeps the selection honest fell back to
+ * the first row in the tree. A task the human just created not being the task
+ * they are looking at reads as "create did nothing". Typing the payload here,
+ * where main is typed against it too, is what makes that unrepeatable.
+ */
+export interface ProTaskCreated {
+  taskId: string
+  /** '' when herdr was unreachable and the row was recorded offline. */
+  workspaceId: string
+  /** The pane the agent was launched into; '' when there was none. */
+  paneId: string
+  task: TaskRecord
+}
+
+/** `patch` and `status` answer with the record as it now stands. */
+export interface ProTaskEnvelope {
+  task: TaskRecord
+}
 
 export type ProTaskParse = ProTaskRequest | ProReject
 

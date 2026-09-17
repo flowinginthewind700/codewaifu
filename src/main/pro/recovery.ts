@@ -20,7 +20,7 @@ import {
   type RecoveryStep,
   type TaskRecord
 } from '../../shared/pro'
-import type { Snapshot } from '../../shared/herdr'
+import { agentName, type Snapshot } from '../../shared/herdr'
 import type { HerdrClient } from './herdr/client'
 
 export interface RecoveryDeps {
@@ -190,7 +190,10 @@ export class Recovery {
             return { kind: 'agent', ok: false, detail: 'no pane to launch into' }
           }
           const agent = await herdr.startAgent({
-            name: task.title || step.agent,
+            // Derived, never the raw title: herdr answers `invalid_agent_name`
+            // to anything that is not a lowercase ASCII slug, which would fail
+            // the recovery of exactly the tasks whose names are worth reading.
+            name: agentName(task.title || step.agent, task.id),
             kind: step.agent,
             paneId: result.paneId,
             args: step.args

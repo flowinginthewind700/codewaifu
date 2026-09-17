@@ -123,7 +123,10 @@ export function NewTaskDialog({
       setError(result.detail || result.code)
       return
     }
-    onCreated(result.data)
+    // `data` is the envelope, not the row: handing the envelope over made the
+    // bench call `setTaskId(undefined)`, so the tree never selected the task
+    // the human had just created.
+    onCreated(result.data.task)
   }
 
   const onKeyDown = (event: ReactKeyboardEvent): void => {
