@@ -1,0 +1,85 @@
+/* ==========================================================================
+   Tip - one tooltip for both windows.
+
+   The native `title` attribute was the old answer: OS-grey, a second late,
+   and invisible in the transparent stage window. This bubble is painted from
+   the shared tokens instead, so it reads as the same hand on either surface:
+   near-opaque glass over the desktop, opaque charcoal over the Bench.
+
+   Coordinates and side come from the component (fixed position, measured
+   after mount). This file owns only the look: the caret that points back at
+   the control, the keycap, and the one-frame fade that keeps a warm tooltip
+   from popping.
+   ========================================================================== */
+
+.tip {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(280px, calc(100vw - 12px));
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--highlight), 0 8px 22px rgb(0 0 0 / 0.4);
+  color: var(--text);
+  font-size: var(--fs-small, 11px);
+  font-weight: 550;
+  line-height: 1.35;
+  letter-spacing: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: tip-in 110ms var(--ease-swift, ease-out);
+}
+
+/* The caret: a rotated square on the edge facing the control, so the bubble
+   never reads as a stray label. `--tip-arrow` is the control's centre in the
+   bubble's own coordinates, clamped by the component to stay on the bubble. */
+.tip::after {
+  content: '';
+  position: absolute;
+  left: var(--tip-arrow, 12px);
+  width: 8px;
+  height: 8px;
+  background: var(--bg-strong);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.tip[data-place='bottom']::after {
+  top: -4.5px;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.tip[data-place='top']::after {
+  bottom: -4.5px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+.tip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tip-kbd {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0;
+  }
+}

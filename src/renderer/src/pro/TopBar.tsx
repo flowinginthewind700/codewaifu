@@ -39,6 +39,7 @@ import {
 } from 'lucide-react'
 import type { ProConfig } from '@shared/config'
 import type { BenchView } from '@shared/pro'
+import { Tip } from '../Tip'
 import { fill, type Translate } from './i18n'
 
 export interface TopBarProps {
@@ -94,10 +95,12 @@ export function BenchBrand({
     <div className="brand">
       <span className="brand-name">{t('brandName')}</span>
       <div className="mode-switch" role="group" aria-label={t('modeLabel')}>
-        <button type="button" className="mode" title={t('backToStage')} onClick={onStage}>
-          <PersonStanding />
-          <span>{t('modeStage')}</span>
-        </button>
+        <Tip label={t('backToStage')}>
+          <button type="button" className="mode" onClick={onStage}>
+            <PersonStanding />
+            <span>{t('modeStage')}</span>
+          </button>
+        </Tip>
         <span className="mode" data-on="1" aria-current="true" title={t('modeBench')}>
           <LayoutGrid />
           <span>{t('modeBench')}</span>
@@ -134,16 +137,17 @@ export function TopBar({
 
   return (
     <header className="bench-topbar">
-      <button
-        type="button"
-        className="btn ghost icon rail-toggle"
-        title={t('treeTitle')}
-        aria-label={t('treeTitle')}
-        aria-expanded={railOpen}
-        onClick={onToggleRail}
-      >
-        <PanelLeft />
-      </button>
+      <Tip label={t('treeTitle')}>
+        <button
+          type="button"
+          className="btn ghost icon rail-toggle"
+          aria-label={t('treeTitle')}
+          aria-expanded={railOpen}
+          onClick={onToggleRail}
+        >
+          <PanelLeft />
+        </button>
+      </Tip>
 
       <BenchBrand t={t} onStage={onStage} />
 
@@ -192,101 +196,109 @@ export function TopBar({
         </Toggle>
       </div>
 
-      <select
-        className="select"
-        value={pro?.summon ?? 'blocking'}
-        disabled={!pro}
-        aria-label={t('summonLabel')}
-        title={t('summonLabel')}
-        onChange={(event) => onSummon(event.target.value as ProConfig['summon'])}
-      >
+      <Tip label={t('summonLabel')}>
+        <select
+          className="select"
+          value={pro?.summon ?? 'blocking'}
+          disabled={!pro}
+          aria-label={t('summonLabel')}
+          onChange={(event) => onSummon(event.target.value as ProConfig['summon'])}
+        >
         {(Object.keys(SUMMON_KEYS) as (keyof typeof SUMMON_KEYS)[]).map((value) => (
-          <option key={value} value={value}>
-            {`${t('summonLabel')}: ${t(SUMMON_KEYS[value])}`}
-          </option>
-        ))}
-      </select>
+            <option key={value} value={value}>
+              {`${t('summonLabel')}: ${t(SUMMON_KEYS[value])}`}
+            </option>
+          ))}
+        </select>
+      </Tip>
 
       <div className="topbar-actions">
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={t('snoozeAll')}
-          aria-label={t('snoozeAll')}
-          disabled={!attentionCount}
-          onClick={onSnoozeAll}
-        >
-          <Clock />
-        </button>
+        <Tip label={t('snoozeAll')}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={t('snoozeAll')}
+            disabled={!attentionCount}
+            onClick={onSnoozeAll}
+          >
+            <Clock />
+          </button>
+        </Tip>
         {/* Two doors into existing work, side by side and differently shaped:
             adopt takes what herdr is already running, import takes what the
             companion has seen codex and claude do on this machine. */}
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={t('adopt')}
-          aria-label={t('adopt')}
-          onClick={onAdopt}
-        >
-          <FolderInput />
-        </button>
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={t('importTitle')}
-          aria-label={t('importTitle')}
-          onClick={onImport}
-        >
-          <Import />
-        </button>
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={companionVisible ? t('companionHide') : t('companionShow')}
-          aria-label={companionVisible ? t('companionHide') : t('companionShow')}
-          aria-pressed={companionVisible}
-          data-open={companionVisible || undefined}
-          onClick={onCompanion}
-        >
-          <Sparkles />
-        </button>
+        <Tip label={t('adopt')}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={t('adopt')}
+            onClick={onAdopt}
+          >
+            <FolderInput />
+          </button>
+        </Tip>
+        <Tip label={t('importTitle')}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={t('importTitle')}
+            onClick={onImport}
+          >
+            <Import />
+          </button>
+        </Tip>
+        <Tip label={companionVisible ? t('companionHide') : t('companionShow')}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={companionVisible ? t('companionHide') : t('companionShow')}
+            aria-pressed={companionVisible}
+            data-open={companionVisible || undefined}
+            onClick={onCompanion}
+          >
+            <Sparkles />
+          </button>
+        </Tip>
         {/* The three ways a new pane comes into being, grouped at the right end
             of the bar: somewhere else (connect), right here (terminal), and
             under an agent (new task). `i` focuses a pane that already exists,
             which is why none of these is labelled like it. */}
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={t('sshConnectTitle')}
-          aria-label={t('sshConnectTitle')}
-          onClick={onConnect}
-        >
-          <Plug />
-        </button>
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={t('sshTerminalTitle')}
-          aria-label={t('sshTerminalTitle')}
-          onClick={onTerminal}
-        >
-          <TerminalSquare />
-        </button>
+        <Tip label={t('sshConnectTitle')} kbd="c">
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={t('sshConnectTitle')}
+            onClick={onConnect}
+          >
+            <Plug />
+          </button>
+        </Tip>
+        <Tip label={t('sshTerminalTitle')} kbd="t">
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={t('sshTerminalTitle')}
+            onClick={onTerminal}
+          >
+            <TerminalSquare />
+          </button>
+        </Tip>
         <button type="button" className="btn primary sm" onClick={onNewTask}>
           <Plus />
           {t('newTask')}
         </button>
-        <button
-          type="button"
-          className="btn ghost icon right-toggle"
-          title={t('queueTitle')}
-          aria-label={t('queueTitle')}
-          aria-expanded={rightOpen}
-          data-count={attentionCount}
-          onClick={onToggleRight}
-        >
-          <Bell />
-        </button>
+        <Tip label={t('queueTitle')}>
+          <button
+            type="button"
+            className="btn ghost icon right-toggle"
+            aria-label={t('queueTitle')}
+            aria-expanded={rightOpen}
+            data-count={attentionCount}
+            onClick={onToggleRight}
+          >
+            <Bell />
+          </button>
+        </Tip>
       </div>
     </header>
   )
@@ -329,15 +341,16 @@ function HerdrChip({
       <span className="chip offline" title={herdr.error || herdr.socketPath}>
         <span className="chip-dot" />
         <span className="chip-text">{t('herdrOffline')}</span>
-        <button
-          type="button"
-          className="btn ghost icon"
-          title={t('refresh')}
-          aria-label={t('refresh')}
-          onClick={onRediscover}
-        >
-          <RefreshCw />
-        </button>
+        <Tip label={t('refresh')}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            aria-label={t('refresh')}
+            onClick={onRediscover}
+          >
+            <RefreshCw />
+          </button>
+        </Tip>
       </span>
     )
   }
@@ -381,15 +394,16 @@ function DeclinedChip({
     <span className="chip declined" title={`${t('declinedTip')}\n${ids}`}>
       <FolderX />
       <span className="chip-text">{fill(t, 'declinedChip', { n: declined.length })}</span>
-      <button
-        type="button"
-        className="btn ghost icon"
-        title={t('declinedClose')}
-        aria-label={t('declinedClose')}
-        onClick={onPurge}
-      >
-        <Power />
-      </button>
+      <Tip label={t('declinedClose')}>
+        <button
+          type="button"
+          className="btn ghost icon"
+          aria-label={t('declinedClose')}
+          onClick={onPurge}
+        >
+          <Power />
+        </button>
+      </Tip>
     </span>
   )
 }
@@ -408,15 +422,17 @@ function Toggle({
   children: ReactElement
 }): ReactElement {
   return (
-    <label className="toggle" title={label}>
-      <input
-        type="checkbox"
-        checked={on}
-        disabled={disabled}
-        aria-label={label}
-        onChange={onChange}
-      />
-      {children}
-    </label>
+    <Tip label={label}>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={disabled}
+          aria-label={label}
+          onChange={onChange}
+        />
+        {children}
+      </label>
+    </Tip>
   )
 }

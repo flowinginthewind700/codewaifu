@@ -5,6 +5,7 @@ import { motionMenuLabels } from '@shared/motion'
 import type { Live2DMotionRef } from '@shared/live2dCatalog'
 import type { Lang } from '@shared/protocol'
 import type { Translate } from './i18n'
+import { Tip } from './Tip'
 
 type Menu = 'expression' | 'motion' | null
 
@@ -89,15 +90,16 @@ export function StageTools({
           that leaves the stage. The hairline says so without a label. */}
       {proAvailable ? (
         <>
-          <button
-            className="icon-btn"
-            type="button"
-            title={t('openBench')}
-            aria-label={t('openBench')}
-            onClick={onBench}
-          >
-            <PanelsTopLeft size={14} strokeWidth={2.2} />
-          </button>
+          <Tip label={t('openBench')} side="top">
+            <button
+              className="icon-btn"
+              type="button"
+              aria-label={t('openBench')}
+              onClick={onBench}
+            >
+              <PanelsTopLeft size={14} strokeWidth={2.2} />
+            </button>
+          </Tip>
           <span className="stage-tools-sep" aria-hidden="true" />
         </>
       ) : null}
@@ -142,42 +144,45 @@ export function StageTools({
           ))}
         </div>
       ) : null}
-      <button
-        className="icon-btn"
-        type="button"
-        title={t('reportAria')}
-        aria-label={t('reportAria')}
-        onClick={onReport}
-      >
-        <Activity size={14} strokeWidth={2.2} />
-      </button>
-      {expressions.length ? (
+      <Tip label={t('reportAria')} side="top">
         <button
           className="icon-btn"
           type="button"
-          title={t('expression')}
-          aria-label={t('expression')}
-          aria-haspopup="menu"
-          aria-expanded={open === 'expression'}
-          data-on={open === 'expression' ? '1' : undefined}
-          onClick={() => toggle('expression')}
+          aria-label={t('reportAria')}
+          onClick={onReport}
         >
-          <Smile size={14} strokeWidth={2.2} />
+          <Activity size={14} strokeWidth={2.2} />
         </button>
+      </Tip>
+      {expressions.length ? (
+        <Tip label={t('expression')} side="top">
+          <button
+            className="icon-btn"
+            type="button"
+            aria-label={t('expression')}
+            aria-haspopup="menu"
+            aria-expanded={open === 'expression'}
+            data-on={open === 'expression' ? '1' : undefined}
+            onClick={() => toggle('expression')}
+          >
+            <Smile size={14} strokeWidth={2.2} />
+          </button>
+        </Tip>
       ) : null}
       {motions.length ? (
-        <button
-          className="icon-btn"
-          type="button"
-          title={t('motion')}
-          aria-label={t('motion')}
-          aria-haspopup="menu"
-          aria-expanded={open === 'motion'}
-          data-on={open === 'motion' ? '1' : undefined}
-          onClick={() => toggle('motion')}
-        >
-          <PersonStanding size={14} strokeWidth={2.2} />
-        </button>
+        <Tip label={t('motion')} side="top">
+          <button
+            className="icon-btn"
+            type="button"
+            aria-label={t('motion')}
+            aria-haspopup="menu"
+            aria-expanded={open === 'motion'}
+            data-on={open === 'motion' ? '1' : undefined}
+            onClick={() => toggle('motion')}
+          >
+            <PersonStanding size={14} strokeWidth={2.2} />
+          </button>
+        </Tip>
       ) : null}
     </div>
   )

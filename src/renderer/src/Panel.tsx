@@ -8,6 +8,7 @@ import { ChatView } from './ChatView'
 import { LogTab } from './LogTab'
 import { SettingsTab } from './SettingsTab'
 import { ThreadsTab } from './ThreadsTab'
+import { Tip } from './Tip'
 
 interface PanelProps {
   tab: PanelTab
@@ -90,15 +91,16 @@ export function Panel(props: PanelProps): ReactElement {
             )
           })}
         </div>
-        <button
-          className="icon-btn"
-          type="button"
-          title={t('collapse')}
-          aria-label={t('collapse')}
-          onClick={onCollapse}
-        >
-          <ChevronsUpDown size={15} />
-        </button>
+        <Tip label={t('collapse')}>
+          <button
+            className="icon-btn"
+            type="button"
+            aria-label={t('collapse')}
+            onClick={onCollapse}
+          >
+            <ChevronsUpDown size={15} />
+          </button>
+        </Tip>
       </div>
 
       {tab === 'threads' ? (

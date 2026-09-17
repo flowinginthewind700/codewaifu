@@ -26,6 +26,7 @@ import type { SteerResult, ThreadInfo } from '@shared/protocol'
 import { api } from './api'
 import { useImeEnter } from './useIme'
 import type { StringKey, Translate } from './i18n'
+import { Tip } from './Tip'
 
 /**
  * The conversation of one agent thread, read straight off the agent's own
@@ -227,9 +228,11 @@ export function ChatView({ thread, t, onBack, onSteer, onNotice, onSay, onOpenPa
   return (
     <div className="chat" data-solid="1">
       <header className="chat-head">
-        <button className="icon-btn" type="button" title={t('chatBack')} aria-label={t('chatBack')} onClick={onBack}>
-          <ChevronLeft size={16} />
-        </button>
+        <Tip label={t('chatBack')}>
+          <button className="icon-btn" type="button" aria-label={t('chatBack')} onClick={onBack}>
+            <ChevronLeft size={16} />
+          </button>
+        </Tip>
         <div className="chat-id">
           <div className="chat-title">{thread.title || thread.id.slice(0, 8)}</div>
           <div className="chat-sub">
@@ -239,35 +242,38 @@ export function ChatView({ thread, t, onBack, onSteer, onNotice, onSay, onOpenPa
           </div>
         </div>
         <div className="chat-actions">
-          <button
-            className="icon-btn"
-            type="button"
-            title={t('chatReadAloud')}
-            aria-label={t('chatReadAloud')}
-            disabled={!lastAssistant}
-            onClick={() => lastAssistant && onSay(lastAssistant)}
-          >
-            <Volume2 size={14} />
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            title={t('chatReveal')}
-            aria-label={t('chatReveal')}
-            disabled={!transcript?.file}
-            onClick={() => transcript?.file && onOpenPath(transcript.file)}
-          >
-            <FolderOpen size={14} />
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            title={t('chatRefresh')}
-            aria-label={t('chatRefresh')}
-            onClick={() => void load(limit, true)}
-          >
-            <RotateCw size={14} />
-          </button>
+          <Tip label={t('chatReadAloud')}>
+            <button
+              className="icon-btn"
+              type="button"
+              aria-label={t('chatReadAloud')}
+              disabled={!lastAssistant}
+              onClick={() => lastAssistant && onSay(lastAssistant)}
+            >
+              <Volume2 size={14} />
+            </button>
+          </Tip>
+          <Tip label={t('chatReveal')}>
+            <button
+              className="icon-btn"
+              type="button"
+              aria-label={t('chatReveal')}
+              disabled={!transcript?.file}
+              onClick={() => transcript?.file && onOpenPath(transcript.file)}
+            >
+              <FolderOpen size={14} />
+            </button>
+          </Tip>
+          <Tip label={t('chatRefresh')}>
+            <button
+              className="icon-btn"
+              type="button"
+              aria-label={t('chatRefresh')}
+              onClick={() => void load(limit, true)}
+            >
+              <RotateCw size={14} />
+            </button>
+          </Tip>
         </div>
       </header>
 

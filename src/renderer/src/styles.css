@@ -11,8 +11,10 @@
    --ease-swift for motion, letter-spacing 0 for body copy.
    ========================================================================== */
 
-/* Tokens live in tokens.css, shared with the Bench window. */
+/* Tokens live in tokens.css, shared with the Bench window; tip.css is the
+   shared tooltip, so both windows paint the same bubble. */
 @import './tokens.css';
+@import './tip.css';
 
 * {
   box-sizing: border-box;

@@ -136,6 +136,18 @@ afterEach(async () => {
 })
 
 describe('the needs-me chip', () => {
+  it('names every control itself: aria-labels yes, native titles no', async () => {
+    // The icon row owns its tooltips now (see Tip): a `title` left on a bar
+    // button would stack an OS bubble under the real one a second later.
+    await renderBar(bench([], 0))
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('header button'))
+    expect(buttons.length).toBeGreaterThan(8)
+    for (const button of buttons) {
+      expect(button.getAttribute('aria-label') || button.textContent).toBeTruthy()
+      expect(button.hasAttribute('title')).toBe(false)
+    }
+  })
+
   it('shows the badge number, not the task number', async () => {
     const view = bench([item({ kind: 'question' }), item({ kind: 'permission' })], 1)
     // The shape that split the two numbers: one task, two things to answer.

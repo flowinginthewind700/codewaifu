@@ -51,6 +51,7 @@ import { makeTranslator, type Translate } from './i18n'
 import { MediaBar } from './MediaBar'
 import { Panel } from './Panel'
 import { StageTools } from './StageTools'
+import { Tip } from './Tip'
 import { widgetVoice } from './voice'
 import type { AvatarHandle } from './Live2DAvatar'
 
@@ -844,34 +845,37 @@ export function App(): ReactElement {
             {runtime.hooks.codex.installed ? <span className="tag codex">codex</span> : null}
             {runtime.hooks.claude.installed ? <span className="tag claude">claude</span> : null}
             <span className="statusbar-spacer" />
-            <button
-              className="icon-btn"
-              type="button"
-              title={muted ? t('unmute') : t('mute')}
-              aria-label={muted ? t('unmute') : t('mute')}
-              onClick={() => void patch({ speak: muted })}
-            >
-              {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-            </button>
-            <button
-              className="icon-btn"
-              type="button"
-              title={expanded ? t('collapse') : t('expand')}
-              aria-label={expanded ? t('collapse') : t('expand')}
-              aria-expanded={expanded}
-              onClick={() => toggleExpanded(!expanded)}
-            >
-              <ChevronsUpDown size={15} />
-            </button>
-            <button
-              className="icon-btn"
-              type="button"
-              title={t('hide')}
-              aria-label={t('hide')}
-              onClick={() => void api.hide()}
-            >
-              <EyeOff size={15} />
-            </button>
+            <Tip label={muted ? t('unmute') : t('mute')}>
+              <button
+                className="icon-btn"
+                type="button"
+                aria-label={muted ? t('unmute') : t('mute')}
+                onClick={() => void patch({ speak: muted })}
+              >
+                {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+              </button>
+            </Tip>
+            <Tip label={expanded ? t('collapse') : t('expand')}>
+              <button
+                className="icon-btn"
+                type="button"
+                aria-label={expanded ? t('collapse') : t('expand')}
+                aria-expanded={expanded}
+                onClick={() => toggleExpanded(!expanded)}
+              >
+                <ChevronsUpDown size={15} />
+              </button>
+            </Tip>
+            <Tip label={t('hide')}>
+              <button
+                className="icon-btn"
+                type="button"
+                aria-label={t('hide')}
+                onClick={() => void api.hide()}
+              >
+                <EyeOff size={15} />
+              </button>
+            </Tip>
           </div>
 
           {expanded ? (
