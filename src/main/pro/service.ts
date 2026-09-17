@@ -81,6 +81,7 @@ import {
   parseProSsh,
   parseProTask,
   type ProActionRequest,
+  type ProAgentsData,
   type ProCompanionPush,
   type ProFocusPush,
   type ProFramePush,
@@ -146,6 +147,7 @@ import {
   type TaskRef,
   type TriageEvent
 } from './triage'
+import { findBinary } from '../shellPath'
 
 /* ------------------------------------------------------------------ *
  * Host: the only surface that touches Electron
@@ -391,6 +393,13 @@ export interface ProServiceDeps {
   exists?: ExistsFn
   /** The directory read discovery uses to name sessions it is not pointed at. */
   listDir?: ListDirFn
+  /**
+   * Resolves an agent binary on the repaired PATH, for the new-task picker's
+   * "what can this machine start" half. Real by default (`shellPath`); a test
+   * fakes it, because which of the eight CLIs happen to be installed is a fact
+   * about the machine running the test and must not change the verdict.
+   */
+  findBinary?: (name: string) => Promise<string | null>
   /** Injected into `HerdrSession` and `HerdrClient`; a test fakes the socket. */
   connect?: ConnectFn
   spawn?: SpawnFn
@@ -470,6 +479,25 @@ const KNOWN_AGENT_KINDS: readonly string[] = [
 ]
 
 /**
+ * Union of installed kinds and running kinds, deduped, in a stable order:
+ * installed first (the list reads as a menu of what this machine can start),
+ * then running kinds the probe did not know about.
+ *
+ * Pure, so a test can pin the order and the dedupe without a filesystem.
+ */
+export function unionAgentKinds(
+  installed: readonly string[],
+  instances: readonly AgentInstance[]
+): string[] {
+  const names = [...installed]
+  for (const instance of instances) {
+    const kind = instance.agent
+    if (kind && !names.includes(kind)) names.push(kind)
+  }
+  return names
+}
+
+/**
  * Which ledger kind a hook writes. `tool` and `subagent` are deliberately
  * absent: an agent that runs forty commands a minute would bury the goal and
  * the decisions, and the ledger exists so a task can be handed off, not so it
@@ -543,6 +571,7 @@ export class ProService implements CompanionApi {
   private readonly discoverFn: (deps: ResolveDeps) => HerdrTarget
   private readonly existsFn: ExistsFn
   private readonly listDirFn: ListDirFn
+  private readonly findBinaryFn: (name: string) => Promise<string | null>
   private readonly connect: ConnectFn | undefined
   private readonly spawn: SpawnFn | undefined
   private readonly launcher: HerdrLauncher
@@ -608,6 +637,7 @@ export class ProService implements CompanionApi {
     this.intervals = { ...DEFAULT_INTERVALS, ...(deps.intervals ?? {}) }
     this.existsFn = deps.exists ?? fsPathExists
     this.listDirFn = deps.listDir ?? fsListDir
+    this.findBinaryFn = deps.findBinary ?? findBinary
     this.discoverFn = deps.discover ?? ((input) => discoverHerdr(input))
     this.connect = deps.connect
     this.spawn = deps.spawn
@@ -2676,14 +2706,33 @@ export class ProService implements CompanionApi {
           'discovery'
         )
       case 'agents': {
+        /*
+         * The form wants names, not records. `listAgents` answers one object
+         * per *running* instance, and those objects rendered as `<option>`
+         * children are React error #31: a fault card over the whole bench on
+         * any machine where herdr had so much as one agent live. Two sources
+         * of names instead, which is also what the form's own comment asks
+         * for - what herdr can start *here*, not a hardcoded menu: a kind
+         * whose binary is on the repaired PATH, and a kind with a live
+         * instance, which proves launchability even when the binary sits
+         * somewhere the probe cannot see.
+         */
         const client = this.client()
-        if (client) {
-          const agents = await client.listAgents().catch(() => [] as AgentInstance[])
-          if (agents.length) return okResult({ agents, kinds: KNOWN_AGENT_KINDS }, '', 'agents')
+        const instances = client
+          ? await client.listAgents().catch(() => [] as AgentInstance[])
+          : []
+        const installed = (
+          await Promise.all(
+            KNOWN_AGENT_KINDS.map(async (kind) => ((await this.findBinaryFn(kind)) ? kind : ''))
+          )
+        ).filter((kind) => kind !== '')
+        const agents = unionAgentKinds(installed, instances)
+        if (agents.length) {
+          return okResult<ProAgentsData>({ agents, kinds: KNOWN_AGENT_KINDS }, '', 'agents')
         }
         // Offline fallback: the create form still needs a picker, and the agent
         // list is not a secret worth failing the form over.
-        return okResult({ agents: [], kinds: KNOWN_AGENT_KINDS }, '', 'agents-fallback')
+        return okResult<ProAgentsData>({ agents: [], kinds: KNOWN_AGENT_KINDS }, '', 'agents-fallback')
       }
       case 'threads':
         return okResult({ threads: await this.importCandidates() }, '', 'threads')

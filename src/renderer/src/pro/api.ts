@@ -22,6 +22,7 @@ import type {
 } from '@shared/pro'
 import type {
   ProBridgePush,
+  ProAgentsData,
   ProCompanionPush,
   ProFocusPush,
   ProFramesPush,
@@ -235,8 +236,8 @@ export const proApi = {
 
   host: {
     discovery: (): Promise<ProResult> => call(CH.proHost, { op: 'discovery' }),
-    agents: (): Promise<ProResult<{ agents: string[] }>> =>
-      call<{ agents: string[] }>(CH.proHost, { op: 'agents' }),
+    agents: (): Promise<ProResult<ProAgentsData>> =>
+      call<ProAgentsData>(CH.proHost, { op: 'agents' }),
     /**
      * The codex/claude sessions on this machine, with the ones already claimed
      * marked. Answered as an envelope, not as a bare list: the picker has to be

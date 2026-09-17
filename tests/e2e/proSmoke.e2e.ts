@@ -207,6 +207,43 @@ describe('the built Bench', () => {
     expect(methods, 'the event stream never subscribed').toContain('events.subscribe')
   })
 
+  it('opens the new-task dialog with names in the picker, not records', async () => {
+    /*
+     * The shipped crash this pins: `host.agents` answered herdr's agent
+     * *records*, the form rendered each one as an `<option>` child, and React
+     * error #31 took the whole bench down behind a fault card - on any machine
+     * where herdr had so much as one agent running. The fake serves exactly
+     * that (one live codex instance), which is why the picker must be asserted
+     * non-empty alongside the absence of a fault: an empty picker renders
+     * nothing and so crashes nothing, and it was the old fake's `agents: []`
+     * that let this ship.
+     */
+    await page!.keyboard.press('n')
+    const dialog = page!.locator('.dialog')
+    await dialog.waitFor({ timeout: 15_000 })
+    /*
+     * Wait for a real option rather than reading the select straight away: the
+     * dialog paints with an empty, disabled picker and fills it over IPC, and
+     * the other side of that call probes eight binaries on the repaired PATH.
+     * Reading early gets the `-` placeholder, which passes the no-fault half of
+     * this case and says nothing about the payload.
+     */
+    const picker = dialog.locator('.select')
+    // `attached`, not the default `visible`: an `<option>` in a closed select
+    // has no box of its own, so "visible" never arrives even once it is there.
+    await picker.locator('option[value="codex"]').waitFor({ state: 'attached', timeout: 15_000 })
+    const names = await picker.locator('option').allInnerTexts()
+    expect(names, await diagnose(page!)).toContain('codex')
+    expect(await page!.locator('.fault').count(), await diagnose(page!)).toBe(0)
+    // Escape closes it, or the next case starts behind a scrim.
+    await page!.keyboard.press('Escape')
+    // `waitFor` rather than `toHaveCount`: this file is typechecked by
+    // tsconfig.node.json against vitest's `expect`, which has no playwright
+    // matchers on it.
+    await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined)
+    expect(await dialog.count(), await diagnose(page!)).toBe(0)
+  })
+
   it('evaluates the built bundle without throwing', async () => {
     /*
      * Reload first, and here is why.

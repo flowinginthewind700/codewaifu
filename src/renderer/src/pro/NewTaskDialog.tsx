@@ -59,7 +59,16 @@ export function NewTaskDialog({
     let cancelled = false
     void proApi.host.agents().then((result) => {
       if (cancelled || !result.ok) return
-      const found = result.data?.agents ?? []
+      /*
+       * Names only, and anything else is dropped rather than rendered. The
+       * handler once answered herdr's agent records here, and one of those as
+       * an `<option>` child is React error #31 - a fault card over the whole
+       * bench. The typed contract now forbids it, but a picker that degrades
+       * to empty is survivable in a way a crashed dialog is not.
+       */
+      const found = (result.data?.agents ?? []).filter(
+        (name): name is string => typeof name === 'string'
+      )
       setAgents(found)
       setAgent((current) => current || found.find((name) => name === 'codex') || found[0] || '')
     })

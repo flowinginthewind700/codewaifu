@@ -438,6 +438,22 @@ export interface ImportCandidate {
   /** Non-empty once a task claims this session; the row is then not offered. */
   taskId: string
 }
+
+/**
+ * What the new-task picker is handed: names, and nothing but names.
+ *
+ * Shared rather than declared twice because the two sides never meet at
+ * runtime, only over IPC, and `okResult` infers its `T` from whatever it is
+ * given - so a handler that answered herdr's agent *records* here typechecked
+ * cleanly and then crashed the dialog that rendered them (`<option>` children
+ * have to be text: React error #31, a fault card over the whole bench). Both
+ * sides name this type, and the drift becomes a compile error.
+ */
+export interface ProAgentsData {
+  agents: string[]
+  kinds: readonly string[]
+}
+
 /* ------------------------------------------------------------------ *
  * Ledger
  * ------------------------------------------------------------------ */

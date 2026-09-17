@@ -23,6 +23,38 @@ import path from 'node:path'
 /** What `parseSnapshot` needs to not return null: a version, or a pane. */
 export const E2E_HERDR_VERSION = '0.9.0-e2e'
 
+/**
+ * One running agent, served by `agent.list` only.
+ *
+ * The new-task picker asks `agent.list` what herdr can start, and an empty
+ * answer hid a shipped crash: the handler once handed the dialog these
+ * records themselves, and rendering one as an `<option>` child is React error
+ * #31 - a fault card over the whole bench on any machine where herdr had so
+ * much as one agent running. The snapshot keeps `agents: []` on purpose: the
+ * attention queue and the top-bar counts have their own tests, and this fake
+ * exists to put one live instance in front of the picker.
+ */
+const RUNNING_AGENT = {
+  pane_id: 'p1',
+  workspace_id: 'w1',
+  tab_id: 't1',
+  terminal_id: 'term1',
+  name: 'e2e-agent',
+  agent: 'codex',
+  display_agent: 'Codex',
+  agent_status: 'working',
+  agent_session: null,
+  state_labels: {},
+  tokens: {},
+  cwd: '/tmp',
+  foreground_cwd: '/tmp',
+  focused: true,
+  revision: 1,
+  interactive_ready: true,
+  launch_pending: false,
+  state_change_seq: 1
+}
+
 const SNAPSHOT = {
   version: E2E_HERDR_VERSION,
   protocol: 22,
@@ -125,7 +157,7 @@ function resultFor(method: string): Record<string, unknown> {
     case 'workspace.list':
       return { type: 'ok', workspaces: SNAPSHOT.workspaces }
     case 'agent.list':
-      return { type: 'ok', agents: [] }
+      return { type: 'ok', agents: [RUNNING_AGENT] }
     case 'events.subscribe':
       // The ack is what flips the session to 'live'; the stream itself then
       // stays open and silent, which is a healthy idle herdr.

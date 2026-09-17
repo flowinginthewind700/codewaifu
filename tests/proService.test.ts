@@ -31,6 +31,7 @@ import {
 import {
   okResult,
   type ImportCandidate,
+  type ProAgentsData,
   type ProBridgePush,
   type ProCompanionPush,
   type ProSessionOpened,
@@ -39,7 +40,14 @@ import {
   type ProSshSetup,
   type ProTaskRequest
 } from '../src/shared/proIpc'
-import { parseSnapshot, SCROLL_EVENT, type HerdrEvent, type Snapshot } from '../src/shared/herdr'
+import {
+  parseAgentInstance,
+  parseSnapshot,
+  SCROLL_EVENT,
+  type AgentInstance,
+  type HerdrEvent,
+  type Snapshot
+} from '../src/shared/herdr'
 import { IPC } from '../src/shared/ipcChannels'
 import type { ChatTranscript } from '../src/shared/chat'
 import type { SteerResult, ThreadInfo } from '../src/shared/protocol'
@@ -54,6 +62,7 @@ import { SshService, type MachinesFile } from '../src/main/pro/ssh'
 import { makeMachine, type SshMachine } from '../src/shared/ssh'
 import {
   ProService,
+  unionAgentKinds,
   type CompanionLike,
   type HerdrClientLike,
   type LedgerLike,
@@ -202,7 +211,11 @@ function throwingClient(): HerdrClientLike {
  * makes, and remembers every call so a test can assert on what the unattended
  * pass actually did to herdr.
  */
-function recordingClient(calls: ClientCall[], closeOk = true): HerdrClientLike {
+function recordingClient(
+  calls: ClientCall[],
+  closeOk = true,
+  agents: readonly AgentInstance[] = []
+): HerdrClientLike {
   return new Proxy({} as HerdrClientLike, {
     get(_target, prop): unknown {
       return async (...args: unknown[]): Promise<unknown> => {
@@ -211,6 +224,10 @@ function recordingClient(calls: ClientCall[], closeOk = true): HerdrClientLike {
         // and `setup` do once the pane exists: answering null here would turn
         // every ssh case into the "herdr refused the input" case.
         if (prop === 'sendText' || prop === 'sendKeys') return true
+        // The picker reads "what is running" from here. Answered from the option
+        // instead of falling through to null, because `listAgents` promises an
+        // array and a null is the fake lying about the interface.
+        if (prop === 'listAgents') return [...agents]
         // Closing is a boolean, and the honest default is "yes": a herdr that
         // always refused would make every removal case a refusal case. The
         // cases that want a refusal say so through `closeOk`.
@@ -245,6 +262,8 @@ interface FakeSessionOpts {
   record?: boolean
   /** What the recorded client answers `closeWorkspace` with. */
   closeOk?: boolean
+  /** What it answers `listAgents` with: herdr's live instances. */
+  agents?: readonly AgentInstance[]
 }
 
 function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
@@ -264,7 +283,9 @@ function fakeSession(opts: FakeSessionOpts = {}): FakeSession {
     reconnectInMs: online ? 0 : 1000,
     subscribedPanes: 0
   })
-  const client = opts.record ? recordingClient(calls, opts.closeOk ?? true) : throwingClient()
+  const client = opts.record
+    ? recordingClient(calls, opts.closeOk ?? true, opts.agents ?? [])
+    : throwingClient()
   const snapshot = opts.snapshot ?? null
 
   return {
@@ -690,6 +711,10 @@ interface BootOpts {
    * fails instead of quietly talking to a fake.
    */
   terminal?: boolean
+  /** Which CLIs the fake binary probe finds; absent means this machine has none. */
+  binaries?: readonly string[]
+  /** What the fake herdr answers `agent.list` with. Needs `record`. */
+  agents?: readonly AgentInstance[]
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -697,7 +722,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
   const session = fakeSession({
     snapshot: opts.snapshot ?? null,
     record: opts.record ?? false,
-    closeOk: opts.closeOk
+    closeOk: opts.closeOk,
+    agents: opts.agents
   })
   const logs: string[] = []
   const announced: string[] = []
@@ -706,6 +732,7 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
   const spawner = fakeSpawner()
   const ledgerTape: LedgerInput[] = []
   const steers: string[] = []
+  const installed = opts.binaries ?? []
   const registry = new TaskRegistry({
     file: 'memory://bench.json',
     now: () => clock.now(),
@@ -738,6 +765,11 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
       autoResumeMax: opts.autoResumeMax ?? 12
     },
     discover: () => herdrTarget(),
+    // Which agent CLIs are installed is a fact about the machine running the
+    // test, so the picker's probe is faked the way `git` and `ssh` are: a case
+    // that passed here and failed on a laptop without `claude` would have been
+    // testing the developer's PATH.
+    findBinary: async (name) => (installed.includes(name) ? `/usr/bin/${name}` : null),
     registry,
     ledger: fakeLedger(ledgerTape),
     // The mode switch is a verb the real bridge owns, so the cases that send one
@@ -2204,3 +2236,92 @@ function scrollCommands(bench: Bench): Array<Record<string, unknown>> {
     .commands()
     .filter((command) => command.type === 'terminal.scroll')
 }
+
+/**
+ * One live herdr instance, built through the wire parser like everything else
+ * here: a hand-written `AgentInstance` literal would drift from what herdr
+ * sends, and the shape of that record is the whole subject of the cases below.
+ */
+function runningAgent(kind: string): AgentInstance {
+  return parseAgentInstance({
+    pane_id: LIVE_PANE,
+    workspace_id: LIVE_WORKSPACE,
+    tab_id: 'tab-1',
+    terminal_id: 'term-1',
+    name: `agent-${kind || 'none'}`,
+    agent: kind,
+    agent_status: 'working',
+    cwd: WORKDIR
+  }) as AgentInstance
+}
+
+/** What the new-task dialog is handed when it asks for the agent picker. */
+async function picker(bench: Bench): Promise<ProAgentsData> {
+  const result = await bench.service.hostOp({ op: 'agents' })
+  expect(result.ok, result.detail).toBe(true)
+  return result.data as ProAgentsData
+}
+
+describe('the new-task agent picker', () => {
+  /*
+   * The shipped crash: `host.agents` answered herdr's agent *records*, the
+   * dialog rendered each one as an `<option>` child, and React error #31 put a
+   * fault card over the whole bench - on any machine where herdr had so much as
+   * one agent running. `okResult` infers its `T`, so nothing upstream of the
+   * window could see it. The payload type now lives in `shared/` with the
+   * renderer naming it too, and these cases are the runtime half; the e2e smoke
+   * test drives the real dialog against a fake herdr serving one live instance,
+   * and it cannot run in CI.
+   */
+  it('answers names, never the records herdr answers with', async () => {
+    const bench = await boot({ record: true, agents: [runningAgent('codex')] })
+    expect((await picker(bench)).agents).toEqual(['codex'])
+  })
+
+  it('lists what this machine can start when nothing is running', async () => {
+    // `record` with no instances: herdr is up and answers `agent.list` with an
+    // empty list, which is the quiet-machine case every install starts in. The
+    // form still needs a menu, and an empty one reads as "this machine has no
+    // agents" - a lie the dialog has no way to correct.
+    const bench = await boot({ record: true, agents: [], binaries: ['claude', 'codex'] })
+    const result = await bench.service.hostOp({ op: 'agents' })
+    expect(result.ok, result.detail).toBe(true)
+    expect(result.code).toBe('agents')
+    // Probe order, not the order the binaries were listed in: the menu reads
+    // `KNOWN_AGENT_KINDS`, so it is the same menu on every machine.
+    expect((result.data as ProAgentsData).agents).toEqual(['codex', 'claude'])
+  })
+
+  it('adds a running kind the probe cannot see, once', async () => {
+    // A live instance proves launchability better than a PATH entry does, which
+    // is why the two sources are unioned rather than one preferred over the
+    // other: herdr can be running an agent from a path no login shell has.
+    const bench = await boot({
+      record: true,
+      binaries: ['codex'],
+      agents: [runningAgent('codex'), runningAgent('aider'), runningAgent('aider')]
+    })
+    expect((await picker(bench)).agents).toEqual(['codex', 'aider'])
+  })
+
+  it('falls back to an empty picker rather than failing the form', async () => {
+    // Nothing running and nothing installed: the one honest empty. The form
+    // opens anyway, because a picker is not worth failing a dialog over.
+    const bench = await boot({ record: true, agents: [] })
+    const result = await bench.service.hostOp({ op: 'agents' })
+    expect(result.ok, result.detail).toBe(true)
+    expect(result.code).toBe('agents-fallback')
+    expect((result.data as ProAgentsData).agents).toEqual([])
+  })
+
+  it('drops a record herdr left the kind off of', () => {
+    // An empty name would render as a blank row that launches nothing, and
+    // `unionAgentKinds` is the one place the two sources meet.
+    expect(unionAgentKinds(['codex'], [runningAgent('')])).toEqual(['codex'])
+    expect(unionAgentKinds(['codex', 'claude'], [runningAgent('grok')])).toEqual([
+      'codex',
+      'claude',
+      'grok'
+    ])
+  })
+})
