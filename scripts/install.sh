@@ -300,12 +300,55 @@ asset_spellings() {
   esac
 }
 
+# Stop the companion that is currently running out of $1, and wait for it to
+# actually be gone. Waiting is the point: pkill returns as soon as the signal is
+# delivered, so the old code copied over a binary that was still mapped and the
+# install died with "Text file busy" -- an upgrade that looks like a broken
+# download. SIGTERM first because the app writes a ledger and an endpoint file on
+# the way out; SIGKILL only if it ignores that, and a sentence of our own if it
+# survives both, because ETXTBSY is not one anyone debugs quickly.
+linux_stop_running() {
+  local root="$1" i
+  command -v pkill >/dev/null 2>&1 || return 0
+  [ -e "$root/codewaifu" ] || return 0
+
+  pkill -f "$root/codewaifu" >/dev/null 2>&1 || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    linux_still_running "$root" || return 0
+    sleep 1
+  done
+
+  warn "the running companion ignored SIGTERM; sending SIGKILL"
+  pkill -9 -f "$root/codewaifu" >/dev/null 2>&1 || true
+  for i in 1 2 3 4 5; do
+    linux_still_running "$root" || return 0
+    sleep 1
+  done
+  die "could not stop the companion running from $root; close it and re-run the installer"
+}
+
+# pgrep -f matches the whole cmdline, which is how the renderers and the zygote
+# are caught too: they all carry the binary's path, and any one of them still
+# mapped is enough to make the copy fail. No pgrep means no way to know, so the
+# caller proceeds and cp reports the collision itself.
+linux_still_running() {
+  command -v pgrep >/dev/null 2>&1 || return 1
+  pgrep -f "$1/codewaifu" >/dev/null 2>&1
+}
+
 # Turn any Linux artifact into a plain directory tree at $1. The AppImage is
 # extracted rather than mounted: FUSE is often missing or blocked (containers,
 # some corporate images), and an extracted tree is what lets us ship a launcher,
 # a .desktop entry and an icon without root.
 linux_unpack() {
   local src="$1" dest="$2" stage
+  # Stop a running companion before anything is copied, never after. `cp -a`
+  # over an executing binary fails with ETXTBSY ("Text file busy"), which killed
+  # the install halfway and left the old tree in place; and even when the copy
+  # does land, killing afterwards means the app the user is looking at keeps
+  # running the code we just replaced. Both call sites pass $LINUX_ROOT, so this
+  # is the one place the invariant can be guaranteed for every artifact kind.
+  linux_stop_running "$dest"
   mkdir -p "$dest"
   case "$src" in
     *.AppImage)
@@ -500,13 +543,6 @@ install_linux() {
     say "downloading $asset ($TAG)"
     curl -fL --retry 3 -o "$tmp/$asset" "$url" || die "download failed: $url"
     linux_unpack "$tmp/$asset" "$LINUX_ROOT"
-  fi
-
-  # A previous instance holding the old files open makes an in-place replace
-  # look like it worked while the running app keeps the old code.
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -f "$LINUX_ROOT/codewaifu" >/dev/null 2>&1 || true
-    sleep 1
   fi
 
   linux_probe_sandbox

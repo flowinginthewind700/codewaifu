@@ -1,5 +1,13 @@
-import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -315,6 +323,82 @@ describe.skipIf(!hasBash)('install.sh', () => {
     expect(explained, stderr).toBe(true)
     expect(stderr.includes('curl: (22)')).toBe(false)
   })
+
+  itPosix(
+    'stops the running companion before copying over it, so an upgrade cannot die with ETXTBSY',
+    async () => {
+      // What this reproduces: upgrading while the companion is open. The old
+      // order copied the new tree first and killed the app afterwards, so
+      // `cp -a` met a mapped executable and the install died with "cannot
+      // create regular file ...: Text file busy" -- which reads like a corrupt
+      // download, and leaves the old code installed with no hint why.
+      const sleep = '/bin/sleep'
+      if (!existsSync(sleep)) return // no POSIX sleep to stand in for the app
+
+      const sandbox = mkdtempSync(join(tmpdir(), 'cw-install-busy-'))
+      const root = join(sandbox, 'share/CodeWaifu')
+      mkdirSync(root, { recursive: true })
+
+      // It has to be a real binary that is really executing. A shell script
+      // would prove nothing: bash only holds it open, cp truncates it happily,
+      // and the collision this guards against would never happen.
+      const installed = join(root, 'codewaifu')
+      copyFileSync(sleep, installed)
+      chmodSync(installed, 0o755)
+      const running = spawn(installed, ['30'], { detached: true, stdio: 'ignore' })
+      await new Promise<void>((resolve) => running.once('spawn', resolve))
+
+      const alive = (): boolean => {
+        try {
+          process.kill(running.pid as number, 0)
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      // The incoming build, recognisable once the copy has landed.
+      const build = join(sandbox, 'build')
+      mkdirSync(build)
+      const fresh = join(build, 'codewaifu')
+      writeFileSync(fresh, '#!/bin/sh\necho NEW-BUILD\n')
+      chmodSync(fresh, 0o755)
+
+      try {
+        expect(alive(), 'the stand-in should be running before the install').toBe(true)
+
+        const result = spawnSync('bash', [INSTALLER, '--from', build, '--no-herdr'], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: sandbox,
+            XDG_DATA_HOME: join(sandbox, 'share'),
+            CODEWAIFU_LINUX_ROOT: root,
+            CODEWAIFU_LINUX_BIN: join(sandbox, 'bin')
+          }
+        })
+
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+        expect(result.stderr).not.toContain('Text file busy')
+        expect(readFileSync(installed, 'utf8')).toContain('NEW-BUILD')
+        // And it was the installer that stopped it. `kill(pid, 0)` is no use
+        // here: the child is ours, so it lingers as a zombie until this process
+        // reaps it, and a zombie still answers signal 0 while holding nothing
+        // mapped. Waiting for the exit event and reading the signal is the
+        // difference between "the installer stopped the app" and "it died".
+        if (running.exitCode === null && running.signalCode === null) {
+          await new Promise<void>((resolve) => running.once('exit', () => resolve()))
+        }
+        expect(running.signalCode).toBe('SIGTERM')
+      } finally {
+        try {
+          running.kill('SIGKILL')
+        } catch {
+          // already gone
+        }
+      }
+    }
+  )
 })
 
 /**
