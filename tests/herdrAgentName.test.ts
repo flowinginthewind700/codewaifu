@@ -79,8 +79,8 @@ describe('agentName', () => {
   })
 
   it('gives two tasks with the same title two names', () => {
-    // `duplicate_agent_name` is the other refusal, and the one a shape test
-    // cannot see: both names below are individually valid.
+    // `agent_name_taken` is the other refusal, and the one a shape test cannot
+    // see: both names below are individually valid.
     expect(agentName('fix the flaky test', 'aaa111')).not.toBe(
       agentName('fix the flaky test', 'bbb222')
     )
@@ -105,5 +105,19 @@ describe('agentName', () => {
     const limit = /name\.len\(\)\s*<=\s*(\d+)/.exec(fs.readFileSync(source, 'utf8'))
     expect(limit, 'valid_agent_name no longer states a byte limit').not.toBeNull()
     expect(AGENT_NAME_MAX).toBe(Number(limit?.[1]))
+  })
+
+  it('names the two refusals herdr actually emits', () => {
+    // The codes quoted in `agentName`'s docs and in the notice a refused start
+    // raises. An invented one reads as a typo right up to the moment someone
+    // greps herdr for it and finds nothing - which is how
+    // `duplicate_agent_name` came to be written down here in the first place.
+    const source = path.join(__dirname, '..', 'thirdparty', 'herdr', 'src', 'app', 'agents.rs')
+    if (!fs.existsSync(source)) return
+    const rust = fs.readFileSync(source, 'utf8')
+    for (const code of ['invalid_agent_name', 'agent_name_taken']) {
+      expect(rust, `herdr no longer emits ${code}`).toContain(`code: "${code}".into()`)
+    }
+    expect(rust).not.toContain('duplicate_agent_name')
   })
 })

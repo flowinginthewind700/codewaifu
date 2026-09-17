@@ -48,7 +48,9 @@ export const AGENT_NAME_MAX = 32
  * digits, `-` and `_`, fit in 32 bytes, and not already belong to another live
  * agent. A task title satisfies none of that by default - "论文采集", "Fix
  * Login" and "wire up /api/v2" are all refused with `invalid_agent_name`, and
- * two tasks both titled "fix the flaky test" collide on `duplicate_agent_name`.
+ * two tasks both titled "fix the flaky test" collide on `agent_name_taken`
+ * (`AgentStartError::DuplicateName`, which also lists the panes already holding
+ * that name - worth reading, because it names the task you forgot about).
  *
  * Passing the title through anyway is what made "start codex in this pane"
  * silently produce a plain shell: the refusal was caught and dropped, so the
