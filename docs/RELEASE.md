@@ -35,11 +35,11 @@ binaries of the machine it runs on, and a missing one degrades every spoken
 line to the OS voice without a word in the log. The mac entry asks for
 `darwin arm64 x64` so the x64 zip from an arm64 runner still speaks.
 
-Linux and Windows then get a packaged-binary smoke (`--cli help`, and
-`--cli status --json` on Windows) - the only automated check that catches a
-missing native dependency or a broken asar layout. Artifacts upload per
-platform; the publish job attaches them to the GitHub release for the tag with
-`--generate-notes`.
+All three then get a packaged-binary smoke (`--cli help`, plus
+`--cli status --json` on Windows and on mac's arm64 bundle) - the only automated
+check that catches a missing native dependency or a broken asar layout.
+Artifacts upload per platform; the publish job attaches them to the GitHub
+release for the tag with `--generate-notes`.
 
 The deb/AppImage and the nsis/portable exe in that release are what Linux and
 Windows users install from. Nothing else to do.
@@ -104,10 +104,17 @@ name. The publish job re-uploads the linux and windows assets as well
 (`--clobber`, same commit, same bytes); `latest-mac.yml` stays out either way.
 
 Those mac bytes are unsigned exactly like the local ones (`identity: null`,
-ad-hoc, no notarization), so nothing about installing changes. What does change
-is that no human has opened them: download the published arm64 dmg and run the
-checks above against it before calling the release done.
+ad-hoc, no notarization), so nothing about installing changes - README already
+tells users about the first-launch warning. What does change is that no human
+has opened them: the packaged-binary smoke in CI is all they get. When the
+downlink allows, pull the published arm64 dmg and run the manual checks above
+against it too.
+
+The same dispatch with no `tag` is a build check rather than a release: all
+three platforms compile, package and smoke, and nothing is attached anywhere.
+That is the cheap way to prove a workflow change before a real tag depends on
+it.
 
 Known mac gaps at this version: no LoginItems autostart (Linux has
-`install.sh --autostart`), and no CI runtime check - the manual pass above is
-the only gate the mac build has.
+`install.sh --autostart`), and the manual pass above is still the only check
+that a mac build speaks in the neural voice and that herdr attaches.

@@ -7,8 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'release tag to publish, e.g. v0.4.12'
-        required: true
+        description: 'release tag to publish, e.g. v0.4.12 - empty builds all three platforms and publishes nothing'
+        required: false
+        default: ''
       publish_mac:
         description: 'attach the CI-built mac artifacts too'
         type: boolean
@@ -107,6 +108,19 @@ jobs:
           test -n "$bin"
           xvfb-run -a "$bin" --cli help
 
+      - name: smoke (mac)
+        if: matrix.platform == 'mac'
+        run: |
+          # The same question the other two ask: does the packaged binary run,
+          # or is it a pile of bytes with a native module missing inside. Mac
+          # ships from CI whenever a maintainer cannot push 435 MB up a bad
+          # uplink (docs/RELEASE.md), and this is the only gate those bytes get.
+          # No xvfb business: a macOS runner has a real window server session.
+          bin=release/mac-arm64/CodeWaifu.app/Contents/MacOS/CodeWaifu
+          test -x "$bin"
+          "$bin" --cli help
+          "$bin" --cli status --json
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}
@@ -122,8 +136,10 @@ jobs:
     name: publish release
     needs: build
     # A tag push carries its own name in the ref. A dispatch runs on a branch,
-    # so the tag it should publish has to be said out loud.
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    # so the tag it should publish has to be said out loud - and a dispatch with
+    # no tag at all is a build check: three platforms compiled, packaged and
+    # smoked, with nothing attached to any release.
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
