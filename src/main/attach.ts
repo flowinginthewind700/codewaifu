@@ -16,7 +16,6 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { cleanPaths, isStalePaste, pasteFileName } from '../shared/attach'
 import { attachmentsDir } from './env'
 
@@ -314,15 +313,39 @@ export function fileUrlToPath(value: string): string {
   const text = (value || '').trim()
   if (!text) return ''
   if (!/^file:/i.test(text)) {
-    // Windows hands back `C:\path\to\it` under `FileNameW`: already a path, and
-    // `fileURLToPath` would throw at it rather than pass it through.
+    // Windows hands back `C:\path\to\it` under `FileNameW`: already a path,
+    // not a URL, and nothing here should rewrite it.
     return /^[A-Za-z]:[\\/]/.test(text) || text.startsWith('/') ? text : ''
   }
+  // Parsed by hand, not by node's `fileURLToPath`: node parses a file URL for
+  // the platform it is running on, so the same URL is a path on one runner and
+  // a throw on another - the Windows CI died on POSIX URLs no Windows
+  // clipboard will ever carry, and the reverse blind spot is a Windows
+  // drive-letter URL pasted into a mac test run. A file URL's pathname *is*
+  // the path, percent-decoded; the only platform knowledge left is spelling.
+  let url: URL
   try {
-    return fileURLToPath(text)
+    url = new URL(text)
   } catch {
     return ''
   }
+  if (url.protocol !== 'file:') return ''
+  let pathname: string
+  try {
+    pathname = decodeURIComponent(url.pathname)
+  } catch {
+    // A lone percent is a legal character in a filename and an illegal escape
+    // in a URL; the raw pathname is the honest reading of both.
+    pathname = url.pathname
+  }
+  if (!pathname || pathname === '/') return ''
+  // `file:///C:/x` arrives as `/C:/x`: the slash is the URL's, not the disk's.
+  if (/^\/[A-Za-z]:/.test(pathname)) return pathname.slice(1)
+  // `file://server/share/x` is a UNC path on the platform that has them.
+  if (url.hostname && url.hostname !== 'localhost') {
+    return `\\\\${url.hostname}${pathname.replace(/\//g, '\\')}`
+  }
+  return pathname
 }
 
 /**

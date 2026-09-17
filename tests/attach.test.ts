@@ -363,6 +363,18 @@ describe('fileUrlToPath', () => {
     expect(fileUrlToPath('C:\\Users\\me\\a.png')).toBe('C:\\Users\\me\\a.png')
   })
 
+  it('reads a Windows spelling on any platform, because the parser is not node\'s', () => {
+    // node's fileURLToPath answers for the platform it runs on, which made the
+    // Windows CI die on POSIX URLs and would make a mac run blind to these.
+    expect(fileUrlToPath('file:///C:/Users/me/a%20shot.png')).toBe('C:/Users/me/a shot.png')
+    expect(fileUrlToPath('file://server/share/a.png')).toBe('\\\\server\\share\\a.png')
+    expect(fileUrlToPath('file://localhost/tmp/a.png')).toBe('/tmp/a.png')
+  })
+
+  it('keeps a lone percent, which is a legal filename character and an illegal escape', () => {
+    expect(fileUrlToPath('file:///tmp/100%.png')).toBe('/tmp/100%.png')
+  })
+
   it('refuses a URL that is not a file, which is what keeps a copied link a link', () => {
     expect(fileUrlToPath('https://onora.dev/x.png')).toBe('')
     expect(fileUrlToPath('')).toBe('')
