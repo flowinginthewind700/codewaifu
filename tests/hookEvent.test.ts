@@ -100,6 +100,16 @@ describe('normalizeHook', () => {
     expect(normalizeHook('unknown', { hook_event_name: 'Stop' }).agent).toBe('unknown')
   })
 
+  it('carries the pane the relay reported, and none when it did not', () => {
+    // The pane is the one identity a payload cannot carry, so it arrives beside
+    // the body rather than inside it. Absent has to stay absent: an invented
+    // pane is worse than none, because resolution believes it first.
+    const payload = { hook_event_name: 'Stop', session_id: 'abc', cwd: '/tmp/p' }
+    expect(normalizeHook('codex', payload, 5, 'w5:p1').paneId).toBe('w5:p1')
+    expect(normalizeHook('codex', payload, 5).paneId).toBe('')
+    expect(normalizeHook('codex', payload, 5, '   ').paneId).toBe('')
+  })
+
   it('hands out unique ids', () => {
     const ids = new Set(Array.from({ length: 500 }, () => normalizeHook('codex', { hook_event_name: 'Stop' }).id))
     expect(ids.size).toBe(500)

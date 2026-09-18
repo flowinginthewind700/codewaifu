@@ -64,8 +64,16 @@ export function nextEventId(at: number): string {
  * Turn whatever an agent POSTed into a stable internal shape. Both agents share
  * `hook_event_name`, `session_id`, `cwd` and `transcript_path`; everything else
  * is best-effort so an unknown future field never throws.
+ *
+ * `paneId` is not in the body: neither agent knows which terminal it is drawn
+ * in, but the runner relaying the hook does, and it says so in a header.
  */
-export function normalizeHook(agentRaw: string, payload: unknown, at = Date.now()): HookEvent {
+export function normalizeHook(
+  agentRaw: string,
+  payload: unknown,
+  at = Date.now(),
+  paneId = ''
+): HookEvent {
   const obj = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>
   const rawEvent = firstString(obj, ['hook_event_name', 'hookEventName', 'event'])
   const kind = kindForEvent(rawEvent)
@@ -110,6 +118,7 @@ export function normalizeHook(agentRaw: string, payload: unknown, at = Date.now(
     matcher,
     sessionId: firstString(obj, ['session_id', 'sessionId', 'thread_id']),
     cwd: firstString(obj, ['cwd', 'working_directory', 'workspace']),
+    paneId: String(paneId || '').trim(),
     title: titleMap[kind],
     detail,
     sourceText,

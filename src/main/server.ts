@@ -330,7 +330,16 @@ export class HookServer {
 
     if (route === 'hook' && method === 'POST') {
       const body = await readBody(req)
-      const event = normalizeHook(sub || 'unknown', body)
+      // The runner reports the pane it was invoked from, which is the one piece
+      // of identity the payload cannot carry: the agent does not know its own
+      // terminal. Absent (an agent outside herdr, an older runner) leaves the
+      // bench resolving by session and cwd, exactly as before.
+      const event = normalizeHook(
+        sub || 'unknown',
+        body,
+        Date.now(),
+        firstHeader(req, 'x-codewaifu-pane')
+      )
       // Respond before doing any work: the agent is waiting on this request.
       sendJson(res, 200, { ok: true, id: event.id })
       this.deps.onEvent(event)
@@ -667,6 +676,17 @@ function sendJson(res: http.ServerResponse, status: number, payload: unknown): v
     'Cache-Control': 'no-store'
   })
   res.end(body)
+}
+
+/**
+ * One header as a string. Node hands back an array for a repeated header, and
+ * `String(['a','b'])` would invent a pane id nobody ever reported, so take the
+ * first and drop the rest.
+ */
+function firstHeader(req: http.IncomingMessage, name: string): string {
+  const value = req.headers[name]
+  const one = Array.isArray(value) ? value[0] : value
+  return typeof one === 'string' ? one.trim() : ''
 }
 
 function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {

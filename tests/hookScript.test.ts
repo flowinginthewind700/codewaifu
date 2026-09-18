@@ -53,6 +53,15 @@ describe('run-hook.sh', () => {
     expect(sh).toContain('X-CodeWaifu-Token')
   })
 
+  it('reports the pane it ran in, defaulted so an unset variable stays empty', () => {
+    // Nothing in a hook payload names a terminal, so without this the app can
+    // only match on cwd - and every task in one checkout then looks like every
+    // other. `${HERDR_PANE_ID:-}` and not `${HERDR_PANE_ID}`: under `set -u`
+    // agents, an unset variable would abort the relay before the POST.
+    expect(sh).toContain('-H "X-CodeWaifu-Pane: ${HERDR_PANE_ID:-}"')
+    expect(sh).not.toContain('${HERDR_PANE_ID}"')
+  })
+
   it('never defaults the body with ${BODY:-{}} — POSIX closes at the first brace', () => {
     // That form yields `$BODY` + a literal `}` for every non-empty payload, so
     // the relay receives invalid JSON and logs an empty event. Guard the string
@@ -110,6 +119,12 @@ describe('Windows runners', () => {
     for (const field of ['CODEWAIFU_PORT', 'CODEWAIFU_TOKEN', 'CODEWAIFU_BASE']) {
       expect(ps1).toContain(field)
     }
+  })
+
+  it('sends the pane header only when herdr supplied one', () => {
+    // An empty header value is a request some stacks refuse, so the Windows
+    // relay omits the header entirely instead of sending a blank one.
+    expect(ps1).toContain('if ($env:HERDR_PANE_ID) { $headers["X-CodeWaifu-Pane"] = $env:HERDR_PANE_ID }')
   })
 })
 

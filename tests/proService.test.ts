@@ -991,6 +991,125 @@ describe('ProService hook claim', () => {
   })
 })
 
+/* ------------------------------------------------------------------ *
+ * Which task a hook belongs to
+ * ------------------------------------------------------------------ */
+
+/**
+ * The complaint behind this block: a task the human had marked done kept
+ * announcing its own finish, and marking it read bought two minutes at a time.
+ *
+ * Triage has a gate for exactly that - `review` defers to the verdict - and the
+ * gate was never reached. A hook payload carries a session id and a cwd but no
+ * pane, three tasks shared one checkout here, so the cwd match landed on
+ * whichever task the registry held first. The Stop from the finished task's
+ * terminal resolved onto a live one, the gate saw `active` and waved it
+ * through, and the finish was announced under a task that was still working.
+ * The task that actually finished kept silent in its own ledger: not one hook
+ * row was ever recorded against it.
+ *
+ * `recordHook` made it worse than a misfiled announcement. It wrote the session
+ * id from that same guess, and a session id used to outrank a pane, so the wrong
+ * binding then won every later hook on its own authority - and the poisoned id
+ * is why the fix reorders the match instead of merely adding the pane to it.
+ */
+describe('ProService hook attribution', () => {
+  /** Two tasks, one directory: the shape a cwd cannot resolve. */
+  function sharedCheckout(): TaskRecord[] {
+    return [
+      {
+        ...seedTask(),
+        id: 't-live',
+        title: 'the one still running',
+        paneIds: ['w2:p1'],
+        workspaceId: 'w2',
+        status: 'active'
+      },
+      {
+        ...seedTask(),
+        id: 't-done',
+        title: 'the one the human closed',
+        paneIds: ['w5:p1'],
+        workspaceId: 'w5',
+        status: 'done'
+      }
+    ]
+  }
+
+  /** One finish as the relay hands it over: pane in the header, rest in the body. */
+  function stop(sessionId: string, paneId = ''): ReturnType<typeof normalizeHook> {
+    return normalizeHook(
+      'codex',
+      {
+        hook_event_name: 'Stop',
+        session_id: sessionId,
+        cwd: WORKDIR,
+        last_assistant_message: 'all collected'
+      },
+      START,
+      paneId
+    )
+  }
+
+  it('files the finish of a closed task under that task, and says nothing', async () => {
+    const bench = await boot({ tasks: sharedCheckout() })
+    const event = stop('sess-done', 'w5:p1')
+
+    // Triage declined because the verdict is done...
+    expect(bench.service.onHook(event)).toBeNull()
+    // ...and declining is an answer, so the legacy voice must not say it either.
+    expect(bench.service.claimsEvent(event)).toBe(true)
+
+    // Attribution is visible in the ledger: the rows belong to the task whose
+    // terminal sent the hook, not to the one that shares its directory.
+    expect(bench.ledgerTape.map((row) => row.taskId)).toEqual(['t-done', 't-done'])
+  })
+
+  it('still raises the finish of a task that is actually running', async () => {
+    const bench = await boot({ tasks: sharedCheckout() })
+    const raised = bench.service.onHook(stop('sess-live', 'w2:p1'))
+    expect(raised?.taskId).toBe('t-live')
+    expect(raised?.kind).toBe('review')
+  })
+
+  it('believes the pane over a session id another task already holds', async () => {
+    const bench = await boot({
+      tasks: [
+        { ...seedTask(), id: 't-live', paneIds: ['w2:p1'], status: 'active' },
+        // The residue of a cwd guess, now sitting on the closed task. Under the
+        // old order this id won and the hook was filed here, forever.
+        { ...seedTask(), id: 't-done', paneIds: ['w5:p1'], status: 'done', agentSessionId: 'sess-real' }
+      ]
+    })
+
+    expect(bench.service.onHook(stop('sess-real', 'w2:p1'))?.taskId).toBe('t-live')
+    // The binding follows the pane, so the next hook needs no correcting.
+    expect(bench.registry.get('t-live')?.agentSessionId).toBe('sess-real')
+  })
+
+  it('does not write a session id it inferred from a shared directory', async () => {
+    const bench = await boot({ tasks: sharedCheckout() })
+
+    // No pane: an agent outside herdr, or a runner older than the header. The
+    // finish is still worth recording, but which of the two tasks it belongs to
+    // is a guess, and a guess must not be written down as the strongest key we
+    // hold - that is the binding which then outvotes the pane.
+    expect(bench.service.onHook(stop('sess-guess'))?.taskId).toBe('t-live')
+    expect(bench.registry.get('t-live')?.agentSessionId).toBe('')
+    expect(bench.registry.get('t-done')?.agentSessionId).toBe('')
+    expect(bench.ledgerTape.some((row) => row.kind === 'session')).toBe(false)
+    expect(bench.ledgerTape.map((row) => row.taskId)).toEqual(['t-live'])
+  })
+
+  it('falls back to what it has when nobody owns the reported pane', async () => {
+    const bench = await boot({ tasks: sharedCheckout() })
+
+    // A pane herdr has not told us about yet, or one that died between the hook
+    // and the match. Dropping the event would lose the finish entirely.
+    expect(bench.service.onHook(stop('sess-live', 'w9:p9'))?.taskId).toBe('t-live')
+  })
+})
+
 /**
  * The unattended half of "open the app after a reboot and it is already
  * working". herdr restores its own panes and we adopt them; what nobody

@@ -102,6 +102,32 @@ describe('hook ingestion', () => {
     expect(event.sourceText).toBe('全部完成了')
   })
 
+  it('reads the pane off the relay header, which is where the runner puts it', async () => {
+    const relay = await startRelay()
+    const raw = await relay.request(
+      'POST',
+      '/hook/codex',
+      {
+        'content-type': 'application/json',
+        'x-codewaifu-token': TOKEN,
+        'x-codewaifu-pane': 'w5:p1'
+      },
+      JSON.stringify({ hook_event_name: 'Stop', session_id: 'sess-pane', cwd: '/tmp/project' })
+    )
+    expect(raw.status).toBe(200)
+    expect(relay.recorded.events).toHaveLength(1)
+    expect(relay.recorded.events[0].paneId).toBe('w5:p1')
+  })
+
+  it('leaves the pane empty for a runner older than the header', async () => {
+    // The header is new and the runners on disk are rewritten lazily, so an
+    // event without one is normal rather than broken: resolution has to fall
+    // back to session and cwd exactly the way it did before.
+    const relay = await startRelay()
+    expect((await relay.post('/hook/codex', { hook_event_name: 'Stop' }, TOKEN)).status).toBe(200)
+    expect(relay.recorded.events[0].paneId).toBe('')
+  })
+
   it('survives an empty or malformed body instead of hanging the agent', async () => {
     const relay = await startRelay()
     expect((await relay.post('/hook/codex', {}, TOKEN)).status).toBe(200)

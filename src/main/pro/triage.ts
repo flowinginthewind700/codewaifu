@@ -229,6 +229,10 @@ export class Triage {
       sessionId: event.sessionId,
       transcriptPath: event.transcriptPath,
       cwd: event.cwd,
+      // The pane the runner reported. Without it a hook from a finished task's
+      // terminal resolves by cwd onto whichever task shares the directory, and
+      // the closed-task gate below then has an `active` ref to wave through.
+      paneId: event.paneId,
       agent: event.agent === 'unknown' ? '' : event.agent
     }
 

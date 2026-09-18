@@ -1222,6 +1222,7 @@ export class ProService implements CompanionApi {
       sessionId: event.sessionId,
       transcriptPath: event.transcriptPath,
       cwd: event.cwd,
+      paneId: event.paneId,
       agent: event.agent === 'unknown' ? '' : event.agent
     }
     // The tracker fires `raised`/`updated` through onTriageEvent, which is what
@@ -1233,16 +1234,20 @@ export class ProService implements CompanionApi {
   }
 
   private recordHook(event: HookEvent, hint: TaskHint): void {
-    const ref = this.resolveTaskRef(hint)
-    if (!ref) return
-    const taskId = ref.taskId
+    const match = this.matchTask(hint)
+    if (!match) return
+    const task = match.task
+    const taskId = task.id
     const agent = event.agent === 'unknown' ? '' : event.agent
 
-    if (event.sessionId) {
-      const task = this.registry.get(taskId)
+    if (event.sessionId && match.adoptsSession) {
       // A hook is better evidence than a pane scrape, so it wins even when the
-      // snapshot already gave us a different id.
-      if (task && task.agentSessionId !== event.sessionId) {
+      // snapshot already gave us a different id - but only for a task the hook
+      // provably came from. Two tasks in one checkout are indistinguishable by
+      // cwd, and writing a session id on that guess binds a conversation to a
+      // task it never ran in; the id then outranks the pane on every later hook,
+      // so the wrong task keeps inheriting the finish and the announcements.
+      if (task.agentSessionId !== event.sessionId) {
         this.registry.patch(taskId, {
           agentSessionId: event.sessionId,
           agentKind: task.agentKind || agent
@@ -1280,26 +1285,43 @@ export class ProService implements CompanionApi {
    * ---------------------------------------------------------------- */
 
   /**
-   * Map a signal onto a task. Ordered by how much the evidence proves: a
-   * session id is unique to a conversation, a pane id is unique to a terminal,
-   * a workspace is unique to a directory, and a cwd is a guess that two
-   * checkouts of the same repo can both satisfy.
+   * Map a signal onto a task, strongest evidence first.
+   *
+   * The pane leads because it is the one field the reporter cannot be wrong
+   * about: herdr exports it into the terminal the hook ran in, so it says where
+   * this event happened rather than what we last believed. A session id is
+   * nearly as strong, but it is derived state we write ourselves - from pane
+   * scrapes and from earlier hooks - so a misattributed one used to outrank the
+   * pane it disagreed with and keep winning forever. Workspace and cwd follow,
+   * and a cwd is the weakest of the four: two tasks in one checkout both satisfy
+   * it, which is a guess about which of them this is.
+   *
+   * `adoptsSession` says whether the match is strong enough for the caller to
+   * record a session id against the task. Only an unambiguous match qualifies,
+   * so the guess never becomes the strong key.
    */
-  private resolveTaskRef(hint: TaskHint): TaskRef | null {
+  private matchTask(hint: TaskHint): { task: TaskRecord; adoptsSession: boolean } | null {
     const tasks = this.registry.tasks()
     if (!tasks.length) return null
-    const bySession = hint.sessionId
-      ? tasks.find((task) => task.agentSessionId && task.agentSessionId === hint.sessionId)
-      : undefined
-    const byPane = hint.paneId ? tasks.find((task) => task.paneIds.includes(hint.paneId)) : undefined
-    const byWorkspace = hint.workspaceId
-      ? tasks.find((task) => task.workspaceId && task.workspaceId === hint.workspaceId)
-      : undefined
-    const byCwd = hint.cwd
-      ? tasks.find((task) => sameDir(task.workdir, hint.cwd) || sameDir(task.repoRoot, hint.cwd))
-      : undefined
-    const task = bySession ?? byPane ?? byWorkspace ?? byCwd
-    if (!task) return null
+    const levels: Array<readonly TaskRecord[]> = [
+      hint.paneId ? tasks.filter((task) => task.paneIds.includes(hint.paneId)) : [],
+      hint.sessionId ? tasks.filter((task) => task.agentSessionId === hint.sessionId) : [],
+      hint.workspaceId ? tasks.filter((task) => task.workspaceId === hint.workspaceId) : [],
+      hint.cwd
+        ? tasks.filter((task) => sameDir(task.workdir, hint.cwd) || sameDir(task.repoRoot, hint.cwd))
+        : []
+    ]
+    for (const level of levels) {
+      if (level.length) return { task: level[0], adoptsSession: level.length === 1 }
+    }
+    return null
+  }
+
+  /** The same match, in the shape triage and the ledger read a task through. */
+  private resolveTaskRef(hint: TaskHint): TaskRef | null {
+    const match = this.matchTask(hint)
+    if (!match) return null
+    const task = match.task
     return {
       taskId: task.id,
       title: task.title,

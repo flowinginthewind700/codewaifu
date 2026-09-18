@@ -28,6 +28,14 @@ export interface HookEvent {
   matcher: string
   sessionId: string
   cwd: string
+  /**
+   * The terminal the agent was running in, self-reported by the hook runner
+   * (`HERDR_PANE_ID`, sent as `X-CodeWaifu-Pane`). Empty outside herdr, and
+   * empty is the honest answer: `cwd` alone cannot tell two tasks in one
+   * checkout apart, so a hook that knows its pane is a hook that needs no
+   * guess. See `ProService.resolveTaskRef`.
+   */
+  paneId: string
   /** Short human label, e.g. "Codex asked for permission". */
   title: string
   /** Longer explanation shown in the log; may be empty. */

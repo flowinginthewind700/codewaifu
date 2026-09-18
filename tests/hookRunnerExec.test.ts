@@ -142,6 +142,28 @@ describe.runIf(canRun)('generated run-hook.sh, executed', () => {
     expect(event.sourceText).toBe('waiting for your input {}')
   })
 
+  it('says which pane it ran in, and nothing at all outside herdr', async () => {
+    const relay = await startRelay()
+    const home = makeHome(relay.port)
+    const payload = JSON.stringify({
+      hook_event_name: 'Stop',
+      session_id: 'exec-pane',
+      cwd: '/tmp/project'
+    })
+
+    expect(await run(home, 'codex', payload, { HERDR_PANE_ID: 'w5:p1' })).toBe(0)
+    await waitForEvents(relay, 1)
+    expect(relay.recorded.events[0].paneId).toBe('w5:p1')
+
+    // A plain terminal has no pane to report. The header still goes out, empty,
+    // which is the honest "I do not know" the bench falls back on - and the
+    // runner must not fail just because the variable is unset.
+    expect(await run(home, 'codex', payload, { HERDR_PANE_ID: '' })).toBe(0)
+    await waitForEvents(relay, 2)
+    expect(relay.recorded.events).toHaveLength(2)
+    expect(relay.recorded.events[1].paneId).toBe('')
+  })
+
   it('sends an empty object when the agent gives no stdin', async () => {
     const relay = await startRelay()
     const home = makeHome(relay.port)
