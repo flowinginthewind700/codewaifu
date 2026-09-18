@@ -414,10 +414,14 @@ async function boot(): Promise<void> {
   // all read and act through this same object.
   instance.setProApi(service)
   instance.setEventClaim((event) => {
-    // Claimed only when the Bench will actually say something about it: an
-    // event Pro merely logged must still reach her voice and her bubble.
-    const item = service.onHook(event)
-    return item !== null && service.announcesAttention()
+    // Fed in either way: the ledger and the stall timers read plain activity,
+    // and a hook Pro only logged still has to land there. The claim decides who
+    // announces it, and for the kinds triage models as a need, declining is a
+    // verdict - the task is closed, the pane is parked, the same prompt was
+    // just raised - not an abstention. Handing those back made the legacy
+    // companion speak its own "done" over a task the human had already closed.
+    service.onHook(event)
+    return service.claimsEvent(event)
   })
   instance.addConfigListener(() => {
     void service.syncConfig()

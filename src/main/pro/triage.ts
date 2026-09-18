@@ -161,6 +161,17 @@ export class Triage {
    */
   private readonly paneStatus = new Map<string, AgentStatus>()
   private readonly ackedDone = new Set<string>()
+  /**
+   * The quiet periods the human already dealt with: pane id -> the `sinceAt` of
+   * the stall that was dismissed. A stall re-arms forever off a pane that never
+   * changes, and unlike `review` it has no verdict to consult - herdr reports
+   * the leftover pane of a finished task as `working` with a frozen title for
+   * as long as the terminal lives, so "have I already said this" again has to
+   * be answered from memory. Keyed on the start of the quiet period rather than
+   * a boolean on purpose: one period of silence is one announcement, and output
+   * that resumes starts a period nobody has seen yet. See `detectStalls`.
+   */
+  private readonly ackedStall = new Map<string, number>()
 
   constructor(deps: TriageDeps = {}) {
     this.now = deps.now ?? (() => Date.now())
@@ -284,8 +295,17 @@ export class Triage {
    */
   onSnapshot(snapshot: Snapshot | null): void {
     const at = this.now()
+    // `null` means "we cannot see herdr right now", not "every pane closed".
+    // Reconciling against it drops every herdr row and forgets every
+    // acknowledgement, so the next real snapshot re-raises the whole bench at
+    // once and the companion reads it all aloud again. `clear()` is the honest
+    // path for "herdr went away"; a blind tick is only allowed to age rows out.
+    if (!snapshot) {
+      this.prune(at)
+      return
+    }
     const live = new Set<string>()
-    for (const pane of snapshot?.panes ?? []) {
+    for (const pane of snapshot.panes) {
       live.add(pane.paneId)
       this.applyStatus(hintOfPane(pane), pane.agentStatus, pane.title, at)
     }
@@ -302,6 +322,12 @@ export class Triage {
       if (live.has(paneId)) continue
       this.paneStatus.delete(paneId)
       this.ackedDone.delete(paneId)
+      this.ackedStall.delete(paneId)
+    }
+    // Same rule for panes that never had a status noted (a stall can outlive
+    // the pane that raised it, and the ack must not).
+    for (const paneId of [...this.ackedStall.keys()]) {
+      if (!live.has(paneId)) this.ackedStall.delete(paneId)
     }
     this.prune(at)
   }
@@ -375,8 +401,7 @@ export class Triage {
    * "stalled" minutes into real output; keying it off the signature below waits
    * for actual quiet.
    */
-  private detectStalls(snapshot: Snapshot | null, at: number): void {
-    if (!snapshot) return
+  private detectStalls(snapshot: Snapshot, at: number): void {
     const seen = new Set<string>()
     for (const pane of snapshot.panes) {
       seen.add(pane.paneId)
@@ -386,6 +411,9 @@ export class Triage {
       if (!prior || prior.sig !== sig) {
         // A moved signature is the only thing that ends a stall.
         if (prior) this.clearKinds(hint, ['stalled'], 'new output')
+        // Whatever the human said about the last quiet period belongs to that
+        // period. This one has not been seen, so it is allowed to be news.
+        this.ackedStall.delete(pane.paneId)
         this.progress.set(pane.paneId, { sig, sinceAt: at })
         continue
       }
@@ -395,6 +423,12 @@ export class Triage {
       // Already queued. Re-raising would reset its snooze and, worse, re-fire
       // `raised`, which is what makes the companion say the same thing twice.
       if (this.liveKind(hint, 'stalled')) continue
+      // Already dismissed, and the pane has been silent ever since. This is the
+      // loop the two-minute suppression window could never break: the row was
+      // resolved, `prune` dropped it twenty seconds later, and the next tick
+      // found the same frozen signature with nothing live to point at - so it
+      // raised again, and again, for as long as the app stayed open.
+      if (this.ackedStall.get(pane.paneId) === prior.sinceAt) continue
       this.raise(
         'stalled',
         'herdr',
@@ -420,6 +454,7 @@ export class Triage {
   noteActivity(paneId: string, at = this.now()): void {
     if (!paneId) return
     this.progress.set(paneId, { sig: `activity:${at}`, sinceAt: at })
+    this.ackedStall.delete(paneId)
     this.clearKinds({ ...emptyHint(), paneId }, ['stalled'], 'activity')
   }
 
@@ -442,14 +477,17 @@ export class Triage {
     const fingerprint = fingerprintOf(kind, payload)
     const existing = this.rows.get(id)
 
-    // "Review" is the one need a pane restates forever, so it is the one that
-    // has to consult the human's own answer. A task they marked done or parked
-    // has already been reviewed, and asking them to review it again every few
-    // minutes is the complaint this tracker exists to prevent. Everything else
-    // stays live even under a closed row on purpose: an agent keeps running
-    // after the human stops counting it, and one that gets stuck still needs
-    // someone to unstick it.
-    if (kind === 'review' && ref && ref.status !== 'active') return null
+    // Two kinds are guesses we make *about* a pane rather than things the agent
+    // said: `review` (it looks finished) and `stalled` (it looks hung). Both
+    // restate themselves forever, because nothing about the pane ever changes,
+    // so both consult the human's own answer. A task they marked done or parked
+    // has already been looked at, and the quiet leftover pane it leaves behind
+    // is the normal residue of finishing - not news, and not news every two
+    // minutes. Everything else stays live even under a closed row on purpose:
+    // an agent that is waiting on a keypress or that died is still stuck
+    // whether or not the human is counting the task, and only a live pane can
+    // be unstuck.
+    if ((kind === 'review' || kind === 'stalled') && ref && ref.status !== 'active') return null
 
     if (this.suppresses(id, fingerprint, at)) return null
 
@@ -561,6 +599,13 @@ export class Triage {
     })
     if (byHuman && item.paneId && this.paneStatus.get(item.paneId) === 'done') {
       this.ackedDone.add(item.paneId)
+    }
+    // The same acknowledgement for a stall, keyed on the quiet period the row
+    // was raised about (`since` is the stall's start, not the dismissal). An
+    // automatic clear - the pane moved, or it went blocked - is not the human
+    // saying anything, so it must not spend the period's one announcement.
+    if (byHuman && item.kind === 'stalled' && item.paneId) {
+      this.ackedStall.set(item.paneId, item.since)
     }
     if (item.taskId) this.unmarkBlocked(item.taskId)
     this.emit({ type: 'resolved', item, reason })
@@ -817,6 +862,7 @@ export class Triage {
     this.suppressed.clear()
     this.paneStatus.clear()
     this.ackedDone.clear()
+    this.ackedStall.clear()
   }
 
   private emit(event: TriageEvent): void {

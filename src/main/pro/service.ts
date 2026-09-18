@@ -44,7 +44,7 @@ import {
   type Snapshot
 } from '../../shared/herdr'
 import { IPC } from '../../shared/ipcChannels'
-import type { Agent, HookEvent, Lang, SteerResult, ThreadInfo } from '../../shared/protocol'
+import type { Agent, EventKind, HookEvent, Lang, SteerResult, ThreadInfo } from '../../shared/protocol'
 import type { ChatTranscript } from '../../shared/chat'
 import type { BubbleMessage } from '../../shared/ui'
 import {
@@ -528,6 +528,19 @@ const HOOK_FALLBACK_TEXT: Readonly<Record<string, string>> = {
 }
 
 /**
+ * The hook kinds triage turns into an attention need: a prompt for permission,
+ * a question, or an agent that stopped and wants a verdict. Everything else is
+ * ambient chatter (`tool`, `compact`, greetings, activity) that Pro records but
+ * never speaks, so claiming those would mute the legacy companion without
+ * saying anything in its place.
+ */
+const OWNED_HOOK_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
+  'permission',
+  'notification',
+  'stop'
+])
+
+/**
  * What the companion says after the unattended boot recovery ran: how many
  * interrupted tasks went back to work on their own, and how many are still
  * waiting for a hand. Silence when nothing was attempted - a boot line about
@@ -841,6 +854,22 @@ export class ProService implements CompanionApi {
     if (!this.running) return false
     const cfg = this.proConfig()
     return cfg.enabled && (cfg.speakAttention || cfg.bubbleAttention)
+  }
+
+  /**
+   * Whether the verdict on a hook is ours, spoken or not. `onHook` returning
+   * null is not "no opinion": triage declined because it knows something the
+   * legacy companion does not - the task is already `done`, the pane is parked,
+   * the same prompt was raised a moment ago. Handing those back made Core fall
+   * through to its own phrase table and say "done" again on every finish of a
+   * task the human had closed, which is the repeat a verdict exists to stop.
+   * Still gated on `announcesAttention()`, so muting Pro gives the event back
+   * to her voice rather than dropping it on the floor.
+   */
+  claimsEvent(event: HookEvent): boolean {
+    if (!event) return false
+    if (!OWNED_HOOK_KINDS.has(event.kind)) return false
+    return this.announcesAttention()
   }
 
   /**

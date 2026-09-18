@@ -270,20 +270,46 @@ describe('triage and the human verdict', () => {
     expect(orphan.raised('review')).toHaveLength(1)
   })
 
-  it('keeps every other kind live under a closed task, because the agent is still there', () => {
-    // Only `review` reads the verdict. Everything else stays raisable: closing
-    // a row is not the same as unsticking an agent, and a bench that went quiet
-    // about a hung pane because the human stopped counting it is worse than one
-    // that repeats itself.
+  it('keeps a blocking need live under a closed task, because the agent is still there', () => {
+    // A pane waiting on a keypress, or one that died, is stuck whether or not
+    // the human is still counting the task, and only a live pane can be
+    // unstuck. So those kinds ignore the verdict.
     const h = harness(STALLED_MS, { resolveTask: () => ref('done') })
     h.triage.onSnapshot(snapshot([pane({ agentStatus: 'blocked' })]))
     expect(h.live('permission')).toHaveLength(1)
-    // The same pane, quiet for long enough to count as a stall: also raised.
+  })
+
+  it('does not call a closed task\'s quiet pane a stall', () => {
+    // `stalled` is the other guess we make about a pane rather than something
+    // the agent said, and it is the weakest signal we have: a long-running
+    // command and a hung agent look identical from outside. Under a task the
+    // human already closed it is not even a guess worth making - the leftover
+    // pane of a finished task sits frozen at a prompt forever, and reading that
+    // as "stuck" is what made a completed 论文采集 keep asking to be looked at.
+    for (const status of ['done', 'parked'] as const) {
+      const h = harness(STALLED_MS, { resolveTask: () => ref(status) })
+      const quiet = pane({ agentStatus: 'working', revision: 9, terminalTitle: 'frozen' })
+      h.triage.onSnapshot(snapshot([quiet]))
+      h.advance(STALLED_MS + 1)
+      h.triage.onSnapshot(snapshot([quiet]))
+      expect(h.raised('stalled'), status).toHaveLength(0)
+    }
+
+    // Still raised while the task is open, and when it cannot be filed at all:
+    // with no verdict to consult, guessing "closed" would hide every pane the
+    // registry has not met yet.
+    const open = harness(STALLED_MS, { resolveTask: () => ref('active') })
     const quiet = pane({ agentStatus: 'working', revision: 9, terminalTitle: 'frozen' })
-    h.triage.onSnapshot(snapshot([quiet]))
-    h.advance(STALLED_MS + 1)
-    h.triage.onSnapshot(snapshot([quiet]))
-    expect(h.live('stalled')).toHaveLength(1)
+    open.triage.onSnapshot(snapshot([quiet]))
+    open.advance(STALLED_MS + 1)
+    open.triage.onSnapshot(snapshot([quiet]))
+    expect(open.raised('stalled')).toHaveLength(1)
+
+    const orphan = harness(STALLED_MS, { resolveTask: () => null })
+    orphan.triage.onSnapshot(snapshot([pane({ paneId: 'w9:p9' })]))
+    orphan.advance(STALLED_MS + 1)
+    orphan.triage.onSnapshot(snapshot([pane({ paneId: 'w9:p9' })]))
+    expect(orphan.raised('stalled')).toHaveLength(1)
   })
 
   it('says "finished" once and then stays quiet, however long the pane sits there', () => {
@@ -435,5 +461,122 @@ describe('triage and the human verdict', () => {
     h.triage.onSnapshot(snapshot([]))
     h.triage.onSnapshot(snapshot([done]))
     expect(h.raised('review')).toHaveLength(2)
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * One quiet period, one announcement
+ * ------------------------------------------------------------------ */
+
+/**
+ * The second half of the same complaint, on the other kind.
+ *
+ * From the real bench: a task was marked done, the stall row was dismissed, and
+ * two minutes later the companion said "卡住了" again - and kept saying it every
+ * two minutes, because `RESOLVED_SUPPRESS_MS` is a timer and the pane it was
+ * suppressing never changed. The row was resolved, `prune` dropped it twenty
+ * seconds later, and the next tick found the same frozen signature with nothing
+ * live to point at, so it raised it as new. Dismissing was not an answer, it was
+ * a snooze with a fixed length.
+ *
+ * What makes a stall stop being news is not a clock: it is either the pane
+ * producing output (a new quiet period, which nobody has seen) or the human
+ * saying they have looked at this one.
+ */
+describe('triage stall acknowledgement', () => {
+  it('says "stalled" once per quiet period, however long the pane sits there', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const quiet = pane({ revision: 4, terminalTitle: 'frozen' })
+    h.triage.onSnapshot(snapshot([quiet]))
+    h.advance(STALLED_MS + 1)
+    h.triage.onSnapshot(snapshot([quiet]))
+    const [item] = h.raised('stalled')
+    expect(item).toBeTruthy()
+    h.triage.resolve(item.id, 'acted')
+
+    // Well past the two-minute suppression window, ten times over: the pane has
+    // not produced a byte since the human dismissed it, so there is nothing new
+    // to say. This loop used to re-raise on the second iteration.
+    for (let i = 0; i < 10; i += 1) {
+      h.advance(SUPPRESS_MS + HYDRATE_MS)
+      h.triage.onSnapshot(snapshot([quiet]))
+    }
+    expect(h.raised('stalled')).toHaveLength(1)
+    expect(h.liveStalled()).toHaveLength(0)
+  })
+
+  it('counts marking the task done as the acknowledgement', () => {
+    // The human closes the task instead of the row. Same verdict, and it has to
+    // hold even though the pane stays open and frozen underneath it.
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const quiet = pane({ revision: 4, terminalTitle: 'frozen' })
+    h.triage.onSnapshot(snapshot([quiet]))
+    h.advance(STALLED_MS + 1)
+    h.triage.onSnapshot(snapshot([quiet]))
+    expect(h.raised('stalled')).toHaveLength(1)
+    h.triage.resolveTaskItems('t1', 'task marked done')
+    for (let i = 0; i < 10; i += 1) {
+      h.advance(SUPPRESS_MS + HYDRATE_MS)
+      h.triage.onSnapshot(snapshot([quiet]))
+    }
+    expect(h.raised('stalled')).toHaveLength(1)
+  })
+
+  it('says it again when the pane works and goes quiet a second time', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    h.triage.onSnapshot(snapshot([pane({ revision: 4, terminalTitle: 'frozen' })]))
+    h.advance(STALLED_MS + 1)
+    h.triage.onSnapshot(snapshot([pane({ revision: 4, terminalTitle: 'frozen' })]))
+    const [first] = h.raised('stalled')
+    h.triage.resolve(first.id, 'acted')
+
+    // Output resumes, so the dismissed period is over. Past the suppression
+    // window too, because a genuinely new need that arrives inside it is held
+    // back by design and would only muddy the point.
+    h.advance(SUPPRESS_MS)
+    h.triage.onSnapshot(snapshot([pane({ revision: 5, terminalTitle: 'typing...' })]))
+    expect(h.liveStalled()).toHaveLength(0)
+
+    // A second silence is a second question, and the human has not answered it.
+    const quietAgain = pane({ revision: 5, terminalTitle: 'frozen once more' })
+    h.triage.onSnapshot(snapshot([quietAgain]))
+    h.advance(STALLED_MS + 1)
+    h.triage.onSnapshot(snapshot([quietAgain]))
+    expect(h.raised('stalled')).toHaveLength(2)
+  })
+
+  it('does not let a blind tick spend the acknowledgement', () => {
+    // herdr hiccuping returns a null snapshot. Reading that as "every pane
+    // closed" dropped the rows and forgot the acks, so the next real snapshot
+    // re-raised the whole bench at once and she read all of it aloud again.
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const quiet = pane({ revision: 4, terminalTitle: 'frozen' })
+    h.triage.onSnapshot(snapshot([quiet]))
+    h.advance(STALLED_MS + 1)
+    h.triage.onSnapshot(snapshot([quiet]))
+    const [item] = h.raised('stalled')
+    h.triage.resolve(item.id, 'acted')
+
+    h.advance(SUPPRESS_MS + HYDRATE_MS)
+    h.triage.onSnapshot(null)
+    for (let i = 0; i < 5; i += 1) {
+      h.advance(SUPPRESS_MS + HYDRATE_MS)
+      h.triage.onSnapshot(snapshot([quiet]))
+    }
+    expect(h.raised('stalled')).toHaveLength(1)
+  })
+
+  it('keeps a reviewed finish reviewed across a blind tick', () => {
+    const h = harness(STALLED_MS, { resolveTask: () => ref('active') })
+    const done = pane({ agentStatus: 'done' })
+    h.triage.onSnapshot(snapshot([done]))
+    h.triage.resolveTaskItems('t1', 'task marked done')
+    expect(h.raised('review')).toHaveLength(1)
+
+    h.advance(SUPPRESS_MS + HYDRATE_MS)
+    h.triage.onSnapshot(null)
+    h.advance(HYDRATE_MS)
+    h.triage.onSnapshot(snapshot([done]))
+    expect(h.raised('review')).toHaveLength(1)
   })
 })

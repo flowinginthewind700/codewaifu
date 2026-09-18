@@ -19,7 +19,8 @@
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CONFIG } from '../src/shared/config'
+import { DEFAULT_CONFIG, type ProConfig } from '../src/shared/config'
+import { normalizeHook } from '../src/shared/hookEvent'
 import {
   emptyCounts,
   pathBase,
@@ -383,6 +384,12 @@ interface FakeHostOpts {
   lang?: 'zh' | 'en'
   /** `pro.autoResumeOnBoot`; the shipped default is on, so tests turn it off. */
   autoResumeOnBoot?: boolean
+  /**
+   * Overrides for the rest of `pro.*`. The shipped defaults are the ones every
+   * other case runs under, so a case that needs a muted bench says so here
+   * rather than editing a default it does not own.
+   */
+  pro?: Partial<ProConfig>
   /** What the companion can see on this machine; the import picker reads it. */
   threads?: readonly ThreadInfo[]
   /**
@@ -405,7 +412,8 @@ function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
     ...DEFAULT_CONFIG,
     pro: {
       ...DEFAULT_CONFIG.pro,
-      autoResumeOnBoot: opts.autoResumeOnBoot ?? DEFAULT_CONFIG.pro.autoResumeOnBoot
+      autoResumeOnBoot: opts.autoResumeOnBoot ?? DEFAULT_CONFIG.pro.autoResumeOnBoot,
+      ...opts.pro
     }
   }
   return {
@@ -726,6 +734,8 @@ interface BootOpts {
   agents?: readonly AgentInstance[]
   /** What the fake herdr refuses `agent.start` with; absent means it accepts. */
   startAgentError?: string
+  /** Overrides for `pro.*`; see `FakeHostOpts.pro`. */
+  pro?: Partial<ProConfig>
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -760,7 +770,8 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
       steer: opts.steer,
       steers,
       calls,
-      emits
+      emits,
+      pro: opts.pro
     }),
     timers: clock.timers,
     // Intervals an order of magnitude past any advance below: the tick, the git
@@ -880,6 +891,103 @@ describe('ProService', () => {
     expect(seen).toHaveLength(2)
     expect(seen[1]).toBeNull()
     unsubscribe()
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Who announces a hook
+ * ------------------------------------------------------------------ */
+
+/**
+ * The claim is one line in `index.ts`, and it decides whether the legacy
+ * companion still gets to speak for a hook Pro has already judged. `onHook`
+ * returning null used to read as "Pro has nothing to say", so the event fell
+ * through to `planEvent` and its phrase table - which for a `Stop` is the
+ * "done" line. A task the human had marked done therefore announced its own
+ * finish again on every turn, and the reason is the cruel part: the verdict
+ * that silenced the bench is exactly the verdict the phrase table cannot know
+ * about. Marking a task done bought silence from one voice and repeats from
+ * the other.
+ *
+ * So the claim covers the kinds triage models as a need, spoken or not, and
+ * leaves the ambient ones alone: claiming `tool` and the greetings would take
+ * away her chatter without putting anything in its place.
+ */
+describe('ProService hook claim', () => {
+  it('claims the stop of a task the human already closed, and stays silent', async () => {
+    const bench = await boot({ tasks: [{ ...seedTask(), status: 'done' }] })
+    const event = normalizeHook(
+      'codex',
+      {
+        hook_event_name: 'Stop',
+        session_id: 'sess-done',
+        cwd: WORKDIR,
+        last_assistant_message: 'all tests pass'
+      },
+      START
+    )
+    // Triage declined: `review` defers to the verdict, and the verdict is done.
+    expect(bench.service.onHook(event)).toBeNull()
+    // Declining is still an answer, so the legacy voice must not repeat it.
+    expect(bench.service.claimsEvent(event)).toBe(true)
+  })
+
+  it('claims the kinds that carry a verdict, and leaves the ambient ones alone', async () => {
+    const bench = await boot()
+    const ours = ['Stop', 'PermissionRequest', 'Notification']
+    for (const raw of ours) {
+      const event = normalizeHook(
+        'codex',
+        { hook_event_name: raw, session_id: 'sess-1', cwd: WORKDIR },
+        START
+      )
+      expect(bench.service.claimsEvent(event), raw).toBe(true)
+    }
+
+    // Everything here is activity or greeting. Pro records it and says nothing,
+    // so claiming one would be a mute button wearing a verdict's clothes.
+    const hers = [
+      'SessionStart',
+      'SessionEnd',
+      'UserPromptSubmit',
+      'PreToolUse',
+      'PreCompact',
+      'SubagentStop',
+      'Interrupt'
+    ]
+    for (const raw of hers) {
+      const event = normalizeHook(
+        'codex',
+        { hook_event_name: raw, session_id: 'sess-1', cwd: WORKDIR },
+        START
+      )
+      expect(bench.service.claimsEvent(event), raw).toBe(false)
+    }
+  })
+
+  it('hands every hook back when both ambient channels are muted', async () => {
+    // Muting is a setting, not a judgement about the task. With nothing of ours
+    // left to say it, the event belongs to the companion again rather than to
+    // nobody: a bench the human silenced should not silence her too.
+    const bench = await boot({ pro: { speakAttention: false, bubbleAttention: false } })
+    const event = normalizeHook(
+      'codex',
+      { hook_event_name: 'Stop', session_id: 'sess-1', cwd: WORKDIR },
+      START
+    )
+    expect(bench.service.announcesAttention()).toBe(false)
+    expect(bench.service.claimsEvent(event)).toBe(false)
+  })
+
+  it('hands every hook back once the bench is gone', async () => {
+    const bench = await boot()
+    const event = normalizeHook(
+      'codex',
+      { hook_event_name: 'Stop', session_id: 'sess-1', cwd: WORKDIR },
+      START
+    )
+    bench.service.shutdown()
+    expect(bench.service.claimsEvent(event)).toBe(false)
   })
 })
 
