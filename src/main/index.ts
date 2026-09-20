@@ -22,7 +22,12 @@ import { ProService, type ProHost } from './pro/service'
 import { effectivePath } from './shellPath'
 import { RendererVoice } from './voiceBridge'
 import { createWindow, type WindowHandle } from './window'
-import { APP_USER_MODEL_ID, chromiumSwitches, logSandboxState } from '../shared/linuxRuntime'
+import {
+  APP_USER_MODEL_ID,
+  chromiumSwitches,
+  logSandboxState,
+  x11RelaunchArgs
+} from '../shared/linuxRuntime'
 
 /**
  * One binary, two entry points. `CodeWaifu --cli install` is what `install.sh`
@@ -566,6 +571,25 @@ async function main(): Promise<void> {
     closeLog()
     app.exit(code)
     return
+  }
+
+  /*
+   * Electron 38+ defaults to native Wayland even when XWayland is available,
+   * and on native Wayland the compositor forbids client-side `setPosition` —
+   * which is exactly what dragging the avatar calls. The ozone platform is
+   * chosen before any app JavaScript runs, so the only way onto XWayland is a
+   * fresh process with the real argv switch. One bounce on GUI start buys back
+   * the drag, always-on-top and global shortcuts; the CLI skips it because it
+   * opens no window.
+   */
+  if (isLinux) {
+    const args = x11RelaunchArgs(process.argv, process.env)
+    if (args) {
+      log('info', 'relaunching on XWayland for window drag', { display: process.env.DISPLAY })
+      app.relaunch({ args })
+      app.quit()
+      return
+    }
   }
 
   // The CLI deliberately skips this: `codewaifu status` must work while the app runs.

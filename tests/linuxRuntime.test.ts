@@ -26,6 +26,8 @@ import {
   trayAdvice,
   unionRect,
   windowSurface,
+  x11RelaunchArgs,
+  x11SocketPath,
   type SandboxFacts
 } from '../src/shared/linuxRuntime'
 
@@ -92,6 +94,43 @@ describe('chromiumSwitches', () => {
     }
     // Nor when the uid says root: the launcher's job, not ours.
     expect(chromiumSwitches({ CODEWAIFU_SANDBOX: '' })).toEqual([])
+  })
+})
+
+describe('x11SocketPath', () => {
+  it('maps the local display spellings onto their X server sockets', () => {
+    expect(x11SocketPath(':0')).toBe('/tmp/.X11-unix/X0')
+    expect(x11SocketPath(':1.0')).toBe('/tmp/.X11-unix/X1')
+    expect(x11SocketPath('localhost:10.0')).toBe('/tmp/.X11-unix/X10')
+  })
+
+  it('rejects a display that is not a local X server', () => {
+    expect(x11SocketPath('')).toBeNull()
+    expect(x11SocketPath('unix:')).toBeNull()
+    expect(x11SocketPath('wayland-0')).toBeNull()
+  })
+})
+
+describe('x11RelaunchArgs', () => {
+  const argv = ['/usr/bin/electron', '.']
+
+  it('re-execs the GUI with the X11 ozone switch when XWayland is reachable', () => {
+    expect(x11RelaunchArgs(argv, { DISPLAY: ':0' }, () => true)).toEqual([
+      '.',
+      '--ozone-platform=x11'
+    ])
+  })
+
+  it('respects an explicit ozone platform instead of fighting the operator', () => {
+    expect(
+      x11RelaunchArgs(['/usr/bin/electron', '.', '--ozone-platform=wayland'], { DISPLAY: ':0' }, () => true)
+    ).toBeNull()
+  })
+
+  it('stays put without a display or when the X server socket is missing', () => {
+    expect(x11RelaunchArgs(argv, {}, () => true)).toBeNull()
+    expect(x11RelaunchArgs(argv, { DISPLAY: ':0' }, () => false)).toBeNull()
+    expect(x11RelaunchArgs(argv, { DISPLAY: 'wayland-0' }, () => true)).toBeNull()
   })
 })
 

@@ -26,6 +26,8 @@
  *    abort, and neither can be fixed from JavaScript — see `sandboxDecision`.
  */
 
+import fs from 'node:fs'
+
 export type DisplayServer = 'x11' | 'wayland' | 'none'
 
 /** Anything env-shaped; `process.env` satisfies it. */
@@ -130,6 +132,50 @@ export function chromiumSwitches(
     switches.push('ozone-platform-hint=auto')
   }
   return switches
+}
+
+// ---------------------------------------------------------------------------
+// XWayland relaunch
+// ---------------------------------------------------------------------------
+
+/**
+ * The Chromium switch that puts a Wayland session back on XWayland. Electron
+ * 38 removed `ELECTRON_OZONE_PLATFORM_HINT` and made native Wayland the
+ * default, where the compositor forbids `setPosition` and the avatar cannot be
+ * dragged. `app.commandLine.appendSwitch` is too late for this decision, so
+ * the flag has to be in the real argv of a fresh process.
+ */
+export const X11_OZONE_SWITCH = '--ozone-platform=x11'
+
+/** The X server socket a `DISPLAY` value maps to, or null when it is not local. */
+export function x11SocketPath(display: string): string | null {
+  const match = /^(?:[A-Za-z0-9._-]*):([0-9]+)(?:\.[0-9]+)?$/.exec(display.trim())
+  return match ? `/tmp/.X11-unix/X${match[1]}` : null
+}
+
+/**
+ * Args for a one-time relaunch onto XWayland, or null when it is not wanted.
+ *
+ * Electron 38+ prefers native Wayland whenever the session is Wayland, even
+ * with XWayland's `DISPLAY` sitting right there. Native Wayland breaks
+ * `setPosition` (the avatar drag), always-on-top and global shortcuts, so a
+ * GUI start with a reachable X server re-execs once with the X11 ozone switch.
+ * An explicit `--ozone-platform=<anything>` is respected: the operator asked,
+ * and the relaunch would only fight them.
+ */
+export function x11RelaunchArgs(
+  argv: readonly string[],
+  env: EnvLike,
+  exists: (path: string) => boolean = fs.existsSync
+): string[] | null {
+  if (argv.some((arg) => arg.startsWith('--ozone-platform='))) return null
+  const display = String(env.DISPLAY ?? '').trim()
+  if (!display) return null
+  const socket = x11SocketPath(display)
+  if (!socket || !exists(socket)) {
+    return null
+  }
+  return [...argv.slice(1), X11_OZONE_SWITCH]
 }
 
 /**
