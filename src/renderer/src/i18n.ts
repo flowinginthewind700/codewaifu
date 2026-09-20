@@ -175,6 +175,7 @@ const STRINGS = {
   avatarImage: { zh: '图片', en: 'Image' },
   avatarLive2d: { zh: '数字人', en: 'Live2D' },
   character: { zh: '角色', en: 'Character' },
+  characterClose: { zh: '关闭角色选择', en: 'Close character picker' },
   live2dHint: {
     zh: '拖她可以移动窗口，点头换表情，点身体触发动作',
     en: 'Drag her to move the window; tap the head for expressions, the body for motions'

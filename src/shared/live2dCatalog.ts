@@ -9,7 +9,7 @@
 // Lives in `shared` because both sides need it: the renderer draws the models,
 // and main pre-warms the on-disk cache at boot.
 //
-// Bundle rev v1; characters: HaruGreeter, Mao.
+// Bundle rev v1; characters: HaruGreeter, Mao, Hiyori, Chitose, Tsumiki, Epsilon, Hibiki, Rice.
 export type Live2DAssetFile = { url: string; bytes: number };
 
 export type Live2DMotionRef = {
@@ -560,6 +560,636 @@ export const LIVE2D_CATALOG: Live2DCatalog = {
           "bytes": 2822
         }
       ]
+    },
+    {
+      "id": "Hiyori",
+      "labelZh": "日和",
+      "labelEn": "Hiyori",
+      "blurbZh": "安静的邻家少女,凝视与皱眉的小动作细腻,适合长时间陪伴。",
+      "blurbEn": "A quiet girl next door; subtle gazes and small frowns, good company for long sessions.",
+      "model3Url": "/models/live2d/v1/Hiyori/Hiyori.model3.json",
+      "model3Bytes": 1100,
+      "previewUrl": "/models/live2d/v1/Hiyori/preview.webp",
+      "thumbUrl": "/models/live2d/v1/Hiyori/thumb.webp",
+      "bytes": 1050153,
+      "motionGroups": {
+        "Idle": 1,
+        "TapBody": 2
+      },
+      "expressions": [],
+      "motions": [
+        {
+          "group": "Idle",
+          "index": 0,
+          "slug": "m-idle-00.motion3.json",
+          "label": "微笑-看着你.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 0,
+          "slug": "m-tapbody-00.motion3.json",
+          "label": "难过-皱眉.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 1,
+          "slug": "m-tapbody-01.motion3.json",
+          "label": "无聊-抬头望天摇摆.motion3"
+        }
+      ],
+      "files": [
+        {
+          "url": "/models/live2d/v1/Hiyori/Hiyori.moc3",
+          "bytes": 443648
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/Hiyori.model3.json",
+          "bytes": 1100
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/Hiyori.physics3.json",
+          "bytes": 26160
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/Hiyori.pose3.json",
+          "bytes": 166
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/Hiyori.userdata3.json",
+          "bytes": 623
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/motions/m-idle-00.motion3.json",
+          "bytes": 10622
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/motions/m-tapbody-00.motion3.json",
+          "bytes": 8772
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/motions/m-tapbody-01.motion3.json",
+          "bytes": 12732
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/preview.webp",
+          "bytes": 7038
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/textures/texture_00.webp",
+          "bytes": 234596
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/textures/texture_01.webp",
+          "bytes": 302912
+        },
+        {
+          "url": "/models/live2d/v1/Hiyori/thumb.webp",
+          "bytes": 1784
+        }
+      ]
+    },
+    {
+      "id": "Chitose",
+      "labelZh": "千岁",
+      "labelEn": "Chitose",
+      "blurbZh": "清爽的短发少女,挥手与指引手势利落,表情齐全。",
+      "blurbEn": "A brisk short-haired girl with clean waves and guiding gestures, and a full expression set.",
+      "model3Url": "/models/live2d/v1/Chitose/Chitose.model3.json",
+      "model3Bytes": 1542,
+      "previewUrl": "/models/live2d/v1/Chitose/preview.webp",
+      "thumbUrl": "/models/live2d/v1/Chitose/thumb.webp",
+      "bytes": 571206,
+      "motionGroups": {
+        "Idle": 1,
+        "TapBody": 3
+      },
+      "expressions": [
+        "angry",
+        "blushing",
+        "embarrass",
+        "smile",
+        "sad",
+        "happy",
+        "surprised"
+      ],
+      "motions": [
+        {
+          "group": "Idle",
+          "index": 0,
+          "slug": "m-idle-00.motion3.json",
+          "label": "微笑-看着你.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 0,
+          "slug": "m-tapbody-00.motion3.json",
+          "label": "微笑-向左指引.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 1,
+          "slug": "m-tapbody-01.motion3.json",
+          "label": "打招呼-挥手.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 2,
+          "slug": "m-tapbody-02.motion3.json",
+          "label": "微笑-插单手.motion3"
+        }
+      ],
+      "files": [
+        {
+          "url": "/models/live2d/v1/Chitose/Chitose.model3.json",
+          "bytes": 1542
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/chitose.moc3",
+          "bytes": 270656
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/chitose.physics3.json",
+          "bytes": 3257
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/chitose.pose3.json",
+          "bytes": 226
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-angry.exp3.json",
+          "bytes": 1431
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-blushing.exp3.json",
+          "bytes": 1452
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-embarrass.exp3.json",
+          "bytes": 1436
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-happy.exp3.json",
+          "bytes": 1413
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-sad.exp3.json",
+          "bytes": 1447
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-smile.exp3.json",
+          "bytes": 1411
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/expressions/e-surprised.exp3.json",
+          "bytes": 1437
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/motions/m-idle-00.motion3.json",
+          "bytes": 23856
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/motions/m-tapbody-00.motion3.json",
+          "bytes": 11333
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/motions/m-tapbody-01.motion3.json",
+          "bytes": 12175
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/motions/m-tapbody-02.motion3.json",
+          "bytes": 14316
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/preview.webp",
+          "bytes": 7840
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/textures/texture_00.webp",
+          "bytes": 214018
+        },
+        {
+          "url": "/models/live2d/v1/Chitose/thumb.webp",
+          "bytes": 1960
+        }
+      ]
+    },
+    {
+      "id": "Tsumiki",
+      "labelZh": "紬木",
+      "labelEn": "Tsumiki",
+      "blurbZh": "怯生生的大小姐形象,表情最丰富(十种),眨眼动作轻柔。",
+      "blurbEn": "A shy young lady with the richest expression set (ten faces) and a gentle blink.",
+      "model3Url": "/models/live2d/v1/Tsumiki/Tsumiki.model3.json",
+      "model3Bytes": 1686,
+      "previewUrl": "/models/live2d/v1/Tsumiki/preview.webp",
+      "thumbUrl": "/models/live2d/v1/Tsumiki/thumb.webp",
+      "bytes": 1007960,
+      "motionGroups": {
+        "Idle": 1,
+        "TapBody": 1
+      },
+      "expressions": [
+        "angry",
+        "blushing",
+        "sad",
+        "wigged",
+        "happy-01",
+        "happy-01",
+        "smile",
+        "surprised",
+        "speechless",
+        "embarrass"
+      ],
+      "motions": [
+        {
+          "group": "Idle",
+          "index": 0,
+          "slug": "m-idle-00.motion3.json",
+          "label": "微笑-眨眼.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 0,
+          "slug": "m-tapbody-00.motion3.json",
+          "label": "微笑-看着你.motion3"
+        }
+      ],
+      "files": [
+        {
+          "url": "/models/live2d/v1/Tsumiki/Tsumiki.model3.json",
+          "bytes": 1686
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-angry.exp3.json",
+          "bytes": 1367
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-blushing.exp3.json",
+          "bytes": 1371
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-embarrass.exp3.json",
+          "bytes": 1374
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-happy-01.exp3.json",
+          "bytes": 1144
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-happy-01.exp3.json",
+          "bytes": 1352
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-sad.exp3.json",
+          "bytes": 1236
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-smile.exp3.json",
+          "bytes": 1349
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-speechless.exp3.json",
+          "bytes": 1303
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-surprised.exp3.json",
+          "bytes": 1357
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/expressions/e-wigged.exp3.json",
+          "bytes": 1362
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/motions/m-idle-00.motion3.json",
+          "bytes": 12818
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/motions/m-tapbody-00.motion3.json",
+          "bytes": 18827
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/preview.webp",
+          "bytes": 9256
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/textures/texture_00.webp",
+          "bytes": 324618
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/textures/texture_01.webp",
+          "bytes": 230242
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/thumb.webp",
+          "bytes": 2378
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/tsumiki.moc3",
+          "bytes": 384768
+        },
+        {
+          "url": "/models/live2d/v1/Tsumiki/tsumiki.physics3.json",
+          "bytes": 10152
+        }
+      ]
+    },
+    {
+      "id": "Epsilon",
+      "labelZh": "艾普西",
+      "labelEn": "Epsilon",
+      "blurbZh": "沉静的银发少女,生气与皱眉的小脾气动作很有性格。",
+      "blurbEn": "A composed silver-haired girl whose little pouts and frowns give her real character.",
+      "model3Url": "/models/live2d/v1/Epsilon/Epsilon.model3.json",
+      "model3Bytes": 1758,
+      "previewUrl": "/models/live2d/v1/Epsilon/preview.webp",
+      "thumbUrl": "/models/live2d/v1/Epsilon/thumb.webp",
+      "bytes": 589015,
+      "motionGroups": {
+        "Idle": 1,
+        "TapBody": 2
+      },
+      "expressions": [
+        "angry",
+        "blushing",
+        "innocent",
+        "sad",
+        "smile",
+        "happy",
+        "scare",
+        "upset"
+      ],
+      "motions": [
+        {
+          "group": "Idle",
+          "index": 0,
+          "slug": "m-idle-00.motion3.json",
+          "label": "微笑-平淡.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 0,
+          "slug": "m-tapbody-00.motion3.json",
+          "label": "生气-叉手.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 1,
+          "slug": "m-tapbody-01.motion3.json",
+          "label": "生气-皱眉.motion3"
+        }
+      ],
+      "files": [
+        {
+          "url": "/models/live2d/v1/Epsilon/Epsilon.moc3",
+          "bytes": 221824
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/Epsilon.model3.json",
+          "bytes": 1758
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/Epsilon.physics3.json",
+          "bytes": 3664
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-angry.exp3.json",
+          "bytes": 1084
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-blushing.exp3.json",
+          "bytes": 1011
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-happy.exp3.json",
+          "bytes": 543
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-innocent.exp3.json",
+          "bytes": 1090
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-sad.exp3.json",
+          "bytes": 756
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-scare.exp3.json",
+          "bytes": 814
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-smile.exp3.json",
+          "bytes": 51
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/expressions/e-upset.exp3.json",
+          "bytes": 765
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/motions/m-idle-00.motion3.json",
+          "bytes": 12430
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/motions/m-tapbody-00.motion3.json",
+          "bytes": 9187
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/motions/m-tapbody-01.motion3.json",
+          "bytes": 13096
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/preview.webp",
+          "bytes": 11334
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/textures/texture_00.webp",
+          "bytes": 132644
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/textures/texture_01.webp",
+          "bytes": 97740
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/textures/texture_02.webp",
+          "bytes": 76156
+        },
+        {
+          "url": "/models/live2d/v1/Epsilon/thumb.webp",
+          "bytes": 3068
+        }
+      ]
+    },
+    {
+      "id": "Hibiki",
+      "labelZh": "响",
+      "labelEn": "Hibiki",
+      "blurbZh": "元气短发少女,从生气到无辜的一张脸转变是她的招牌动作。",
+      "blurbEn": "A spirited short-haired girl; her signature move is turning from annoyed to innocent.",
+      "model3Url": "/models/live2d/v1/Hibiki/Hibiki.model3.json",
+      "model3Bytes": 1168,
+      "previewUrl": "/models/live2d/v1/Hibiki/preview.webp",
+      "thumbUrl": "/models/live2d/v1/Hibiki/thumb.webp",
+      "bytes": 527491,
+      "motionGroups": {
+        "TapBody": 1
+      },
+      "expressions": [
+        "Angry",
+        "Blushing",
+        "coldness",
+        "smile",
+        "Sad",
+        "Surprised"
+      ],
+      "motions": [
+        {
+          "group": "TapBody",
+          "index": 0,
+          "slug": "m-tapbody-00.motion3.json",
+          "label": "生气-转无辜.motion3"
+        }
+      ],
+      "files": [
+        {
+          "url": "/models/live2d/v1/Hibiki/Hibiki.model3.json",
+          "bytes": 1168
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/expressions/e-angry.exp3.json",
+          "bytes": 936
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/expressions/e-blushing.exp3.json",
+          "bytes": 1025
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/expressions/e-coldness.exp3.json",
+          "bytes": 1016
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/expressions/e-sad.exp3.json",
+          "bytes": 953
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/expressions/e-smile.exp3.json",
+          "bytes": 933
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/expressions/e-surprised.exp3.json",
+          "bytes": 949
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/hibiki.moc3",
+          "bytes": 185344
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/hibiki.physics3.json",
+          "bytes": 4443
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/motions/m-tapbody-00.motion3.json",
+          "bytes": 6948
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/preview.webp",
+          "bytes": 8360
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/textures/texture_00.webp",
+          "bytes": 313180
+        },
+        {
+          "url": "/models/live2d/v1/Hibiki/thumb.webp",
+          "bytes": 2236
+        }
+      ]
+    },
+    {
+      "id": "Rice",
+      "labelZh": "莱斯",
+      "labelEn": "Rice",
+      "blurbZh": "会魔法的绿发学徒,点火与能量攻击动作带特效感。",
+      "blurbEn": "A green-haired magic apprentice whose spark and blast gestures carry real flair.",
+      "model3Url": "/models/live2d/v1/Rice/Rice.model3.json",
+      "model3Bytes": 921,
+      "previewUrl": "/models/live2d/v1/Rice/preview.webp",
+      "thumbUrl": "/models/live2d/v1/Rice/thumb.webp",
+      "bytes": 1394359,
+      "motionGroups": {
+        "Idle": 2,
+        "TapBody": 2
+      },
+      "expressions": [],
+      "motions": [
+        {
+          "group": "Idle",
+          "index": 0,
+          "slug": "m-idle-00.motion3.json",
+          "label": "平淡.motion3"
+        },
+        {
+          "group": "Idle",
+          "index": 1,
+          "slug": "m-idle-01.motion3.json",
+          "label": "魔法-书点火.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 0,
+          "slug": "m-tapbody-00.motion3.json",
+          "label": "魔法-小能量攻击.motion3"
+        },
+        {
+          "group": "TapBody",
+          "index": 1,
+          "slug": "m-tapbody-01.motion3.json",
+          "label": "魔法-大能量攻击.motion3"
+        }
+      ],
+      "files": [
+        {
+          "url": "/models/live2d/v1/Rice/Rice.moc3",
+          "bytes": 479104
+        },
+        {
+          "url": "/models/live2d/v1/Rice/Rice.model3.json",
+          "bytes": 921
+        },
+        {
+          "url": "/models/live2d/v1/Rice/Rice.physics3.json",
+          "bytes": 25513
+        },
+        {
+          "url": "/models/live2d/v1/Rice/motions/m-idle-00.motion3.json",
+          "bytes": 10165
+        },
+        {
+          "url": "/models/live2d/v1/Rice/motions/m-idle-01.motion3.json",
+          "bytes": 13541
+        },
+        {
+          "url": "/models/live2d/v1/Rice/motions/m-tapbody-00.motion3.json",
+          "bytes": 22819
+        },
+        {
+          "url": "/models/live2d/v1/Rice/motions/m-tapbody-01.motion3.json",
+          "bytes": 21062
+        },
+        {
+          "url": "/models/live2d/v1/Rice/preview.webp",
+          "bytes": 7392
+        },
+        {
+          "url": "/models/live2d/v1/Rice/textures/texture_00.webp",
+          "bytes": 270914
+        },
+        {
+          "url": "/models/live2d/v1/Rice/textures/texture_01.webp",
+          "bytes": 540882
+        },
+        {
+          "url": "/models/live2d/v1/Rice/thumb.webp",
+          "bytes": 2046
+        }
+      ]
     }
   ]
 } as Live2DCatalog;
@@ -573,4 +1203,17 @@ export const LIVE2D_KEEP_URLS: string[] = [
 /** Look up a character by id; undefined when the catalog does not ship it. */
 export function findLive2DCharacter(id: string): Live2DCharacter | undefined {
   return LIVE2D_CATALOG.characters.find((c) => c.id === id);
+}
+
+/**
+ * What to warm at boot: Core plus the character the config points at.
+ *
+ * Warming `LIVE2D_KEEP_URLS` used to be right while the bundle was two
+ * characters; with eight it would pull ~8MB on every cold launch for faces
+ * the user may never wear. The picker downloads any other character on
+ * demand, behind the same honest progress bar the first run shows.
+ */
+export function prewarmUrls(characterId: string): string[] {
+  const character = findLive2DCharacter(characterId) ?? LIVE2D_CATALOG.characters[0];
+  return [LIVE2D_CATALOG.coreUrl, ...character.files.map((f) => f.url)];
 }

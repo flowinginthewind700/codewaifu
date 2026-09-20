@@ -6,7 +6,7 @@
 // 「去扩展名 + 分隔符美化」,英文走一张人工译名表,查不到的才回落到美化 slug。
 //
 // 这层是纯字符串函数,不碰 Cubism Framework(host.ts 那 720KB 在 vitest 里起不来),
-// 所以能在单测里直接钉住全部 31 条 shipped 动作的译名。
+// 所以能在单测里直接钉住全部 49 条 shipped 动作的译名。
 
 import type { Lang } from './protocol'
 
@@ -48,7 +48,22 @@ const MOTION_LABELS_EN: Record<string, string> = {
   '微笑-看着你': 'Smile · Looking at you',
   '画画成功-爱心': 'Success · Heart hands',
   '画画失败-爱心': 'Failure · Heart hands',
-  '微笑-挥动双手': 'Smile · Wave both hands'
+  '微笑-挥动双手': 'Smile · Wave both hands',
+  // v1 bundle, second wave (Hiyori / Chitose / Tsumiki / Epsilon / Hibiki / Rice)
+  '难过-皱眉': 'Sad · Frown',
+  '无聊-抬头望天摇摆': 'Bored · Look up and sway',
+  '微笑-向左指引': 'Smile · Point left',
+  '打招呼-挥手': 'Greet · Wave',
+  '微笑-插单手': 'Smile · Hand on hip',
+  '微笑-眨眼': 'Smile · Blink',
+  '微笑-平淡': 'Smile · Composed',
+  '生气-叉手': 'Angry · Arms crossed',
+  '生气-皱眉': 'Angry · Frown',
+  '生气-转无辜': 'Angry · Then innocent',
+  '平淡': 'Calm · Still',
+  '魔法-书点火': 'Magic · Light the book',
+  '魔法-小能量攻击': 'Magic · Small blast',
+  '魔法-大能量攻击': 'Magic · Big blast'
 }
 
 /** Cubism 惯例的分组名,美化 slug 时拆成两个词读着才像人话。 */

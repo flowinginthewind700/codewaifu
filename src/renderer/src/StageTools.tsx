@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactElement } from 'react'
-import { Activity, PanelsTopLeft, PersonStanding, Shuffle, Smile } from 'lucide-react'
+import { Activity, PanelsTopLeft, PersonStanding, Shuffle, Smile, Users } from 'lucide-react'
 import { expressionLabel } from '@shared/expression'
 import { motionMenuLabels } from '@shared/motion'
 import type { Live2DMotionRef } from '@shared/live2dCatalog'
@@ -27,6 +27,13 @@ interface StageToolsProps {
   onExpression: (name: string | null) => void
   /** `null` asks for a random gesture. */
   onMotion: (motion: Live2DMotionRef | null) => void
+  /**
+   * Whether the character sheet has anybody to offer: only the Live2D avatar
+   * wears a model, and a door that opens onto an empty room is worse than no
+   * door. App owns the sheet itself; this is just its handle.
+   */
+  charactersAvailable: boolean
+  onCharacters: () => void
 }
 
 /**
@@ -46,7 +53,9 @@ export function StageTools({
   onBench,
   onReport,
   onExpression,
-  onMotion
+  onMotion,
+  charactersAvailable,
+  onCharacters
 }: StageToolsProps): ReactElement {
   const [open, setOpen] = useState<Menu>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -181,6 +190,19 @@ export function StageTools({
             onClick={() => toggle('motion')}
           >
             <PersonStanding size={14} strokeWidth={2.2} />
+          </button>
+        </Tip>
+      ) : null}
+      {charactersAvailable ? (
+        <Tip label={t('character')} side="top">
+          <button
+            className="icon-btn"
+            type="button"
+            aria-label={t('character')}
+            aria-haspopup="dialog"
+            onClick={onCharacters}
+          >
+            <Users size={14} strokeWidth={2.2} />
           </button>
         </Tip>
       ) : null}

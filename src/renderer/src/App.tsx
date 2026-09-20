@@ -52,6 +52,7 @@ import { makeTranslator, type Translate } from './i18n'
 import { MediaBar } from './MediaBar'
 import { Panel } from './Panel'
 import { StageTools } from './StageTools'
+import { CharacterPicker } from './CharacterPicker'
 import { Tip } from './Tip'
 import { widgetVoice } from './voice'
 import type { AvatarHandle } from './Live2DAvatar'
@@ -132,6 +133,8 @@ export function App(): ReactElement {
   const [threads, setThreads] = useState<ThreadInfo[]>([])
   const [bubble, setBubble] = useState<BubbleMessage | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  /** The character sheet covers the card; the stage pill only opens it. */
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [speaking, setSpeaking] = useState(false)
   const [queueLength, setQueueLength] = useState(0)
   const [expanded, setExpanded] = useState(false)
@@ -831,6 +834,8 @@ export function App(): ReactElement {
               onReport={() => void onReport()}
               onExpression={onExpression}
               onMotion={onMotion}
+              charactersAvailable={live2d}
+              onCharacters={() => setPickerOpen(true)}
             />
           </div>
 
@@ -915,6 +920,21 @@ export function App(): ReactElement {
           ) : null}
 
           {toast ? <div className="toast" data-solid="1">{toast}</div> : null}
+
+          {/* Over the whole card, under nothing: choosing who she is replaces
+              the stage, the panel and the chat with one sheet of glass. */}
+          {pickerOpen && live2d ? (
+            <CharacterPicker
+              t={t}
+              lang={lang}
+              selected={config.avatar.character}
+              onPick={(id) => {
+                setPickerOpen(false)
+                void patch({ avatar: { ...config.avatar, character: id } })
+              }}
+              onClose={() => setPickerOpen(false)}
+            />
+          ) : null}
         </div>
       </div>
     </div>

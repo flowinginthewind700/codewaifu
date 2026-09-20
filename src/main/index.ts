@@ -5,7 +5,7 @@ import os from 'node:os'
 import type { EventPlan, Lang } from '../shared/protocol'
 import type { BubbleMessage } from '../shared/ui'
 import { systemLangFromLocales } from '../shared/lang'
-import { LIVE2D_KEEP_URLS } from '../shared/live2dCatalog'
+import { prewarmUrls } from '../shared/live2dCatalog'
 import { prewarmAssets, registerAssetProtocol, registerAssetScheme } from './assets'
 import { cliArgsFrom, runCli } from './cli'
 import { binDirOnPath, ensureCliLauncher, pathHint } from './cliLauncher'
@@ -521,7 +521,10 @@ async function boot(): Promise<void> {
   registerAssetProtocol()
   // Warm the avatar cache in the background: the first paint then reads from
   // disk, and an offline launch still shows a companion once cached.
-  prewarmAssets(LIVE2D_KEEP_URLS)
+  // Only the character she actually wears: the bundle grew to eight faces and
+  // warming all of them would spend ~8MB of somebody's bandwidth on faces they
+  // may never pick (the picker fetches any other one on demand).
+  prewarmAssets(prewarmUrls(instance.config.avatar.character))
 
   // The rung main serves to any window created from here on. Clamped because a
   // hand-edited config can hold anything, and `setZoomFactor` on a non-rung

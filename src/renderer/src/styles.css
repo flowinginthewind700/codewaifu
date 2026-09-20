@@ -372,6 +372,129 @@ a {
   background: var(--line-soft);
 }
 
+/* ---- character picker: a sheet of glass over the whole card -------------
+   Eight portraits do not fit in the stage pill's 24px buttons, so choosing
+   who she is gets the card: a dimmed backdrop (click to dismiss) and a glass
+   sheet with a two-column grid of thumbs. The sheet is the same material as
+   `.stage-menu` -- one family of glass, not a second design. */
+
+.char-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+.char-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(6, 7, 9, 0.42);
+  cursor: pointer;
+}
+
+.char-picker-sheet {
+  position: relative;
+  width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-strong);
+  backdrop-filter: blur(18px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-sat));
+  box-shadow: var(--highlight), 0 14px 34px rgba(0, 0, 0, 0.5);
+  animation: bubble-in var(--dur-2) var(--ease-spring);
+}
+
+.char-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 3px 7px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.char-picker-count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.char-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.char-picker-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 6px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease,
+    border-color var(--dur-1) ease;
+}
+
+.char-picker-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.char-picker-item[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Fixed box: a thumb must never resize its cell (and a missing thumb must
+   not collapse the row). */
+.char-picker-item img,
+.char-picker-fallback {
+  width: 44px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
+.char-picker-fallback {
+  background: var(--surface-2);
+}
+
+.char-picker-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.char-picker-tick {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  color: var(--accent);
+}
+
 .avatar-wrap {
   position: relative;
   display: flex;
@@ -1162,6 +1285,7 @@ input.bubble-input::placeholder {
 .tool-output::-webkit-scrollbar,
 .bubble::-webkit-scrollbar,
 .stage-menu::-webkit-scrollbar,
+.char-picker-grid::-webkit-scrollbar,
 .msg-bubble .code::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -1172,6 +1296,7 @@ input.bubble-input::placeholder {
 .tool-output::-webkit-scrollbar-thumb,
 .bubble::-webkit-scrollbar-thumb,
 .stage-menu::-webkit-scrollbar-thumb,
+.char-picker-grid::-webkit-scrollbar-thumb,
 .msg-bubble .code::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
@@ -1184,6 +1309,7 @@ input.bubble-input::placeholder {
 .tool-output::-webkit-scrollbar-thumb:hover,
 .bubble::-webkit-scrollbar-thumb:hover,
 .stage-menu::-webkit-scrollbar-thumb:hover,
+.char-picker-grid::-webkit-scrollbar-thumb:hover,
 .msg-bubble .code::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.26);
   background-clip: content-box;
@@ -1194,6 +1320,7 @@ input.bubble-input::placeholder {
 .tool-output::-webkit-scrollbar-track,
 .bubble::-webkit-scrollbar-track,
 .stage-menu::-webkit-scrollbar-track,
+.char-picker-grid::-webkit-scrollbar-track,
 .msg-bubble .code::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -1250,6 +1377,58 @@ input.bubble-input::placeholder {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+/* The character row in Settings: the same thumbs as the stage picker, one
+   size down. Four to a row keeps eight of them inside the 320px panel
+   without a scrollbar, and the fixed cell keeps a slow-loading thumb from
+   reflowing the row. */
+.chars {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  width: 176px;
+}
+
+.char {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 2px 3px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease,
+    border-color var(--dur-1) ease;
+}
+
+.char:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.char[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.char img {
+  width: 26px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.char span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hint {
