@@ -158,10 +158,24 @@ export function x11SocketPath(display: string): string | null {
  *
  * Electron 38+ prefers native Wayland whenever the session is Wayland, even
  * with XWayland's `DISPLAY` sitting right there. Native Wayland breaks
- * `setPosition` (the avatar drag), always-on-top and global shortcuts, so a
- * GUI start with a reachable X server re-execs once with the X11 ozone switch.
- * An explicit `--ozone-platform=<anything>` is respected: the operator asked,
- * and the relaunch would only fight them.
+ * `setPosition` (the avatar drag), always-on-top and global shortcuts, so a GUI
+ * start on a Wayland session with a reachable X server re-execs once with the
+ * X11 ozone switch.
+ *
+ * Two ways out, and both are load-bearing:
+ *
+ * - An explicit `--ozone-platform=<anything>` in argv. The operator asked, and
+ *   the relaunch would only fight them. It is also what a test harness or any
+ *   other process supervisor has to pass, because `app.relaunch` + `app.quit`
+ *   replaces this process with one nobody is watching: Playwright's
+ *   `electron.launch` times out on a child that quits before it paints, and the
+ *   relaunched app is left running as an orphan on the user's desktop.
+ * - A session that is not Wayland. On X11 Electron already picks the X11
+ *   backend, so the bounce buys nothing and costs a window that never appears
+ *   under the process the user started. Measured on a plain Xorg desktop
+ *   (`loginctl show-session` reports `Type=x11`): `DISPLAY` is set and
+ *   `/tmp/.X11-unix/X<n>` exists, so a rule that only looked at those two
+ *   relaunched anyway.
  */
 export function x11RelaunchArgs(
   argv: readonly string[],
@@ -169,6 +183,10 @@ export function x11RelaunchArgs(
   exists: (path: string) => boolean = fs.existsSync
 ): string[] | null {
   if (argv.some((arg) => arg.startsWith('--ozone-platform='))) return null
+  // Positive evidence of Wayland, not merely the absence of evidence against
+  // it: `displayServer` reports `x11` for a `DISPLAY` with no session type,
+  // which is what a headless Xvfb looks like, and there is nothing to escape.
+  if (displayServer(env) !== 'wayland') return null
   const display = String(env.DISPLAY ?? '').trim()
   if (!display) return null
   const socket = x11SocketPath(display)

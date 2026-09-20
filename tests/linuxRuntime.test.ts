@@ -112,26 +112,41 @@ describe('x11SocketPath', () => {
 })
 
 describe('x11RelaunchArgs', () => {
-  const argv = ['/usr/bin/electron', '.']
+	const argv = ['/usr/bin/electron', '.']
+	/** A Wayland session, which always also exports XWayland's `DISPLAY`. */
+	const wayland = { XDG_SESSION_TYPE: 'wayland', DISPLAY: ':0' }
 
-  it('re-execs the GUI with the X11 ozone switch when XWayland is reachable', () => {
-    expect(x11RelaunchArgs(argv, { DISPLAY: ':0' }, () => true)).toEqual([
-      '.',
-      '--ozone-platform=x11'
-    ])
-  })
+	it('re-execs the GUI with the X11 ozone switch when XWayland is reachable', () => {
+		expect(x11RelaunchArgs(argv, wayland, () => true)).toEqual(['.', '--ozone-platform=x11'])
+	})
 
-  it('respects an explicit ozone platform instead of fighting the operator', () => {
-    expect(
-      x11RelaunchArgs(['/usr/bin/electron', '.', '--ozone-platform=wayland'], { DISPLAY: ':0' }, () => true)
-    ).toBeNull()
-  })
+	it('reads the session as Wayland from WAYLAND_DISPLAY alone', () => {
+		expect(
+			x11RelaunchArgs(argv, { WAYLAND_DISPLAY: 'wayland-0', DISPLAY: ':1' }, () => true)
+		).toEqual(['.', '--ozone-platform=x11'])
+	})
 
-  it('stays put without a display or when the X server socket is missing', () => {
-    expect(x11RelaunchArgs(argv, {}, () => true)).toBeNull()
-    expect(x11RelaunchArgs(argv, { DISPLAY: ':0' }, () => false)).toBeNull()
-    expect(x11RelaunchArgs(argv, { DISPLAY: 'wayland-0' }, () => true)).toBeNull()
-  })
+	it('stays put on a plain X11 session, where the bounce would buy nothing', () => {
+		// Before v0.4.16 the rule looked only at `DISPLAY` plus its socket, so an
+		// Xorg desktop relaunched on every start: a wasted process swap for the
+		// user, and a hang for any supervisor watching that first process.
+		expect(x11RelaunchArgs(argv, { XDG_SESSION_TYPE: 'x11', DISPLAY: ':0' }, () => true)).toBeNull()
+		expect(x11RelaunchArgs(argv, { DISPLAY: ':0' }, () => true)).toBeNull()
+	})
+
+	it('respects an explicit ozone platform instead of fighting the operator', () => {
+		expect(
+			x11RelaunchArgs(['/usr/bin/electron', '.', '--ozone-platform=wayland'], wayland, () => true)
+		).toBeNull()
+	})
+
+	it('stays put without a display or when the X server socket is missing', () => {
+		expect(x11RelaunchArgs(argv, { XDG_SESSION_TYPE: 'wayland' }, () => true)).toBeNull()
+		expect(x11RelaunchArgs(argv, wayland, () => false)).toBeNull()
+		expect(
+			x11RelaunchArgs(argv, { XDG_SESSION_TYPE: 'wayland', DISPLAY: 'wayland-0' }, () => true)
+		).toBeNull()
+	})
 })
 
 describe('sandboxDecision', () => {

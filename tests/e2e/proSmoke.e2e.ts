@@ -125,7 +125,13 @@ beforeAll(async () => {
         '--no-sandbox',
         // Puts Chromium's own console into stderrTail, which is diagnostics.
         // The assertion about throwing is `pageerror` after a reload; see below.
-        '--enable-logging=stderr'
+        '--enable-logging=stderr',
+        // Pins the ozone platform, which is also how the app is told not to
+        // re-exec itself onto XWayland: `x11RelaunchArgs` respects an explicit
+        // switch. A relaunch hands Playwright a process that quits before it
+        // paints, so `electron.launch` times out and the relaunched app keeps
+        // running on the developer's desktop as an orphan.
+        '--ozone-platform=x11'
       ],
       env,
       timeout: BOOT_TIMEOUT_MS
