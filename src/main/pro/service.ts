@@ -53,10 +53,12 @@ import {
   groupKeyFor,
   groupLabelFor,
   handoffPrompt,
+  livenessByTask,
   needsMeCount,
   pathBase,
   planAttentionAction,
   rePromptText,
+  reviveTaskStatus,
   resolveWorkdir,
   type AttentionExecution,
   type AttentionItem,
@@ -68,6 +70,7 @@ import {
   type LedgerKind,
   type ProvisionResult,
   type RecoveryPlan,
+  type TaskLiveness,
   type TaskBinding,
   type TaskRecord,
   type TaskStatus
@@ -626,6 +629,20 @@ export class ProService implements CompanionApi {
   private readonly lastGit = new Map<string, { head: string; branch: string; dirty: number }>()
   /** Panes a connect is watching for a password prompt. See `armPasswordAssist`. */
   private readonly assists = new Map<string, PasswordAssist>()
+  /**
+   * The proof of life each task had on the previous snapshot, so a finished task
+   * can be revived on a *change* rather than on a pane that merely looks busy.
+   * Absent means "not observed yet", and an unobserved task never flips: see
+   * `reviveFinishedTasks`.
+   */
+  private readonly liveSeen = new Map<string, TaskLiveness>()
+  /**
+   * Tasks whose done status we watched a human set over an already-busy pane.
+   * That is a deliberate verdict - "it is still going and I am done tracking
+   * it" - so it only yields to a real status transition, not to the spinner
+   * repainting. See `reviveTaskStatus`.
+   */
+  private readonly witnessedDone = new Set<string>()
 
   private cached: BenchView | null = null
   private lastSignature = ''
@@ -991,6 +1008,12 @@ export class ProService implements CompanionApi {
     this.session = null
     this.sessionSocket = ''
     this.wasOnline = false
+    // Proof of life is a fact about terminals we are watching. A socket that
+    // went away took those terminals with it, so the next connection records a
+    // baseline instead of comparing a live pane against a remembered one. What
+    // the human decided about a task is not a fact about a terminal, so it stays:
+    // a socket hiccup is not an argument against a close they made on purpose.
+    this.liveSeen.clear()
     // A new connection earns a new unattended attempt; see armAutoResume.
     this.bootSnapshot = false
     this.autoResumeDone = false
@@ -1049,6 +1072,15 @@ export class ProService implements CompanionApi {
           this.bootSnapshot = false
           this.autoResumeDone = false
           this.cancelAutoResume()
+          // Proof of life is a fact about terminals we are watching, and an
+          // outage may have replaced all of them: restored panes repaint their
+          // titles during the restore itself, so comparing against a memory of
+          // the old ones would read that repaint as work resuming. Dropping the
+          // baseline makes the first snapshot back a recording instead of a
+          // verdict. The human's own verdict survives - that was said about the
+          // conversation, not about a terminal, and an outage is not an argument
+          // against it.
+          this.liveSeen.clear()
         }
         this.invalidate()
         return
@@ -1159,6 +1191,7 @@ export class ProService implements CompanionApi {
     this.captureSessions(snapshot)
     this.triage.onSnapshot(snapshot)
     this.triage.resync(new Set(this.registry.tasks().map((task) => task.id)))
+    this.reviveFinishedTasks(snapshot)
     this.invalidate()
     // A reconciled snapshot is the second half of the boot gate: it is what
     // makes the recovery plans honest about which panes exist.
@@ -1221,6 +1254,88 @@ export class ProService implements CompanionApi {
       changed = true
     }
     if (changed) this.registry.save()
+  }
+
+  /**
+   * A task the human finished, still finishing itself.
+   *
+   * The tree pill and the live dot read two different sources, and when a human
+   * closes a row and then keeps talking to that same conversation the two
+   * disagree forever: the dot says working, the pill says done, and the recovery
+   * plan stays parked on "marked done". One of them is on screen and the other is
+   * a stale verdict, so the verdict is the one that moves.
+   *
+   * Runs on every snapshot, after the tracker has seen the same bytes, and writes
+   * through the registry the same way a human status change does. The decision
+   * itself is in `reviveTaskStatus`: this method only keeps the previous pass
+   * around and records what happened.
+   */
+  private reviveFinishedTasks(snapshot: Snapshot): void {
+    const tasks = this.registry.tasks()
+    const now = livenessByTask(tasks, snapshot)
+    let changed = false
+    for (const task of tasks) {
+      const seen = now.get(task.id) ?? { live: 'unknown', signature: '' }
+      const prior = this.liveSeen.get(task.id) ?? null
+      if (reviveTaskStatus(task.status, seen, prior, this.witnessedDone.has(task.id))) {
+        this.registry.setStatus(task.id, 'active')
+        // A deliberate close no longer stands, so the next busy pane has to earn
+        // its own baseline rather than inherit a promise nobody made.
+        this.witnessedDone.delete(task.id)
+        this.ledger.append(
+          {
+            taskId: task.id,
+            kind: 'event',
+            text: 'reopened: the agent is working in it again',
+            source: 'herdr'
+          },
+          this.timers.now()
+        )
+        changed = true
+      }
+      this.liveSeen.set(task.id, seen)
+    }
+    if (changed) {
+      this.registry.save()
+      this.invalidate()
+    }
+  }
+
+  /**
+   * Remember a close we watched happen over a busy pane.
+   *
+   * "Mark done" is the human's verdict, and a verdict made with the spinner
+   * visibly running means "I am done tracking it", not "it stopped". Reopening
+   * that one a second later would be the app arguing with its own button.
+   */
+  private noteDoneVerdict(taskId: string): void {
+    if (!taskId) return
+    const seen = this.liveSeen.get(taskId)
+    if (seen && (seen.live === 'working' || seen.live === 'blocked')) this.witnessedDone.add(taskId)
+    else this.witnessedDone.delete(taskId)
+  }
+
+  /**
+   * Drop the verdict when the human talks to the task again.
+   *
+   * Typing into a finished task's pane is the clearest possible statement that
+   * it is not finished, and it outranks a close we happened to watch.
+   */
+  private clearDoneVerdict(taskId: string): void {
+    if (taskId) this.witnessedDone.delete(taskId)
+  }
+
+  /**
+   * Drop the verdict by pane, for the verbs that only know the pane they typed
+   * into. A keystroke that lands in a finished task's terminal is the human
+   * saying it is not finished, and it does not need the row selected for that
+   * to be true.
+   */
+  private clearDoneVerdictForPane(paneId: string): void {
+    if (!paneId) return
+    for (const task of this.registry.tasks()) {
+      if (task.paneIds.includes(paneId)) this.clearDoneVerdict(task.id)
+    }
   }
 
   /* ---------------------------------------------------------------- *
@@ -1852,6 +1967,7 @@ export class ProService implements CompanionApi {
       case 'resolve': {
         if (execution.status === 'done' && execution.taskId) {
           this.registry.setStatus(execution.taskId, 'done')
+          this.noteDoneVerdict(execution.taskId)
           const count = this.triage.resolveTaskItems(execution.taskId, 'task marked done')
           this.ledger.append(
             { taskId: execution.taskId, kind: 'checkpoint', text: 'marked done', source: request.origin },
@@ -1884,6 +2000,7 @@ export class ProService implements CompanionApi {
     // keeps running across the very keystroke that woke the agent up - which is
     // how "I just typed and 5s later it said stuck" happens.
     this.triage.noteActivity(paneId)
+    this.clearDoneVerdictForPane(paneId)
     const agent = this.agentForPane(paneId)
     if (agent) {
       try {
@@ -1953,6 +2070,10 @@ export class ProService implements CompanionApi {
       case 'status': {
         const task = this.registry.setStatus(request.taskId, request.status)
         if (!task) return this.noTask(request.taskId)
+        // A close made over a busy pane is a verdict about attention, not a
+        // claim that nothing is running; anything else re-arms the revive pass.
+        if (request.status === 'done') this.noteDoneVerdict(request.taskId)
+        else this.clearDoneVerdict(request.taskId)
         // A parked or finished task's queue is nobody's problem; leaving it
         // there would put a number on the badge that cannot be acted on.
         if (request.status !== 'active') {
@@ -1978,6 +2099,8 @@ export class ProService implements CompanionApi {
         if (!this.registry.remove(request.taskId)) return this.noTask(request.taskId)
         this.triage.resolveTaskItems(request.taskId, 'task removed')
         this.lastGit.delete(request.taskId)
+        this.liveSeen.delete(request.taskId)
+        this.clearDoneVerdict(request.taskId)
         // Closing is the other half of "remove this terminal". The row going
         // away is a change to our file; the shell staying alive is a change to
         // nothing, and a bench that only ever does the first one grows a pile
@@ -2397,6 +2520,9 @@ export class ProService implements CompanionApi {
     if (!session) {
       return failResult('no-session', `task ${task.id} has no agent session to answer`)
     }
+    // Same statement as typing into the pane, through the other door: a human
+    // talking to this conversation again means it is not finished.
+    this.clearDoneVerdict(task.id)
     const result = await this.host
       .steerThread(session.agent, session.id, request.message)
       .catch((error: unknown) => {
@@ -2605,7 +2731,10 @@ export class ProService implements CompanionApi {
         const bridge = this.bridges.get(request.paneId)
         if (!bridge) return this.noBridge(request.paneId)
         const ok = bridge.input(request.text)
-        if (ok) this.triage.noteActivity(request.paneId)
+        if (ok) {
+          this.triage.noteActivity(request.paneId)
+          this.clearDoneVerdictForPane(request.paneId)
+        }
         return ok
           ? okResult(null, '', 'sent')
           : failResult('not-live', 'the terminal bridge is not live')
@@ -2643,13 +2772,17 @@ export class ProService implements CompanionApi {
         if (!sent) return this.sendFailed(request.paneId, 'text')
         if (request.enter) await client.sendKeys(request.paneId, ['enter']).catch(() => false)
         this.triage.noteActivity(request.paneId)
+        this.clearDoneVerdictForPane(request.paneId)
         return okResult({ paneId: request.paneId }, '', 'sent')
       }
       case 'keys': {
         const client = this.client()
         if (!client) return this.offline()
         const sent = await client.sendKeys(request.paneId, request.keys).catch(() => false)
-        if (sent) this.triage.noteActivity(request.paneId)
+        if (sent) {
+          this.triage.noteActivity(request.paneId)
+          this.clearDoneVerdictForPane(request.paneId)
+        }
         return sent
           ? okResult({ paneId: request.paneId, keys: request.keys }, '', 'sent')
           : this.sendFailed(request.paneId, 'keystrokes')

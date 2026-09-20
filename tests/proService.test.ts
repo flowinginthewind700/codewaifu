@@ -2663,3 +2663,194 @@ describe('ProService task creation', () => {
     expect(bench.logs.some((line) => line.includes('herdr refused to start the agent'))).toBe(true)
   })
 })
+
+/* ------------------------------------------------------------------ *
+ * A finished task that is still finishing itself
+ * ------------------------------------------------------------------ */
+
+/**
+ * The tree pill and the live dot read two different sources, and they can
+ * disagree forever: close a row, keep talking to that conversation, and the dot
+ * says working while the pill says done. These cases drive the snapshot pass
+ * that resolves it, because the rule is the easy half (`tests/proRevive.test.ts`
+ * has it) and what is worth pinning here is the wiring - that the pass runs on a
+ * snapshot at all, that it writes through the registry, and that a close the
+ * human made over a busy pane survives the spinner repainting.
+ */
+describe('ProService reviving a finished task', () => {
+  /** One workspace per row, each pane with the fields proof of life reads. */
+  function snapOf(
+    panes: readonly { workspaceId: string; status?: string; title?: string }[]
+  ): Snapshot {
+    const parsed = parseSnapshot({
+      version: '0.9.0',
+      protocol: 1,
+      workspaces: panes.map((pane, index) => ({
+        workspace_id: pane.workspaceId,
+        number: index + 1,
+        label: pane.workspaceId
+      })),
+      panes: panes.map((pane) => ({
+        pane_id: `${pane.workspaceId}:p1`,
+        workspace_id: pane.workspaceId,
+        tab_id: `${pane.workspaceId}:t1`,
+        cwd: WORKDIR,
+        agent: 'codex',
+        agent_status: pane.status ?? 'working',
+        terminal_title: pane.title ?? ''
+      }))
+    })
+    if (!parsed) throw new Error('snapshot fixture did not parse')
+    return parsed
+  }
+
+  function row(id: string, workspaceId: string, status: TaskRecord['status']): TaskRecord {
+    return { ...seedTask(), id, title: `the row over ${workspaceId}`, workspaceId, paneIds: [`${workspaceId}:p1`], status }
+  }
+
+  const statuses = (bench: Bench): string[] =>
+    bench.registry.tasks().map((task) => `${task.id}:${task.status}`)
+
+  it('reopens a closed row whose pane starts working again', async () => {
+    const bench = await boot({
+      tasks: [row('t-done', 'w1', 'done')],
+      // The first snapshot is a baseline, so this one is recorded rather than
+      // judged: it is how a run that starts up over a busy terminal learns what
+      // busy looks like for this pane before it is allowed to contradict it.
+      snapshot: snapOf([{ workspaceId: 'w1', status: 'idle', title: 'idle' }])
+    })
+    expect(statuses(bench)).toEqual(['t-done:done'])
+
+    bench.session.pushSnapshot(snapOf([{ workspaceId: 'w1', status: 'working', title: 'spinner' }]))
+
+    expect(statuses(bench)).toEqual(['t-done:active'])
+    // And the ledger says why, because a status that moves on its own is a
+    // status nobody can explain three days later.
+    expect(bench.ledgerTape.map((entry) => entry.text)).toContain(
+      'reopened: the agent is working in it again'
+    )
+  })
+
+  it('reopens on proof of life when the busy label never changed', async () => {
+    // The shape the report actually describes: the row had been closed for days
+    // while its pane stayed `working` the whole time, so no transition into busy
+    // ever happens and the label alone contradicts the screen indefinitely.
+    const bench = await boot({
+      tasks: [row('t-done', 'w1', 'done')],
+      snapshot: snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠏ thinking' }])
+    })
+    expect(statuses(bench)).toEqual(['t-done:done'])
+
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠹ thinking' }])
+    )
+
+    expect(statuses(bench)).toEqual(['t-done:active'])
+  })
+
+  it('leaves a closed row closed while its terminal is genuinely frozen', async () => {
+    const bench = await boot({
+      tasks: [row('t-done', 'w1', 'done')],
+      snapshot: snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠏ thinking' }])
+    })
+
+    // Same bytes again: a leftover terminal holding the last frame of a finished
+    // run looks busy to herdr forever, and reopening it would put a row the
+    // human closed back into the queue with nothing new in it.
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠏ thinking' }])
+    )
+
+    expect(statuses(bench)).toEqual(['t-done:done'])
+    expect(bench.ledgerTape.map((entry) => entry.text)).not.toContain(
+      'reopened: the agent is working in it again'
+    )
+  })
+
+  it('honours a close the human made over a busy pane until work actually resumes', async () => {
+    const bench = await boot({
+      tasks: [row('t-live', 'w1', 'active')],
+      snapshot: snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠏ thinking' }])
+    })
+
+    // "Mark done" while the spinner is running means "I am done tracking it",
+    // not "it stopped" - so the pass that runs a second later must not argue
+    // with the button the human just pressed.
+    await bench.service.taskOp({ op: 'status', taskId: 't-live', status: 'done' })
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠹ thinking' }])
+    )
+    expect(statuses(bench)).toEqual(['t-live:done'])
+
+    // A real transition is a new turn, and that outranks the verdict.
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'idle', title: 'waiting' }])
+    )
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠋ working' }])
+    )
+    expect(statuses(bench)).toEqual(['t-live:active'])
+  })
+
+  it('drops the verdict once the human types into that pane again', async () => {
+    const bench = await boot({
+      tasks: [row('t-live', 'w1', 'active')],
+      snapshot: snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠏ thinking' }]),
+      record: true
+    })
+    await bench.service.taskOp({ op: 'status', taskId: 't-live', status: 'done' })
+
+    // Answering a question in a closed task is the clearest possible statement
+    // that it is not closed, and it does not need the row selected to be true.
+    await bench.service.paneOp({ op: 'send', paneId: 'w1:p1', text: 'keep going', enter: true })
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'Codex ⠹ thinking' }])
+    )
+
+    expect(statuses(bench)).toEqual(['t-live:active'])
+  })
+
+  it('leaves a parked neighbour alone, however busy its pane is', async () => {
+    const bench = await boot({
+      tasks: [row('t-done', 'w1', 'done'), row('t-parked', 'w2', 'parked')],
+      snapshot: snapOf([
+        { workspaceId: 'w1', status: 'working', title: 'a' },
+        { workspaceId: 'w2', status: 'working', title: 'b' }
+      ])
+    })
+
+    bench.session.pushSnapshot(
+      snapOf([
+        { workspaceId: 'w1', status: 'working', title: 'a2' },
+        { workspaceId: 'w2', status: 'working', title: 'b2' }
+      ])
+    )
+
+    // A park is a decision about attention, not a claim that nothing is running;
+    // un-parking it behind the human's back puts a silenced row back in the queue.
+    expect(statuses(bench)).toEqual(['t-done:active', 't-parked:parked'])
+  })
+
+  it('records a baseline after a reconnect instead of judging a remembered terminal', async () => {
+    const bench = await boot({
+      tasks: [row('t-done', 'w1', 'done')],
+      snapshot: snapOf([{ workspaceId: 'w1', status: 'working', title: 'before' }])
+    })
+
+    bench.session.setOnline(true)
+    bench.session.setOnline(false)
+    bench.session.setOnline(true)
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'after the outage' }])
+    )
+
+    // Proof of life is a fact about terminals we are watching, and the ones we
+    // watched before the socket went away are not these.
+    expect(statuses(bench)).toEqual(['t-done:done'])
+
+    bench.session.pushSnapshot(
+      snapOf([{ workspaceId: 'w1', status: 'working', title: 'still after' }])
+    )
+    expect(statuses(bench)).toEqual(['t-done:active'])
+  })
+})

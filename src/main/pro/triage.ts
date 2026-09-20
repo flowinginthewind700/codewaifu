@@ -21,6 +21,7 @@ import {
   attentionId,
   DEFAULT_SNOOZE_MINUTES,
   parsePaneOptions,
+  paneProgressSignature,
   type AttentionItem,
   type AttentionKind,
   type AttentionSource,
@@ -150,7 +151,7 @@ export class Triage {
    * Per-pane proof of life: the last activity signature we saw and when we saw
    * it. A stall is "this signature has not changed for `stalledAfterMs` while
    * the pane is still `working`", so the signature has to move whenever the
-   * agent is genuinely doing something. See `progressSignature`.
+   * agent is genuinely doing something. See `paneProgressSignature`.
    */
   private readonly progress = new Map<string, { sig: string; sinceAt: number }>()
   private readonly listeners = new Set<(event: TriageEvent) => void>()
@@ -422,7 +423,7 @@ export class Triage {
     for (const pane of snapshot.panes) {
       seen.add(pane.paneId)
       const hint = hintOfPane(pane)
-      const sig = progressSignature(pane)
+      const sig = paneProgressSignature(pane)
       const prior = this.progress.get(pane.paneId)
       if (!prior || prior.sig !== sig) {
         // A moved signature is the only thing that ends a stall.
@@ -464,7 +465,7 @@ export class Triage {
    * clock restarts and any `stalled` we raised clears immediately - without
    * waiting for the next snapshot to notice the title move.
    *
-   * The signature is bumped to a value `progressSignature` will not reproduce on
+   * The signature is bumped to a value `paneProgressSignature` will not produce
    * its own, so the next snapshot always reads as "changed" and re-arms cleanly.
    */
   noteActivity(paneId: string, at = this.now()): void {
@@ -991,26 +992,6 @@ function hintOfPane(pane: PaneInfo): TaskHint {
     cwd: pane.foregroundCwd || pane.cwd,
     sessionId: pane.agentSession?.kind === 'id' ? pane.agentSession.value : ''
   }
-}
-
-/**
- * The fields that beat while an agent works, joined into one string.
- *
- * `revision` is here because it is the documented output counter and some panes
- * do move it, but it is deliberately *not* alone: a live working codex pane held
- * its revision constant for an entire run. `terminal_title` is the field that
- * actually repaints during work - it carries the spinner and status line the
- * agent draws, which is the same byte stream Ghostty shows as "still going".
- * `title` and the scroll offset round it out, so any of the four moving counts
- * as progress and only genuine quiet across all of them reads as a stall.
- */
-function progressSignature(pane: PaneInfo): string {
-  return [
-    pane.revision,
-    pane.terminalTitle,
-    pane.title,
-    pane.scroll?.offsetFromBottom ?? 0
-  ].join('|')
 }
 
 /** `taskId:kind:origin` -> origin, so a reclassified item keeps its lineage. */

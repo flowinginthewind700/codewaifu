@@ -276,6 +276,126 @@ export function foldStatus(statuses: readonly AgentStatus[]): AgentStatus {
   return best
 }
 
+/**
+ * Proof of life for one task: what its panes are labelled, and what moves.
+ *
+ * `signature` is the same string the stall detector reads, for the same reason:
+ * `agentStatus` is a *label* herdr derives from screen content, and it stays
+ * `working` on the leftover terminal of a finished run for as long as that
+ * terminal lives. The signature is what actually beats - a live codex pane held
+ * its `revision` constant across an entire run while `terminal_title` repainted
+ * about once a second with the spinner, so the label alone cannot tell "still
+ * going" from "left on screen".
+ */
+export interface TaskLiveness {
+  /** Fold of the bound panes' statuses; `unknown` when there are none. */
+  live: AgentStatus
+  /** '' when the task has no pane; otherwise every bound pane's signature. */
+  signature: string
+}
+
+/**
+ * Per-task liveness, computed the same way the projection computes live state,
+ * for the callers that have to react to a *change* in it rather than render it.
+ *
+ * `buildBench` is a pure read and stays one: the bench has to write "this
+ * finished task is working again" to the registry, and a projection that writes
+ * is a projection that depends on when somebody happened to look at it. So the
+ * same binding and the same fold live here, and the service diffs two passes.
+ */
+export function livenessByTask(
+  tasks: readonly TaskRecord[],
+  snapshot: Snapshot | null
+): Map<string, TaskLiveness> {
+  const out = new Map<string, TaskLiveness>()
+  if (!snapshot) return out
+  const panesById = new Map<string, PaneInfo>()
+  for (const pane of snapshot.panes) panesById.set(pane.paneId, pane)
+  for (const task of tasks) {
+    const binding = bindTask(task, snapshot)
+    const bound = binding.paneIds.map((id) => panesById.get(id)).filter(nonNull)
+    out.set(task.id, {
+      live: bound.length ? foldStatus(bound.map((pane) => pane.agentStatus)) : 'unknown',
+      // Sorted, so a binding that lists the same panes in another order does
+      // not read as movement; joined per pane, so any one of a task's panes
+      // repainting counts as progress in that task.
+      signature: bound
+        .map((pane) => `${pane.paneId}=${paneProgressSignature(pane)}`)
+        .sort()
+        .join(';')
+    })
+  }
+  return out
+}
+
+/**
+ * The fields that beat while an agent works, joined into one string.
+ *
+ * `revision` is here because it is the documented output counter and some panes
+ * do move it, but it is deliberately *not* alone: a live working codex pane held
+ * its revision constant for an entire run. `terminal_title` is the field that
+ * actually repaints during work - it carries the spinner and status line the
+ * agent draws, which is the same byte stream Ghostty shows as "still going".
+ * `title` and the scroll offset round it out, so any of the four moving counts
+ * as progress and only genuine quiet across all of them reads as a stall.
+ *
+ * One definition, shared by the stall detector and the revive pass: both answer
+ * "is this pane doing something right now", and two spellings of that question
+ * drift into disagreeing about the same pane.
+ */
+export function paneProgressSignature(pane: PaneInfo): string {
+  return [pane.revision, pane.terminalTitle, pane.title, pane.scroll?.offsetFromBottom ?? 0].join('|')
+}
+
+/**
+ * A task the human finished is not finished any more once work resumes in it.
+ *
+ * The row keeps its status on disk, and every surface reads that status for the
+ * pill while reading live panes for the dot - so a done task whose conversation
+ * the human picked back up used to show a green "working" dot next to a
+ * "done" pill forever, and its recovery plan stayed parked on "marked done".
+ * Two surfaces, two truths, and the one that was wrong was the one you act on.
+ *
+ * Two ways in, because the bug has two shapes. A *status transition* into busy
+ * is a new turn - the agent was quiet and now it is not - which is the case the
+ * human describes as "I finished it and kept talking to it". A *moved
+ * signature* under an unchanged busy label is proof of life, and it is the one
+ * that actually catches a long-lived bench: the three rows stuck in this state
+ * on a real machine had been `working` for five hours before they were ever
+ * observed, so no transition ever happens and the label alone contradicts the
+ * screen indefinitely.
+ *
+ * Proof of life is conditional on `witnessed`, transitions are not.
+ * `witnessed` means we saw the human close this row while its pane was already
+ * busy, which is a verdict made with their eyes open - "it is still going and I
+ * am done tracking it" - and second-guessing it one second later is how an app
+ * teaches the human that its buttons do nothing. A row that was already closed
+ * when we started observing carries no such promise: nobody accepted a busy
+ * pane in this life, and what is on screen outranks a verdict we did not see
+ * made.
+ *
+ * `prior` is null for a task we have not observed yet, and an unobserved task
+ * never flips: the first pass records a baseline, the next one decides. Going
+ * offline clears the baseline, so restored panes are recorded rather than
+ * compared against a memory of a terminal that no longer exists.
+ *
+ * Only `done` is eligible. A manual park is a decision about attention, not a
+ * claim that nothing is running, and un-parking it behind the human's back
+ * would put a task they deliberately silenced back into the queue.
+ */
+export function reviveTaskStatus(
+  status: TaskStatus,
+  now: TaskLiveness,
+  prior: TaskLiveness | null,
+  witnessed: boolean
+): boolean {
+  if (status !== 'done') return false
+  if (!prior) return false
+  if (now.live !== 'working' && now.live !== 'blocked') return false
+  if (prior.live !== now.live) return true
+  return !witnessed && prior.signature !== now.signature
+}
+
 export interface TaskView extends TaskRecord {
   /** Derived from live panes; `unknown` when herdr has no pane for the task. */
   liveStatus: AgentStatus
