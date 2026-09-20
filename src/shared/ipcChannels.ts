@@ -57,6 +57,13 @@ export const IPC = {
   pushEvent: 'cw:event',
   pushSpeaking: 'cw:speaking',
   pushConfig: 'cw:config',
+  /**
+   * The interface-zoom rung main just applied, as a number. Pushed on its own
+   * channel rather than read off `pushConfig`: the config write is debounced so
+   * a held-down key does not write thirty times a second, and the HUD has to
+   * appear on the first step, not four hundred ms after the last one.
+   */
+  pushZoom: 'cw:zoom',
   pushMedia: 'cw:media',
   pushBubble: 'cw:bubble',
   pushRelay: 'cw:relay',
@@ -166,6 +173,7 @@ export const PUSH_CHANNELS: readonly IpcChannel[] = [
   IPC.pushEvent,
   IPC.pushSpeaking,
   IPC.pushConfig,
+  IPC.pushZoom,
   IPC.pushMedia,
   IPC.pushBubble,
   IPC.pushRelay,

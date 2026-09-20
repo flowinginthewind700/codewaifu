@@ -1,4 +1,5 @@
 import { app, dialog, globalShortcut, Notification, shell } from 'electron'
+import type { WebContents } from 'electron'
 import crypto from 'node:crypto'
 import os from 'node:os'
 import type { EventPlan, Lang } from '../shared/protocol'
@@ -22,6 +23,8 @@ import { ProService, type ProHost } from './pro/service'
 import { effectivePath } from './shellPath'
 import { RendererVoice } from './voiceBridge'
 import { createWindow, type WindowHandle } from './window'
+import { attachZoomKeys } from './zoom'
+import { clampZoom, ZOOM_DEFAULT, zoomForCommand, type ZoomCommand } from '../shared/zoom'
 import {
   APP_USER_MODEL_ID,
   chromiumSwitches,
@@ -210,6 +213,74 @@ function benchAlive(): BenchHandle | null {
 }
 
 /**
+ * Interface zoom, owned here.
+ *
+ * `core.config.uiZoom` is the persisted rung; this closure is the only thing
+ * that moves it, so the widget and the Bench cannot end up on two rungs. The
+ * write is debounced because holding `Ctrl+=` walks the ladder at key-repeat
+ * speed and every step would otherwise be a config write - and a config write
+ * re-merges the agents' hook files. What the human sees is not debounced: the
+ * rung is applied and pushed to the HUD at once, and the file catches up.
+ */
+let zoomRung = ZOOM_DEFAULT
+let zoomWriteTimer: NodeJS.Timeout | null = null
+const ZOOM_WRITE_MS = 400
+
+function pushZoomHud(rung: number): void {
+  send(handle?.win ?? null, IPC.pushZoom, rung)
+  benchAlive()?.send(IPC.pushZoom, rung)
+}
+
+function flushZoom(): void {
+  if (zoomWriteTimer) {
+    clearTimeout(zoomWriteTimer)
+    zoomWriteTimer = null
+  }
+  const instance = core
+  if (!instance || instance.config.uiZoom === zoomRung) return
+  // `updateConfig` persists and wakes the config listeners, but it does not
+  // call `ui.applyConfig` - that is the IPC handler's job, and this path did
+  // not come through IPC. The rung was already applied, so what is left here is
+  // bringing the persisted copy into step.
+  void instance.updateConfig({ uiZoom: zoomRung }).catch((error) => {
+    log('warn', 'zoom persist failed', String(error))
+  })
+}
+
+/** Apply one rung everywhere it has to be true, then schedule the write. */
+function applyZoomRung(next: number): void {
+  const rung = clampZoom(next)
+  const changed = rung !== zoomRung || core?.config.uiZoom !== rung
+  zoomRung = rung
+  if (changed) {
+    const instance = core
+    if (instance) {
+      // Drives `webContents.setZoomFactor` *and* the frame geometry: the widget
+      // measures itself in CSS pixels, so a bigger page needs a bigger frame or
+      // she is clipped.
+      handle?.applyConfig({ ...instance.config, uiZoom: rung })
+    }
+    benchAlive()?.setZoom()
+    if (zoomWriteTimer) clearTimeout(zoomWriteTimer)
+    zoomWriteTimer = setTimeout(flushZoom, ZOOM_WRITE_MS)
+    zoomWriteTimer.unref?.()
+  }
+  // Pushed even when nothing moved: a second Ctrl+0 at 100% should still say
+  // "100%" rather than look like the keystroke did nothing.
+  pushZoomHud(rung)
+}
+
+/** One zoom command, whether it came from a keystroke or a settings row. */
+function applyZoomCommand(command: ZoomCommand): void {
+  applyZoomRung(zoomForCommand(zoomRung, command))
+}
+
+/** A zoom chord typed in either window moves the one shared rung. */
+function attachZoomTo(contents: WebContents): void {
+  attachZoomKeys(contents, (command) => applyZoomCommand(command))
+}
+
+/**
  * Create the Bench on first open, then keep it. A cockpit that re-spawns on
  * every bubble click loses the terminal scrollback the human was reading, so
  * closing it hides it and only quitting destroys it.
@@ -225,6 +296,7 @@ function ensureBench(): BenchHandle | null {
       // Straight to the config file rather than through `updateConfig`: a
       // resize must not re-merge the agents' hook files or wake Pro's diff.
       saveGeometry: (geometry) => instance.setBenchGeometry(geometry),
+      zoom: () => zoomRung,
       onFocusChange: () => pro?.refreshCompanion(),
       onLoaded: () => pro?.replayFocus(),
       onClosed: () => {
@@ -237,6 +309,7 @@ function ensureBench(): BenchHandle | null {
     bench = null
     return null
   }
+  attachZoomTo(bench.win.webContents)
   return bench
 }
 
@@ -430,12 +503,30 @@ async function boot(): Promise<void> {
   })
   instance.addConfigListener(() => {
     void service.syncConfig()
+    // The Bench keeps its own copy of the config for the settings it renders,
+    // and nothing pushed it here before: a change made from the widget - or a
+    // hand-edited file - left the cockpit showing the old one until reopened.
+    benchAlive()?.send(IPC.pushConfig, { ...instance.config, token: '***' })
+    // A config that did not come from a keystroke (the widget's settings row,
+    // the HTTP relay, a hand-edited file) still has to move the rung main
+    // serves to windows created later, or reopening the Bench would come back
+    // at the old size.
+    const rung = clampZoom(instance.config.uiZoom)
+    if (rung !== zoomRung) {
+      zoomRung = rung
+      benchAlive()?.setZoom()
+    }
   })
 
   registerAssetProtocol()
   // Warm the avatar cache in the background: the first paint then reads from
   // disk, and an offline launch still shows a companion once cached.
   prewarmAssets(LIVE2D_KEEP_URLS)
+
+  // The rung main serves to any window created from here on. Clamped because a
+  // hand-edited config can hold anything, and `setZoomFactor` on a non-rung
+  // value is the one way the two windows could disagree about what 1.15 means.
+  zoomRung = clampZoom(instance.config.uiZoom)
 
   handle = createWindow(instance.config, {
     onExpanded: (expanded) => send(handle?.win ?? null, IPC.pushExpanded, expanded),
@@ -478,6 +569,10 @@ async function boot(): Promise<void> {
     // on, so the item disappears with the feature instead of dying on click.
     benchAvailable: () => pro?.view() !== null
   })
+
+  // Claim the zoom chords before the page and before the default menu's own
+  // zoom roles do, so `Ctrl+=` moves the one ladder this app has.
+  attachZoomTo(handle.win.webContents)
 
   registerIpc(instance, () => handle?.win ?? null, {
     setExpanded: (expanded) => handle?.setExpanded(expanded),
@@ -620,6 +715,11 @@ async function main(): Promise<void> {
     globalShortcut.unregisterAll()
     if (mediaTimer) clearInterval(mediaTimer)
     rendererVoice?.shutdown()
+    // Quitting inside the write debounce must still land the rung, or the app
+    // comes back at the size the human last saw instead of the one they set.
+    // `updateConfig` writes the file before its first await, so this is in time
+    // even though nothing awaits it here.
+    flushZoom()
     // Pro goes first: it dismisses the bubbles it issued, and a bubble offering
     // "approve" for a pane that is already gone is a lie with a click target.
     pro?.shutdown()

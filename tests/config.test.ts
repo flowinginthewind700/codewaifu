@@ -8,6 +8,7 @@ import {
   parseConfig,
   type AppConfig
 } from '../src/shared/config'
+import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN } from '../src/shared/zoom'
 
 describe('parseConfig', () => {
   it('returns the defaults for an empty or malformed file', () => {
@@ -31,6 +32,16 @@ describe('parseConfig', () => {
     expect(parseConfig({ maxQueue: 900 }).maxQueue).toBe(12)
     expect(parseConfig({ voice: { rate: 1 } }).voice.rate).toBe(90)
     expect(parseConfig({ voice: { rate: 9999 } }).voice.rate).toBe(400)
+  })
+
+  it('keeps interface zoom on the ladder, so the frame math stays integral', () => {
+    // A hand-edited 3 would push the widget past the work area, and a value
+    // between rungs would leave `targetSize()` multiplying by a number the
+    // keyboard shortcuts can never get back to.
+    expect(parseConfig({ uiZoom: 3 }).uiZoom).toBe(ZOOM_MAX)
+    expect(parseConfig({ uiZoom: 0.01 }).uiZoom).toBe(ZOOM_MIN)
+    expect(parseConfig({ uiZoom: 'nope' }).uiZoom).toBe(ZOOM_DEFAULT)
+    expect(parseConfig({ uiZoom: 1.16 }).uiZoom).toBe(1.2)
   })
 
   it('accepts string numbers, because a Settings input arrives as text', () => {

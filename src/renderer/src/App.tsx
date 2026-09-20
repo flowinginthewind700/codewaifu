@@ -42,6 +42,7 @@ import { answerText, type AttentionAction } from '@shared/pro'
 import type { ProCompanionPush, ProResult } from '@shared/proIpc'
 import { resolveUiLang } from '@shared/lang'
 import { expressionForMood } from '@shared/live2dMood'
+import { zoomPercent } from '@shared/zoom'
 import type { Live2DMotionRef } from '@shared/live2dCatalog'
 import type { RegionRect } from '@shared/linuxRuntime'
 import { api, CH, platform } from './api'
@@ -295,6 +296,13 @@ export function App(): ReactElement {
         setQueueLength(Number(state?.queueLength) || 0)
       }),
       api.on(CH.pushConfig, (payload) => setConfig(payload as RedactedConfig)),
+      /* The ratio changed somewhere - a keystroke in either window, or the
+       * settings stepper. Main pushes it back here so the human is told what
+       * zoom they are now on and how to get out of it; an accidental Ctrl+=
+       * must never be a mystery. */
+      api.on(CH.pushZoom, (payload) =>
+        notice(`${zoomPercent(Number(payload))} · ${t('zoomResetHint')}`)
+      ),
       api.on(CH.pushMedia, (payload) => setMedia((payload as MediaState) || EMPTY_MEDIA)),
       api.on(CH.pushBubble, (payload) => {
         const message = payload as BubbleMessage
@@ -330,7 +338,7 @@ export function App(): ReactElement {
     // `config.bubbleMs` is read inside the listeners; resubscribing on every
     // slider tick would drop pushes mid-flight, so the ref-free read is fine
     // because a stale hold time is harmless.
-  }, [showBubble, hideBubble, config?.bubbleMs])
+  }, [showBubble, hideBubble, notice, t, config?.bubbleMs])
 
   /* ---- click-through: only the card catches the pointer ---------------- */
   useEffect(() => {

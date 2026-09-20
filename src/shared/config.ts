@@ -2,6 +2,7 @@ import type { Lang, VoiceEngine } from './protocol'
 import { normalizeRequestedPort } from './portPolicy'
 import { DEFAULT_HOTKEY } from './hotkey'
 import type { AvatarMode } from './ui'
+import { ZOOM_MAX, ZOOM_MIN, clampZoom } from './zoom'
 
 export interface AvatarConfig {
   mode: AvatarMode
@@ -72,6 +73,14 @@ export interface AppConfig {
   alwaysOnTop: boolean
   opacity: number
   scale: number
+  /**
+   * Interface zoom, applied as `webContents.setZoomFactor` on every window, so
+   * it scales type and layout together (Ctrl/Cmd + and -). Distinct from
+   * `scale`, which is the avatar's own size slider: zooming the interface must
+   * not also inflate the Live2D model, whose canvas is already sized to the
+   * stage. One rung of `shared/zoom.ts`, persisted like any other preference.
+   */
+  uiZoom: number
   bubbleMs: number
   maxQueue: number
   lang: Lang | 'auto'
@@ -184,6 +193,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   alwaysOnTop: true,
   opacity: 1,
   scale: 1,
+  uiZoom: 1,
   bubbleMs: 7000,
   maxQueue: 4,
   lang: 'auto',
@@ -286,6 +296,7 @@ export function parseConfig(input: unknown): AppConfig {
     alwaysOnTop: bool(raw.alwaysOnTop, d.alwaysOnTop),
     opacity: num(raw.opacity, d.opacity, 0.35, 1),
     scale: num(raw.scale, d.scale, 0.6, 2),
+    uiZoom: clampZoom(num(raw.uiZoom, d.uiZoom, ZOOM_MIN, ZOOM_MAX)),
     bubbleMs: Math.trunc(num(raw.bubbleMs, d.bubbleMs, 1500, 30000)),
     maxQueue: Math.trunc(num(raw.maxQueue, d.maxQueue, 1, 12)),
     lang: langRaw === 'zh' || langRaw === 'en' ? langRaw : 'auto',
@@ -396,6 +407,7 @@ export const CONFIG_PATCH_KEYS: Array<keyof ConfigPatch> = [
   'alwaysOnTop',
   'opacity',
   'scale',
+  'uiZoom',
   'bubbleMs',
   'maxQueue',
   'lang',

@@ -42,6 +42,13 @@ export interface BenchWindowDeps {
   onLoaded: () => void
   /** The window went away for real (quit), not merely hidden. */
   onClosed?: () => void
+  /**
+   * The interface-zoom rung main is applying right now. Read at creation and
+   * again on every load, because Chromium resets page zoom to 1 on navigation
+   * and a bench that came up at 130% would otherwise draw at 100% after a dev
+   * reload - or after being opened for the first time.
+   */
+  zoom: () => number
 }
 
 export interface BenchHandle {
@@ -52,6 +59,12 @@ export interface BenchHandle {
   isVisible: () => boolean
   isFocused: () => boolean
   send: (channel: string, payload: unknown) => void
+  /**
+   * Re-read main's rung into the page. The value is not passed in: main already
+   * owns the persisted `uiZoom`, and a second copy handed per call is a second
+   * place to keep in step with it.
+   */
+  setZoom: () => void
   destroy: () => void
 }
 
@@ -128,6 +141,23 @@ export function createBenchWindow(deps: BenchWindowDeps): BenchHandle {
     void win.loadFile(benchEntry())
   }
 
+  /**
+   * Push main's rung into the page. Unlike the widget, the bench is a normal
+   * framed window whose bounds the human chose, so zooming scales the content
+   * inside a frame that stays put - exactly what a browser does, and no
+   * measurement of the renderer's CSS pixels comes back here to be converted.
+   */
+  const applyZoom = (): void => {
+    if (win.isDestroyed()) return
+    try {
+      win.webContents.setZoomFactor(deps.zoom())
+    } catch (error) {
+      log('warn', 'bench setZoomFactor failed', String(error))
+    }
+  }
+  if (deps.zoom() !== 1) applyZoom()
+  win.webContents.on('did-finish-load', applyZoom)
+
   /*
    * Geometry is saved on a debounce and once more on close: `move` and `resize`
    * fire per pixel during a drag on Linux, and a config write in the middle of
@@ -190,6 +220,9 @@ export function createBenchWindow(deps: BenchWindowDeps): BenchHandle {
     isFocused: () => alive() && win.isFocused(),
     send(channel: string, payload: unknown) {
       if (alive()) win.webContents.send(channel, payload)
+    },
+    setZoom() {
+      applyZoom()
     },
     destroy() {
       if (saveTimer) clearTimeout(saveTimer)

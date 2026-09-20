@@ -373,5 +373,9 @@ export const proApi = {
   onConfig: (listener: (config: RedactedConfig) => void): (() => void) =>
     bridge.on(CH.pushConfig, (payload) => {
       if (payload) listener(payload as RedactedConfig)
+    }),
+  onZoom: (listener: (rung: number) => void): (() => void) =>
+    bridge.on(CH.pushZoom, (payload) => {
+      listener(Number(payload))
     })
 }

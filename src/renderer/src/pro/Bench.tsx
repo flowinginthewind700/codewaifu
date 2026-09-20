@@ -38,6 +38,7 @@ import {
 } from '@shared/pro'
 import type { Lang, RedactedConfig, RuntimeState } from '@shared/protocol'
 import type { ProFocusPush, ProResult } from '@shared/proIpc'
+import { zoomPercent } from '@shared/zoom'
 import { proApi } from './api'
 import { AttentionQueue } from './AttentionQueue'
 import { ConnectDialog } from './ConnectDialog'
@@ -196,6 +197,11 @@ export function Bench(): ReactElement {
       proApi.onState(setView),
       proApi.onConfig(setConfig),
       proApi.onNotice((notice) => push(notice.text, noticeTone(notice))),
+      // The interface scale changed under a keystroke: name the new ratio and
+      // the way back, in the same toast lane everything else uses.
+      proApi.onZoom((rung) =>
+        push(`${zoomPercent(rung)} · ${tRef.current('zoomResetHint')}`, 'info')
+      ),
       // Frames and bridge phases bypass React on purpose; see paneBus.
       proApi.onFrames(routeFrames),
       proApi.onBridge(routeBridge),

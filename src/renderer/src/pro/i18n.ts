@@ -688,7 +688,8 @@ const STRINGS = {
   timeHours: { zh: '{n} 小时', en: '{n}h' },
   timeDays: { zh: '{n} 天', en: '{n}d' },
   timeAgo: { zh: '{t}前', en: '{t} ago' },
-  never: { zh: '—', en: '—' }
+  never: { zh: '—', en: '—' },
+  zoomResetHint: { zh: 'Ctrl+0 恢复默认', en: 'Ctrl+0 to reset' }
 } as const
 
 export type StringKey = keyof typeof STRINGS

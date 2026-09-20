@@ -12,6 +12,7 @@ import {
 import { IPC } from '../shared/ipcChannels'
 import type { AppConfig } from '../shared/config'
 import { hotkeyAction } from '../shared/hotkey'
+import { clampZoom } from '../shared/zoom'
 import {
   shapeForRegion,
   sameRegion,
@@ -143,10 +144,31 @@ function defaultPosition(width: number, height: number): { x: number; y: number 
 }
 
 export function createWindow(config: AppConfig, handlers: WindowHandlers): WindowHandle {
-  const height = estimatedHeight(config.avatar.mode, 'collapsed')
+  /*
+   * Interface zoom: device-independent pixels per CSS pixel, applied with
+   * `webContents.setZoomFactor`.
+   *
+   * Zooming scales the page, so every length the renderer measures or lays out
+   * with - `offsetHeight`, `getBoundingClientRect`, `window.innerWidth`, and
+   * the constants in shared/ui.ts that it turns into CSS - is in CSS pixels,
+   * while every length Electron wants (`setBounds`, `setShape`, the initial
+   * frame size) is in DIPs. The two differ by exactly this factor, and this
+   * closure is the one place that knows it, so the renderer never has to.
+   *
+   * One deliberate exception, measured on Electron 44 rather than assumed:
+   * `MouseEvent.screenX/screenY` stay in DIPs under zoom (a pointer at CSS
+   * x=80 in a frame at DIP x=100 reports screenX 260 = 100 + 80*2 at zoom 2).
+   * The drag path turns those into deltas handed straight to `setPosition`, so
+   * `moveBy` must NOT convert - dividing it would make her outrun the cursor.
+   */
+  let zoom = clampZoom(config.uiZoom)
+  /** A CSS-pixel length from the renderer, in the DIPs Electron sizes with. */
+  const toDip = (css: number): number => Math.round(css * zoom)
+
+  const height = toDip(estimatedHeight(config.avatar.mode, 'collapsed'))
   const stored = config.window.x >= 0 && config.window.y >= 0 ? config.window : null
-  const wanted = stored || defaultPosition(WINDOW_WIDTH, height)
-  const position = clampToDisplay(wanted.x, wanted.y, WINDOW_WIDTH, height)
+  const wanted = stored || defaultPosition(toDip(WINDOW_WIDTH), height)
+  const position = clampToDisplay(wanted.x, wanted.y, toDip(WINDOW_WIDTH), height)
 
   /*
    * Transparency is a constructor argument, so the desktop has to be probed
@@ -159,7 +181,7 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   if (isLinux) log('info', 'window surface', { reason: surface.reason })
 
   const win = new BrowserWindow({
-    width: WINDOW_WIDTH,
+    width: toDip(WINDOW_WIDTH),
     height,
     x: position.x,
     y: position.y,
@@ -227,6 +249,24 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
     void win.loadFile(rendererEntry())
   }
 
+  /**
+   * Push the zoom ladder rung into the page. Every navigation resets Chromium's
+   * zoom back to 1, so this is re-applied on load rather than only on change —
+   * otherwise a reload in dev (or any future in-window navigation) would leave
+   * the renderer drawing at 100% inside a frame sized for, say, 130%.
+   */
+  const applyZoom = (): void => {
+    if (win.isDestroyed()) return
+    try {
+      win.webContents.setZoomFactor(zoom)
+    } catch (error) {
+      log('warn', 'setZoomFactor failed', String(error))
+    }
+  }
+
+  if (zoom !== 1) applyZoom()
+  win.webContents.on('did-finish-load', applyZoom)
+
   let expanded = false
   let chatMode = false
   let avatarMode: AvatarMode = config.avatar.mode
@@ -235,16 +275,23 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
    * converging on the measurement keeps the very first paint from jumping: the
    * frame opens at `estimatedHeight`, then snaps to the real card height once
    * React has laid out — usually within a frame or two.
+   *
+   * Stored in DIPs, not in the CSS pixels the renderer reports: `fitHeight`
+   * converts at the boundary, so this map and every constant in `targetSize`
+   * are in the one unit `setBounds` wants, and zooming cannot leave a stale
+   * CSS-pixel height being read back as a DIP height.
    */
   const fitted = new Map<WidgetView, number>()
 
   /** Size for the current mode. The chat is a wider, taller panel. */
   const targetSize = (): { width: number; height: number } => {
     const view = widgetView(expanded, chatMode)
-    const width = view === 'chat' ? Math.max(WINDOW_WIDTH, WIDTH_CHAT) : WINDOW_WIDTH
+    // The shared/ui constants are authored in CSS pixels; `toDip` puts them in
+    // the frame's unit. `fitted` already holds DIPs, so it is not converted.
+    const width = view === 'chat' ? toDip(Math.max(WINDOW_WIDTH, WIDTH_CHAT)) : toDip(WINDOW_WIDTH)
     const height = view === 'chat'
-      ? Math.max(fitted.get(view) ?? 0, HEIGHT_CHAT)
-      : fitted.get(view) ?? estimatedHeight(avatarMode, view)
+      ? Math.max(fitted.get(view) ?? 0, toDip(HEIGHT_CHAT))
+      : fitted.get(view) ?? toDip(estimatedHeight(avatarMode, view))
     return { width, height }
   }
 
@@ -291,7 +338,8 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
 
   const fitHeight = (next: number): void => {
     const view = widgetView(expanded, chatMode)
-    const height = Math.round(next)
+    // The renderer measures CSS pixels; the frame is sized in DIPs.
+    const height = toDip(Math.round(next))
     if (!Number.isFinite(height) || height < 80 || height > 4000) return
     const previous = fitted.get(view)
     // A 1px wobble from sub-pixel text would re-setBounds every frame.
@@ -347,7 +395,15 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   const setSolidRegion = (rects: readonly RegionRect[]): void => {
     if (!isLinux || win.isDestroyed()) return
     const bounds = win.getBounds()
-    const next = shapeForRegion(unionRect(rects), {
+    // The rects arrive as CSS pixels (the renderer's getBoundingClientRect) and
+    // `bounds` is DIPs, so the union has to cross the same boundary fitHeight
+    // does before it is clamped against the frame - otherwise, zoomed in, the
+    // shape covers only part of the card and the rest of her clicks through.
+    const union = unionRect(rects)
+    const solid = union
+      ? { x: toDip(union.x), y: toDip(union.y), width: toDip(union.width), height: toDip(union.height) }
+      : null
+    const next = shapeForRegion(solid, {
       x: 0,
       y: 0,
       width: bounds.width,
@@ -450,6 +506,16 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
         win.setAlwaysOnTop(next.alwaysOnTop, next.alwaysOnTop ? 'floating' : undefined)
         win.setOpacity(next.opacity)
         syncHotkey(next.hotkey)
+        // Zoom changes the CSS-pixels-per-DIP ratio, so every measurement the
+        // renderer has already reported is now in the wrong unit: drop them and
+        // let the frame re-fit from the estimate until the next report lands.
+        const nextZoom = clampZoom(next.uiZoom)
+        if (nextZoom !== zoom) {
+          zoom = nextZoom
+          applyZoom()
+          fitted.clear()
+          applyGeometry()
+        }
         // Switching avatar kind changes the stage height, so re-fit the frame.
         if (next.avatar.mode !== avatarMode) {
           avatarMode = next.avatar.mode

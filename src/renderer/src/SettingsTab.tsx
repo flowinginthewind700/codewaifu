@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import { FolderOpen, Image as ImageIcon, RefreshCw, Volume2 } from 'lucide-react'
 import type { ConfigPatch } from '@shared/config'
+import { clampZoom, ZOOM_MAX, ZOOM_MIN } from '@shared/zoom'
 import { acceleratorFromCombo, formatAccelerator } from '@shared/hotkey'
 import { normalizeRequestedPort } from '@shared/portPolicy'
 import type { NeuralPhase, NeuralStatus, RedactedConfig, RuntimeState, VoiceEngine } from '@shared/protocol'
@@ -195,6 +196,17 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
           step={0.05}
           display={`${Math.round(config.scale * 100)}%`}
           onChange={(v) => onChange({ scale: v })}
+        />
+        {/* The same rung Ctrl+= walks: the slider lands on it, main clamps it,
+            so this row and the keystroke path cannot disagree about 130%. */}
+        <Slider
+          label={t('uiZoom')}
+          value={clampZoom(config.uiZoom)}
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          step={0.1}
+          display={`${Math.round(clampZoom(config.uiZoom) * 100)}%`}
+          onChange={(v) => onChange({ uiZoom: v })}
         />
         <Slider
           label={t('bubbleMs')}

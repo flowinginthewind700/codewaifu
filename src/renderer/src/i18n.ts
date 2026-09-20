@@ -168,6 +168,7 @@ const STRINGS = {
   },
   opacity: { zh: '不透明度', en: 'Opacity' },
   scale: { zh: '大小', en: 'Size' },
+  uiZoom: { zh: '界面缩放', en: 'UI zoom' },
   bubbleMs: { zh: '气泡停留', en: 'Bubble time' },
   avatar: { zh: '形象', en: 'Avatar' },
   avatarBuiltin: { zh: '内置', en: 'Built-in' },
@@ -244,7 +245,8 @@ const STRINGS = {
   motion: { zh: '动作', en: 'Motion' },
   motionRandom: { zh: '随机', en: 'Random' },
   seconds: { zh: '秒', en: 's' },
-  version: { zh: '版本', en: 'Version' }
+  version: { zh: '版本', en: 'Version' },
+  zoomResetHint: { zh: 'Ctrl+0 恢复默认', en: 'Ctrl+0 to reset' }
 } as const
 
 export type StringKey = keyof typeof STRINGS
