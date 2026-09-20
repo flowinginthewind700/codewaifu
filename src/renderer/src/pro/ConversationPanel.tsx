@@ -29,6 +29,7 @@ import {
 } from '@shared/chat'
 import type { SteerResult } from '@shared/protocol'
 import type { TaskView } from '@shared/pro'
+import { codeSpans } from '../highlight'
 import { useImeEnter } from '../useIme'
 import { useAttachField } from '../useAttach'
 import { platform, proApi } from './api'
@@ -86,7 +87,7 @@ function Blocks({ text, unfold }: { text: string; unfold: boolean }): ReactEleme
       {blocks.map((block, index) =>
         block.kind === 'code' ? (
           <pre className="convo-code mono" key={index}>
-            {block.text}
+            {codeSpans(block.lang, block.text)}
           </pre>
         ) : (
           <p className="convo-text" key={index}>

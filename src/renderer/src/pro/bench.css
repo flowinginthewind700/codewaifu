@@ -21,6 +21,7 @@
 
 @import '../tokens.css';
 @import '../tip.css';
+@import '../highlight.css';
 
 :root {
   /* Opaque neutral charcoal (RobotWorld's `surface.dark`), a shade darker than

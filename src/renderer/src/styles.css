@@ -12,9 +12,11 @@
    ========================================================================== */
 
 /* Tokens live in tokens.css, shared with the Bench window; tip.css is the
-   shared tooltip, so both windows paint the same bubble. */
+   shared tooltip and highlight.css the shared syntax theme, so both windows
+   paint the same bubble and the same code. */
 @import './tokens.css';
 @import './tip.css';
+@import './highlight.css';
 
 * {
   box-sizing: border-box;

@@ -24,6 +24,7 @@ import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT, splitBlocks, type ChatMessage
 import { isImeKey } from '@shared/ime'
 import type { SteerResult, ThreadInfo } from '@shared/protocol'
 import { api, platform } from './api'
+import { codeSpans } from './highlight'
 import { useAttachField } from './useAttach'
 import { useImeEnter } from './useIme'
 import type { StringKey, Translate } from './i18n'
@@ -459,7 +460,7 @@ function MessageRow({ message, previous, open, reasoningOpen, unfolded, t, onTog
         <div className="msg-bubble">
           {splitBlocks(message.text).map((block, index) =>
             block.kind === 'code' ? (
-              <pre key={index} className="code">{block.text}</pre>
+              <pre key={index} className="code">{codeSpans(block.lang, block.text)}</pre>
             ) : (
               <p key={index} className={folded ? 'clamp' : undefined}>{block.text}</p>
             )

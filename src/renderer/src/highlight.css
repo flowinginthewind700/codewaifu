@@ -1,0 +1,144 @@
+/* ==========================================================================
+   Syntax colours - one theme for both windows.
+
+   highlight.js emits `<span class="hljs-keyword">` and friends; the renderer
+   side that produces those spans lives in highlight.tsx. This file is the only
+   place those classes get a colour, and it is imported by both styles.css (the
+   widget) and bench.css (the Bench) so the same TypeScript is the same colour
+   in both - a code block that changes hue when you move it from the stage to
+   the bench reads as two different apps.
+
+   The palette is RobotWorld's dark syntax set, mapped scope-for-scope onto the
+   `.dark .token-*` colours the site already uses (globals.css): comment grey
+   #8b98a9, string amber #fbbf24, keyword violet #c4b5fd, builtin/number cyan
+   #67e8f9, call/attr teal #5eead4, decorator magenta #f0abfc, variable
+   #fcd34d. Tags take the site's review blue so markup reads as markup.
+   ========================================================================== */
+
+.msg-bubble .code,
+.convo-code {
+  /* Foreground stays whatever the block already set; only scopes recolor. */
+  color-scheme: dark;
+}
+
+.msg-bubble .code .hljs-comment,
+.convo-code .hljs-comment,
+.msg-bubble .code .hljs-quote,
+.convo-code .hljs-quote {
+  color: #8b98a9;
+  font-style: italic;
+}
+
+.msg-bubble .code .hljs-string,
+.convo-code .hljs-string,
+.msg-bubble .code .hljs-regexp,
+.convo-code .hljs-regexp {
+  color: #fbbf24;
+}
+
+.msg-bubble .code .hljs-keyword,
+.convo-code .hljs-keyword,
+.msg-bubble .code .hljs-literal,
+.convo-code .hljs-literal,
+.msg-bubble .code .hljs-selector-tag,
+.convo-code .hljs-selector-tag {
+  color: #c4b5fd;
+}
+
+.msg-bubble .code .hljs-built_in,
+.convo-code .hljs-built_in,
+.msg-bubble .code .hljs-number,
+.convo-code .hljs-number,
+.msg-bubble .code .hljs-type,
+.convo-code .hljs-type,
+.msg-bubble .code .hljs-symbol,
+.convo-code .hljs-symbol {
+  color: #67e8f9;
+}
+
+.msg-bubble .code .hljs-title,
+.convo-code .hljs-title,
+.msg-bubble .code .hljs-title.function_,
+.convo-code .hljs-title.function_,
+.msg-bubble .code .hljs-title.class_,
+.convo-code .hljs-title.class_,
+.msg-bubble .code .hljs-attr,
+.convo-code .hljs-attr,
+.msg-bubble .code .hljs-attribute,
+.convo-code .hljs-attribute,
+.msg-bubble .code .hljs-selector-attr,
+.convo-code .hljs-selector-attr,
+.msg-bubble .code .hljs-selector-pseudo,
+.convo-code .hljs-selector-pseudo {
+  color: #5eead4;
+}
+
+/* Class and id selectors join the teal group with attribute/pseudo selectors,
+   so one CSS rule does not read `body` in one colour and `.foo` in another. */
+.msg-bubble .code .hljs-selector-class,
+.convo-code .hljs-selector-class,
+.msg-bubble .code .hljs-selector-id,
+.convo-code .hljs-selector-id {
+  color: #5eead4;
+}
+
+.msg-bubble .code .hljs-meta,
+.convo-code .hljs-meta,
+.msg-bubble .code .hljs-decorator,
+.convo-code .hljs-decorator {
+  color: #f0abfc;
+}
+
+.msg-bubble .code .hljs-variable,
+.convo-code .hljs-variable,
+.msg-bubble .code .hljs-template-variable,
+.convo-code .hljs-template-variable,
+.msg-bubble .code .hljs-params,
+.convo-code .hljs-params {
+  color: #fcd34d;
+}
+
+/* Markup: tag names in the site's review blue, so markup reads as markup. */
+.msg-bubble .code .hljs-tag,
+.convo-code .hljs-tag,
+.msg-bubble .code .hljs-name,
+.convo-code .hljs-name,
+.msg-bubble .code .hljs-section,
+.convo-code .hljs-section {
+  color: #6aa9ff;
+}
+
+.msg-bubble .code .hljs-link,
+.convo-code .hljs-link {
+  color: #9cc7ff;
+  text-decoration: underline;
+}
+
+/* Diff: the +/- lines carry a faint wash of ok/danger behind the scope colour,
+   because in a patch the added-vs-removed axis is the thing being read. */
+.msg-bubble .code .hljs-addition,
+.convo-code .hljs-addition {
+  color: #3ddc97;
+  background: rgba(61, 220, 151, 0.1);
+}
+
+.msg-bubble .code .hljs-deletion,
+.convo-code .hljs-deletion {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+}
+
+/* Bold the tokens the site bolds (keyword), so weight matches colour. Only
+   400 and 700 of JetBrains Mono are bundled with the app (see main.tsx), so
+   700 is the weight to ask for - 600 has no face and gets synthesized. */
+.msg-bubble .code .hljs-keyword,
+.convo-code .hljs-keyword,
+.msg-bubble .code .hljs-strong,
+.convo-code .hljs-strong {
+  font-weight: 700;
+}
+
+.msg-bubble .code .hljs-emphasis,
+.convo-code .hljs-emphasis {
+  font-style: italic;
+}
