@@ -326,7 +326,7 @@ export function Bench(): ReactElement {
     async (
       itemId: string,
       action: AttentionAction,
-      extra: { text?: string; minutes?: number } = {}
+      extra: { text?: string; minutes?: number; option?: number } = {}
     ): Promise<void> => {
       if (!report(await proApi.act(itemId, action, extra))) return
       // Approve, deny and answer all write a decision to the ledger, and the

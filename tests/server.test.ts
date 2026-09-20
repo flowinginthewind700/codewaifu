@@ -305,7 +305,8 @@ describe('pro api (F6)', () => {
         action: 'answer',
         text: 'yes, and keep going',
         origin: 'api',
-        minutes: 10
+        minutes: 10,
+        option: 0
       }
     ])
   })

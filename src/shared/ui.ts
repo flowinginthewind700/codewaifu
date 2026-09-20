@@ -7,6 +7,8 @@
  * main (`IPC.fitHeight`) so the frame is exactly as tall as its content — no
  * dead transparent strip below the card, no clipped panel.
  */
+import type { PaneOption } from './pro'
+
 export const WINDOW_WIDTH = 320
 export const WINDOW_MIN_MARGIN = 8
 /** Transparent margin around the card; also `.shell { padding }`. */
@@ -118,6 +120,11 @@ export interface BubbleRoute {
   actions: string[]
   /** What the button says, e.g. "Open in Bench". Already localized. */
   benchLabel: string
+  /**
+   * The rows the agent printed, when we read them. A permission bubble with
+   * rows offers one chip per row; without them it falls back to approve/deny.
+   */
+  options?: PaneOption[]
 }
 
 export type Expression = 'idle' | 'talk' | 'happy' | 'alert' | 'sleepy'

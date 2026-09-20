@@ -370,7 +370,8 @@ export class CompanionBridge {
           action: resolved.action,
           text: resolved.text,
           origin: 'widget',
-          minutes: DEFAULT_SNOOZE_MINUTES
+          minutes: DEFAULT_SNOOZE_MINUTES,
+          option: resolved.option
         }
         const result = await this.api.act(request)
         // She is no longer talking about an item the human just answered, even

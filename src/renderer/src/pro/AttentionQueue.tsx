@@ -32,8 +32,11 @@ import {
   answerText,
   attentionActions,
   decisionKeys,
+  keysForOption,
+  optionAction,
   type AttentionAction,
   type AttentionItem,
+  type PaneOption,
   type KeyOverrides
 } from '@shared/pro'
 import { fill, type Translate } from './i18n'
@@ -48,7 +51,11 @@ export interface AttentionQueueProps {
   now: number
   keys: KeyOverrides | null
   t: Translate
-  onAct: (itemId: string, action: AttentionAction, extra?: { text?: string; minutes?: number }) => void
+  onAct: (
+    itemId: string,
+    action: AttentionAction,
+    extra?: { text?: string; minutes?: number; option?: number }
+  ) => void
   onOpen: (item: AttentionItem) => void
   onNotify: (text: string, tone?: Tone) => void
 }
@@ -145,8 +152,14 @@ export function AttentionQueue({
               )}
               {item.command && <pre className="qitem-cmd">{item.command}</pre>}
 
+              <OptionRows item={item} t={t} onAct={onAct} />
+
               <div className="qactions">
-                {attentionActions(item.kind).map((action) => (
+                {attentionActions(item.kind)
+                  // With rows read off the screen, approve/deny would be the
+                  // same decision twice with less to say about it.
+                  .filter((action) => !item.options?.length || (action !== 'approve' && action !== 'deny'))
+                  .map((action) => (
                   <ActionButton
                     key={action}
                     action={action}
@@ -165,7 +178,7 @@ export function AttentionQueue({
                 ))}
               </div>
 
-              {item.kind === 'permission' && !approve && !deny && (
+              {item.kind === 'permission' && !item.options?.length && !approve && !deny && (
                 <p className="no-recipe">{fill(t, 'noRecipe', { agent: item.agentKind || '?' })}</p>
               )}
 
@@ -218,6 +231,51 @@ interface ActionButtonProps {
   onAct: AttentionQueueProps['onAct']
   onOpen: (item: AttentionItem) => void
   onToggleAnswer: () => void
+}
+
+/**
+ * The rows the agent actually printed, one button per row.
+ *
+ * This is the honest answer to "which button means approve everything": we do
+ * not know, and neither does the recipe table, because codex offers two
+ * approvals of different scope and swaps their order between prompts. We read
+ * the menu off the screen and show it, keys and all, so the click means exactly
+ * what it says. When we could not read a menu this renders nothing and the
+ * generic approve/deny pair below stays in charge.
+ */
+function OptionRows({
+  item,
+  t,
+  onAct
+}: {
+  item: AttentionItem
+  t: Translate
+  onAct: AttentionQueueProps['onAct']
+}): ReactElement | null {
+  const options = item.options
+  if (!options?.length) return null
+  return (
+    <div className="qoptions">
+      <p className="qoptions-head">{t('menuRowsHead')}</p>
+      {options.map((option: PaneOption) => {
+        const verb = optionAction(option, options)
+        const keys = keysForOption(option)
+        return (
+          <button
+            type="button"
+            key={option.index}
+            className={`qoption ${verb}`}
+            title={`${option.label} · ${fill(t, 'sendsKeys', { keys: keys.join(' ') })}`}
+            onClick={() => onAct(item.id, verb, { option: option.index })}
+          >
+            <span className="qoption-index">{option.index}</span>
+            <span className="qoption-label">{option.label}</span>
+            <Keycaps recipe={keys} />
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 /**

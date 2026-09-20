@@ -179,6 +179,16 @@ export interface ProActionRequest {
   origin: ProOrigin
   /** Snooze length for `snooze`, minutes. */
   minutes: number
+  /**
+   * Which numbered row of the agent's own menu to press, 1-based; 0 means "no
+   * row named, fall back to approve/deny". Meaningful for `approve`/`deny`.
+   *
+   * This is the field that makes a permission card say what it presses. codex
+   * offers "Yes, proceed" *and* "Yes, and don't ask again for commands starting
+   * with X", and which one is "approve everything" depends on the prompt on
+   * screen. Only the human who read the rows gets to pick.
+   */
+  option: number
 }
 
 export type ProActionParse = ProActionRequest | ProReject
@@ -196,8 +206,25 @@ export function parseProAction(payload: unknown): ProActionParse {
     action,
     text,
     origin: originOf(raw.origin),
-    minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240)
+    minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240),
+    option: optionOf(raw.option)
   }
+}
+
+/**
+ * A row number, or 0.
+ *
+ * Clamped to the range `parsePaneOptions` can ever produce, so a caller that
+ * sends `99` gets `no-option` from the planner instead of a digit pressed into
+ * whatever menu happens to be on screen.
+ */
+function optionOf(value: unknown): number {
+  const n = typeof value === 'string' ? Number(value) : value
+  if (typeof n !== 'number' || !Number.isFinite(n)) return 0
+  const row = Math.trunc(n)
+  // Out of range means "no row named", not the nearest row: clamping 99 down to
+  // 9 would press a digit the agent never offered.
+  return row >= 1 && row <= 9 ? row : 0
 }
 
 /**
@@ -240,7 +267,8 @@ export function parseProAnswer(
     action,
     text,
     origin: 'api',
-    minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240)
+    minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240),
+    option: optionOf(raw.option)
   }
 }
 
@@ -1120,7 +1148,16 @@ export function parseBenchCommand(payload: unknown): ProCommandParse {
       const text = str(raw.text, 4000).trim()
       if (action === 'answer' && !text) return reject('needs-text', 'an answer needs text')
       const paneId = paneIdOf(raw.paneId)
-      const base = { type: 'act' as const, action, itemId, taskId, text }
+      // 0 means "no row named", which is the only thing a caller that never saw
+      // a menu can honestly send.
+      const base = {
+        type: 'act' as const,
+        action,
+        itemId,
+        taskId,
+        text,
+        option: optionOf(raw.option)
+      }
       return paneId ? { ...base, paneId } : base
     }
     default:

@@ -47,6 +47,8 @@ export type BenchCommand =
       taskId: string
       paneId?: string
       text?: string
+      /** Which row of the agent's own menu; 0 or absent means "no row named". */
+      option?: number
     }
   | { type: 'snoozeAll'; minutes: number }
 
@@ -59,7 +61,15 @@ export type BenchCommand =
 export type ResolvedCommand =
   | { type: 'openBench'; reason: string }
   | { type: 'focus'; taskId: string; paneId: string }
-  | { type: 'act'; action: AttentionAction; itemId: string; taskId: string; paneId: string; text: string }
+  | {
+      type: 'act'
+      action: AttentionAction
+      itemId: string
+      taskId: string
+      paneId: string
+      text: string
+      option: number
+    }
   | { type: 'snoozeAll'; minutes: number }
   | { type: 'drop'; reason: string }
 
@@ -89,6 +99,13 @@ export function resolveCommand(command: BenchCommand, view: BenchView | null): R
       if (command.action === 'answer' && !text) {
         return { type: 'drop', reason: 'an answer needs text' }
       }
+      // A row the widget was not shown is not a row it may press: the menu we
+      // read can have moved on, and a stale digit lands on whatever is there now.
+      const want = optionRow(command.option)
+      const picked = want ? (item.options ?? []).find((entry) => entry.index === want) ?? null : null
+      if (want && !picked) {
+        return { type: 'drop', reason: `the menu has no row ${want}` }
+      }
       const focus = resolveFocus(item.taskId, item.paneId, view)
       return {
         type: 'act',
@@ -96,10 +113,19 @@ export function resolveCommand(command: BenchCommand, view: BenchView | null): R
         itemId: item.id,
         taskId: item.taskId,
         paneId: focus.type === 'focus' ? focus.paneId : item.paneId,
-        text
+        text,
+        option: picked?.index ?? 0
       }
     }
   }
+}
+
+/** 1-9, or 0 for "no row named". Anything else is not a menu index. */
+function optionRow(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 0
+  const row = Math.trunc(n)
+  return row >= 1 && row <= 9 ? row : 0
 }
 
 function resolveFocus(taskId: string, paneId: string, view: BenchView): ResolvedCommand {
@@ -291,7 +317,11 @@ export function routeFor(item: AttentionItem, lang: Lang): BubbleRoute {
     itemId: item.id,
     kind: item.kind,
     actions: attentionActions(item.kind),
-    benchLabel: OPEN_LABEL[lang]
+    benchLabel: OPEN_LABEL[lang],
+    // The rows the agent itself printed. A permission bubble that has them can
+    // offer one chip per row, which is the only way to reach a row that is
+    // neither the first nor the escape one - "yes, and don't ask again".
+    options: item.options?.length ? item.options : undefined
   }
 }
 

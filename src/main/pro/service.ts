@@ -463,6 +463,15 @@ const FOCUS_REPLAY_MS = 10000
 const PROMPT_WAIT_MS = 8000
 /** Pane reads feed `paneReadHint`; 40 lines is a screenful and a half. */
 const READ_LINES = 40
+/**
+ * How soon a newly raised permission row gets read for its menu.
+ *
+ * Short enough that the card has rows on it by the time a human looks at it,
+ * long enough that herdr has finished drawing the overlay: a read that lands
+ * mid-paint sees half a menu and, worse, could see the *previous* one still on
+ * screen. `Triage` throttles repeats itself (`READ_RETRY_MS`).
+ */
+const HYDRATE_SOON_MS = 700
 /** Frame caps: a renderer that fell behind wants a resync, not a backlog. */
 const MAX_FRAMES_PER_PANE = 24
 const MAX_FRAMES_PER_PUSH = 96
@@ -572,6 +581,10 @@ const NO_EXEC_TEXT: Readonly<Record<string, { zh: string; en: string }>> = {
   'no-pane': { zh: '这个任务现在没有活着的窗格', en: 'No live pane for this task right now' },
   'no-text': { zh: '回答需要文本', en: 'An answer needs text' },
   'no-context': { zh: '账本里没有可用的上下文', en: 'Nothing recorded to work from' },
+  'no-option': {
+    zh: '屏幕上没有这个编号的选项，面板已经过时了',
+    en: 'The menu on screen has no such row; this card is stale'
+  },
   'unknown-action': { zh: '未知操作', en: 'Unknown action' }
 }
 
@@ -641,6 +654,7 @@ export class ProService implements CompanionApi {
   private tickTimer: ServiceTimer | null = null
   private gitTimer: ServiceTimer | null = null
   private hydrateTimer: ServiceTimer | null = null
+  private hydrateSoonTimer: ServiceTimer | null = null
   private frameTimer: ServiceTimer | null = null
   private pushTimer: ServiceTimer | null = null
   private announceTimer: ServiceTimer | null = null
@@ -811,6 +825,7 @@ export class ProService implements CompanionApi {
       this.tickTimer,
       this.gitTimer,
       this.hydrateTimer,
+      this.hydrateSoonTimer,
       this.pushTimer,
       this.announceTimer,
       this.rediscoverTimer,
@@ -821,6 +836,7 @@ export class ProService implements CompanionApi {
     this.tickTimer = null
     this.gitTimer = null
     this.hydrateTimer = null
+    this.hydrateSoonTimer = null
     this.pushTimer = null
     this.announceTimer = null
     this.rediscoverTimer = null
@@ -1559,6 +1575,25 @@ export class ProService implements CompanionApi {
   }
 
   /**
+   * Read a freshly raised permission row now, not in thirty seconds.
+   *
+   * The buttons on a permission card are the agent's own numbered menu, and
+   * those rows only reach the item after a pane read. The slow hydrate loop is
+   * fine for a description nobody is waiting on, but a human who hears "codex
+   * is asking" turns around inside a second, and a card with no rows on it can
+   * only offer approve/deny - which is the blind `1` that makes "Yes, and
+   * don't ask again" look like "Yes, proceed". One prompt read, promptly.
+   */
+  private hydrateSoon(): void {
+    if (this.hydrateSoonTimer || !this.running) return
+    this.hydrateSoonTimer = this.timers.after(() => {
+      this.hydrateSoonTimer = null
+      if (this.hydrating || !this.running) return
+      void this.hydrate()
+    }, HYDRATE_SOON_MS)
+  }
+
+  /**
    * Git facts per task, on a slow timer.
    *
    * The ledger records *transitions*, not readings: a commit landing and a
@@ -1628,6 +1663,9 @@ export class ProService implements CompanionApi {
     switch (event.type) {
       case 'raised':
         this.invalidate()
+        // A permission row is only actionable once we know which rows the agent
+        // printed, and that comes from a pane read. Ask right away.
+        if (event.item.kind === 'permission' && !event.item.options?.length) this.hydrateSoon()
         this.scheduleAnnounce()
         return
       case 'resolved':
@@ -1733,6 +1771,7 @@ export class ProService implements CompanionApi {
       item,
       action: request.action,
       text: request.text,
+      option: request.option,
       now: this.timers.now(),
       keys: this.proConfig().keys,
       snoozeMinutes: request.minutes,

@@ -748,6 +748,57 @@ button.bubble-text:hover {
   color: var(--accent);
 }
 
+/* ---- the agent's own menu rows (F7) ----------------------------------
+   One row per line, number first: at 196px a chip row cannot hold "Yes, and
+   don't ask again for commands starting with git", and a truncated label is
+   exactly how a click ends up pressing a row nobody read. The full text stays
+   in `title`; what is clipped here is clipped on purpose and visibly. */
+
+.bubble-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.bubble-chip.option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 10px;
+  text-align: left;
+}
+
+.bubble-option-n {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--faint);
+  text-align: center;
+}
+
+.bubble-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-chip.option[data-verb='deny'] {
+  border-color: rgba(var(--warn-rgb), 0.3);
+}
+
+.bubble-chip.option:hover {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  background: var(--surface-3);
+}
+
+.bubble-chip.option:hover .bubble-option-n {
+  color: var(--accent);
+}
+
 .bubble-chip.primary:hover {
   background: rgba(var(--accent-rgb), 0.22);
 }
@@ -1107,6 +1158,8 @@ input.bubble-input::placeholder {
 .panel-body::-webkit-scrollbar,
 .chat-scroll::-webkit-scrollbar,
 .tool-output::-webkit-scrollbar,
+.bubble::-webkit-scrollbar,
+.stage-menu::-webkit-scrollbar,
 .msg-bubble .code::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -1115,6 +1168,8 @@ input.bubble-input::placeholder {
 .panel-body::-webkit-scrollbar-thumb,
 .chat-scroll::-webkit-scrollbar-thumb,
 .tool-output::-webkit-scrollbar-thumb,
+.bubble::-webkit-scrollbar-thumb,
+.stage-menu::-webkit-scrollbar-thumb,
 .msg-bubble .code::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
@@ -1125,6 +1180,8 @@ input.bubble-input::placeholder {
 .panel-body::-webkit-scrollbar-thumb:hover,
 .chat-scroll::-webkit-scrollbar-thumb:hover,
 .tool-output::-webkit-scrollbar-thumb:hover,
+.bubble::-webkit-scrollbar-thumb:hover,
+.stage-menu::-webkit-scrollbar-thumb:hover,
 .msg-bubble .code::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.26);
   background-clip: content-box;
@@ -1133,6 +1190,8 @@ input.bubble-input::placeholder {
 .panel-body::-webkit-scrollbar-track,
 .chat-scroll::-webkit-scrollbar-track,
 .tool-output::-webkit-scrollbar-track,
+.bubble::-webkit-scrollbar-track,
+.stage-menu::-webkit-scrollbar-track,
 .msg-bubble .code::-webkit-scrollbar-track {
   background: transparent;
 }

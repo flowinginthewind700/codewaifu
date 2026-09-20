@@ -282,6 +282,10 @@ const STRINGS = {
   answerSend: { zh: '发送', en: 'Send' },
   answerNeedsText: { zh: '先写点内容再发送。', en: 'Write something first.' },
   sendsKeys: { zh: '将发送 {keys}', en: 'sends {keys}' },
+  menuRowsHead: {
+    zh: '它屏幕上的选项（按哪个就发哪个键）',
+    en: 'Its own menu: each button sends that row key'
+  },
   noRecipe: {
     zh: '没有 {agent} 的按键配方，不会盲发按键。用文字回答或打开面板。',
     en: 'No key recipe for {agent}, so nothing will be pressed blind. Answer in words or open the pane.'

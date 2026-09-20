@@ -1817,7 +1817,14 @@ describe('runProCli against the real relay', () => {
     const id = view.attention[0].id
     expect(await runProCli(['pro', 'answer', id, 'yes,', 'go ahead'])).toBe(PRO_EXIT.ok)
     expect(pro.recorded.actions).toEqual([
-      { itemId: id, action: 'answer', text: 'yes, go ahead', origin: 'api', minutes: DEFAULT_SNOOZE_MINUTES }
+      {
+        itemId: id,
+        action: 'answer',
+        text: 'yes, go ahead',
+        origin: 'api',
+        minutes: DEFAULT_SNOOZE_MINUTES,
+        option: 0
+      }
     ])
     expect(outText()).toContain('answered')
   })
@@ -1837,7 +1844,8 @@ describe('runProCli against the real relay', () => {
         action: 'approve',
         text: '',
         origin: 'api',
-        minutes: DEFAULT_SNOOZE_MINUTES
+        minutes: DEFAULT_SNOOZE_MINUTES,
+        option: 0
       }
     ])
   })

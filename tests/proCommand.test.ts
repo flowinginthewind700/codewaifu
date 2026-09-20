@@ -113,7 +113,8 @@ describe('parseBenchCommand', () => {
       itemId: 'i-1',
       taskId: 'task-1',
       paneId: 'pane-3',
-      text: ''
+      text: '',
+      option: 0
     })
   })
 

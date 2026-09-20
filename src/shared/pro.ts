@@ -372,6 +372,12 @@ export interface AttentionItem {
   detail: string
   toolName: string
   command: string
+  /**
+   * The numbered rows the agent actually printed, read off the pane. Present
+   * only when a read found a menu we are willing to swear to; absent means
+   * "we could not read it", and the UI falls back to approve/deny.
+   */
+  options?: PaneOption[]
   /** Epoch ms the need first appeared. */
   since: number
   /** Epoch ms of the last update; ranking uses `since`. */
@@ -512,6 +518,194 @@ export function decisionKeys(
 }
 
 /* ------------------------------------------------------------------ *
+ * The agent's own menu, read off the screen
+ * ------------------------------------------------------------------ */
+
+/**
+ * One numbered row of an agent's on-screen menu.
+ *
+ * A blind `1` cannot be right for every prompt. codex's exec approval offers
+ * "Yes, proceed" / "Yes, and don't ask again for commands starting with X" /
+ * "No, and tell Codex what to do differently"; its permissions prompt offers
+ * four rows, where 2 is *this turn with strict auto review* and 3 is *for this
+ * session*. Which row means "approve all" is a property of the prompt on
+ * screen, not of the agent - so the honest move is to show the human the rows
+ * the agent actually printed and let them choose.
+ */
+export interface PaneOption {
+  /** 1-based, exactly as printed. This is also the digit we send. */
+  index: number
+  /** The row's own text, trailing shortcut marker removed. */
+  label: string
+  /** herdr key name for the row's accelerator, when it advertised one. */
+  shortcut?: string
+}
+
+/**
+ * A numbered row: `› 1. Yes, proceed (y)`, `2. Full Access`, `  3. No (esc)`.
+ *
+ * The pointer is optional and may be any of the marks a TUI draws, because
+ * which one is on screen depends on the agent's theme and on whether this row
+ * happens to be the selected one.
+ */
+const OPTION_LINE = /^\s*[›>*●▪·]?\s*(\d)\.\s+(.*)$/
+
+/**
+ * A trailing `(y)` / `(esc)` is the row's accelerator.
+ *
+ * Only a single lowercase letter or `esc` counts. `(default)`, `(current)` and
+ * `(recommended)` are annotations codex prints beside model and effort rows,
+ * and treating one as a shortcut would type the literal word `default` into
+ * the pane as seven keystrokes.
+ */
+const SHORTCUT_TAIL = /\((?:([a-z])|esc)\)\s*$/
+
+/**
+ * Rows we will believe came from one menu.
+ *
+ * A scrollback holds every prompt the pane ever printed, so an unbounded scan
+ * could stitch a three-row approval overlay onto a five-row model picker and
+ * number the buttons wrong. Real menus top out at about six.
+ */
+const MAX_OPTIONS = 9
+
+/** How many wrapped description lines may follow a row before it stops being one. */
+const WRAP_MAX_LINES = 6
+
+/**
+ * Read an agent's numbered menu out of a pane's text.
+ *
+ * Returns `[]` when there is no menu we are willing to swear to. Empty means
+ * "could not read it", never "there was nothing to choose": the caller falls
+ * back to the per-agent recipe, and the UI keeps showing the generic buttons.
+ *
+ * Only the *last* run of numbered rows is returned, on the same reasoning
+ * {@link paneReadHint} uses for the prompt line: a scrollback holds every menu
+ * this pane ever drew, and the one nearest the cursor is the one the human is
+ * looking at. Merging runs would rebuild a menu that no longer exists and offer
+ * buttons that do something else entirely.
+ */
+export function parsePaneOptions(text: unknown): PaneOption[] {
+  const raw = String(text ?? '').replace(/\r\n?/g, '\n')
+  if (!raw.trim()) return []
+
+  let run: PaneOption[] = []
+  let best: PaneOption[] = []
+  let wrapped = 0
+
+  const close = (): void => {
+    // Two rows is the floor. A lone `1.` in the agent's own prose is a
+    // numbered sentence, not a menu with a button in it.
+    if (run.length >= 2) best = run
+    run = []
+    wrapped = 0
+  }
+
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.replace(/\s+$/, '')
+    if (!line.trim()) {
+      close()
+      continue
+    }
+    const match = OPTION_LINE.exec(line)
+    if (match) {
+      const index = Number(match[1])
+      // Must count up from 1, and stay in range: a run that jumps to `7.` is
+      // prose or a wrapped sentence that happens to start with a number.
+      if (index !== run.length + 1 || index > MAX_OPTIONS) {
+        close()
+        if (index === 1) run.push(optionOf(index, match[2]))
+        continue
+      }
+      run.push(optionOf(index, match[2]))
+      wrapped = 0
+      continue
+    }
+    // Not a row. It may be a description codex wrapped under the row above:
+    // `2. Full Access       Codex can edit files outside this workspace and`
+    // then `                     access the internet without asking...`.
+    if (run.length && wrapped < WRAP_MAX_LINES) {
+      const last = run[run.length - 1]
+      last.label = `${last.label} ${line.trim()}`.replace(/\s+/g, ' ').trim()
+      wrapped += 1
+      continue
+    }
+    close()
+  }
+  close()
+  return best
+}
+
+/** One row, with its accelerator split off into a herdr key name. */
+function optionOf(index: number, body: string): PaneOption {
+  const text = body.trim()
+  const match = SHORTCUT_TAIL.exec(text)
+  if (!match) return { index, label: text }
+  const label = text.slice(0, text.length - match[0].length).trim()
+  // A row that is nothing but `(y)` keeps its text: an empty button label is
+  // worse than a redundant one.
+  return { index, label: label || text, shortcut: match[1] ?? 'esc' }
+}
+
+/**
+ * Compile one menu row into herdr keys.
+ *
+ * Both branches send exactly one key, and that is not a guess - it is what
+ * codex does, checked against its own source and confirmed live. In a
+ * non-searchable list a digit goes `actual_idx_for_enabled_number` ->
+ * `select_shortcut`, and `select_shortcut` calls `accept(Primary)` immediately
+ * unless the row asks for explicit confirmation, which approval rows do not. A
+ * letter accelerator goes through `try_handle_shortcut` and accepts outright.
+ *
+ * So the footers that read "Press enter to confirm" describe how a human
+ * confirms the row their arrow keys are already on. Appending `enter` to either
+ * key presses Enter on whatever the agent draws *next* - and the next view is
+ * usually another menu (pick a model, then pick an effort level), so the stray
+ * Enter silently takes row 1 of a prompt nobody read. One key, then stop.
+ */
+export function keysForOption(option: PaneOption | null | undefined): string[] {
+  if (!option) return []
+  if (option.shortcut) return [option.shortcut]
+  if (option.index >= 1 && option.index <= MAX_OPTIONS) return [String(option.index)]
+  return []
+}
+
+/** The row `approve` falls back to when we read a menu but got no explicit pick. */
+export function firstOptionKeys(options: readonly PaneOption[] | undefined): string[] {
+  return keysForOption(options?.[0])
+}
+
+/**
+ * The row `deny` falls back to, or nothing.
+ *
+ * Only a row that advertises `esc` counts, and only when exactly one does:
+ * `esc` means "leave this prompt alone" in every TUI that draws it, whereas
+ * "the last row" is only where the agent happened to put it. Guessing by
+ * position is how a deny ends up approving.
+ */
+export function dismissOption(options: readonly PaneOption[] | undefined): PaneOption | null {
+  const hits = (options ?? []).filter((option) => option.shortcut === 'esc')
+  return hits.length === 1 ? hits[0] : null
+}
+
+/**
+ * Which verb a row belongs to.
+ *
+ * A row is a refusal only when it is the one row that advertises `esc` (see
+ * {@link dismissOption}); everything else is an approval of some scope. This
+ * decides the button's colour and the ledger line, never which key is pressed -
+ * the key comes from the row itself, so a mislabelled row cannot approve
+ * anything it was not already going to.
+ */
+export function optionAction(
+  option: PaneOption,
+  options: readonly PaneOption[] | undefined
+): 'approve' | 'deny' {
+  const dismiss = dismissOption(options)
+  return dismiss && dismiss.index === option.index ? 'deny' : 'approve'
+}
+
+/* ------------------------------------------------------------------ *
  * From "the human clicked Approve" to "what herdr is told to do"
  * ------------------------------------------------------------------ */
 
@@ -533,7 +727,13 @@ export type AttentionExecution =
  * Stable codes rather than prose, because "we will not press a button we are
  * unsure about" is a message the UI has to explain in two languages.
  */
-export type NoExecCode = 'no-recipe' | 'no-pane' | 'no-text' | 'no-context' | 'unknown-action'
+export type NoExecCode =
+  | 'no-recipe'
+  | 'no-pane'
+  | 'no-text'
+  | 'no-context'
+  | 'no-option'
+  | 'unknown-action'
 
 export const DEFAULT_SNOOZE_MINUTES = 10
 
@@ -542,6 +742,11 @@ export interface AttentionPlanInput {
   action: AttentionAction
   /** Free-text answer, or nothing for the keystroke verbs. */
   text?: string
+  /**
+   * Which numbered row of the agent's own menu to take, 1-based. Meaningful
+   * only for `approve`/`deny`, and only when we read a menu off the pane.
+   */
+  option?: number
   now: number
   keys?: KeyOverrides | null
   snoozeMinutes?: number
@@ -622,6 +827,28 @@ export function planAttentionAction(input: AttentionPlanInput): AttentionExecuti
     case 'approve':
     case 'deny': {
       if (!paneId) return none(input, 'no-pane', 'no live pane for this task')
+      // The agent's own menu wins over our table for it. We read the rows off
+      // the screen, so what we press is a row the human was shown and chose;
+      // the table below is the fallback for a pane we could not read.
+      const options = item.options ?? []
+      if (input.option) {
+        const picked = options.find((entry) => entry.index === input.option) ?? null
+        if (!picked) {
+          return none(input, 'no-option', `the menu on screen has no row ${input.option}`)
+        }
+        const keys = keysForOption(picked)
+        if (!keys.length) return none(input, 'no-option', `row ${picked.index} has no key we can send`)
+        return { kind: 'keys', itemId: item.id, taskId, paneId, keys, preview: keys.join(' ') }
+      }
+      if (options.length) {
+        const chosen = action === 'approve' ? options[0] : dismissOption(options)
+        const keys = keysForOption(chosen)
+        // A deny with no `esc` row falls through to the table rather than
+        // pressing a row we cannot tell is a refusal.
+        if (keys.length && (action === 'approve' || chosen)) {
+          return { kind: 'keys', itemId: item.id, taskId, paneId, keys, preview: keys.join(' ') }
+        }
+      }
       const recipe = decisionKeys(item.agentKind, action, input.keys ?? null)
       if (!recipe) {
         return none(

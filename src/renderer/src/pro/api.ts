@@ -88,13 +88,14 @@ export const proApi = {
   act: (
     itemId: string,
     action: AttentionAction,
-    extra: { text?: string; minutes?: number } = {}
+    extra: { text?: string; minutes?: number; option?: number } = {}
   ): Promise<ProResult> =>
     call(CH.proAction, {
       itemId,
       action,
       text: extra.text ?? '',
       minutes: extra.minutes ?? 0,
+      option: extra.option ?? 0,
       origin: 'bench'
     }),
 

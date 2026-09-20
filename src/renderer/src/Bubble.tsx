@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { BubbleMessage, BubbleRoute } from '@shared/ui'
-import { ANSWER_MAX_CHARS, answerText } from '@shared/pro'
+import { ANSWER_MAX_CHARS, answerText, keysForOption, optionAction } from '@shared/pro'
 import { routeCanAnswer } from '@shared/companionLink'
 import { useImeEnter } from './useIme'
 
@@ -88,7 +88,7 @@ interface BubbleProps {
   /** The bubble text was clicked: take me to that task and pane. */
   onOpen?: (route: BubbleRoute) => void
   /** One chip was clicked: settle the item right here, no window switch. */
-  onAct?: (route: BubbleRoute, action: string) => void
+  onAct?: (route: BubbleRoute, action: string, option?: number) => void
   /** A sentence was typed into the bubble: deliver it as an `answer` act. */
   onAnswer?: (route: BubbleRoute, text: string) => void
   /**
@@ -136,8 +136,15 @@ export function Bubble({ message, onOpen, onAct, onAnswer, onCompose }: BubblePr
       ? 'greeting'
       : 'plain'
   // The route's own order, which `attentionActions` already ranks by urgency.
+  const options = route?.options ?? []
   const chips = route
-    ? route.actions.filter((action) => action in ACTION_LABEL).slice(0, MAX_CHIPS)
+    ? route.actions
+        // The agent's own rows win over our approve/deny pair: two approvals of
+        // different scope look identical behind one word, and "which one means
+        // approve everything" is not something this bubble may guess.
+        .filter((action) => !options.length || (action !== 'approve' && action !== 'deny'))
+        .filter((action) => action in ACTION_LABEL)
+        .slice(0, MAX_CHIPS)
     : []
 
   const send = (): void => {
@@ -206,6 +213,26 @@ export function Bubble({ message, onOpen, onAct, onAnswer, onCompose }: BubblePr
           {normalized.clipped ? (
             <p className="bubble-answer-warn">{ANSWER_COPY.clipped[message.lang]}</p>
           ) : null}
+        </div>
+      ) : null}
+      {options.length > 0 && route ? (
+        <div className="bubble-options">
+          {options.map((option) => {
+            const verb = optionAction(option, options)
+            return (
+              <button
+                type="button"
+                className="bubble-chip option"
+                key={option.index}
+                data-verb={verb}
+                title={`${option.label} (${keysForOption(option).join(' ')})`}
+                onClick={() => onAct?.(route, verb, option.index)}
+              >
+                <span className="bubble-option-n">{option.index}</span>
+                <span className="bubble-option-label">{option.label}</span>
+              </button>
+            )
+          })}
         </div>
       ) : null}
       {route && (chips.length > 0 || canAnswer || onOpen) && (

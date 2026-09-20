@@ -541,7 +541,7 @@ export function App(): ReactElement {
   )
 
   const onBubbleAct = useCallback(
-    (route: BubbleRoute, action: string) => {
+    (route: BubbleRoute, action: string, option?: number) => {
       // No item to settle: land on the pane instead.
       if (!route.itemId) {
         onBubbleOpen(route)
@@ -554,7 +554,8 @@ export function App(): ReactElement {
           action: action as AttentionAction,
           itemId: route.itemId,
           taskId: route.taskId,
-          paneId: route.paneId
+          paneId: route.paneId,
+          option: option ?? 0
         })
         .then(reportPro)
     },

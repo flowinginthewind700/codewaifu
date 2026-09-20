@@ -1687,6 +1687,74 @@ textarea {
   gap: 4px;
 }
 
+/* The agent's own menu, transcribed as buttons. One row per line rather than a
+   chip row: the labels are the decision ("yes, and don't ask again for commands
+   starting with git"), and truncating them is what turned this panel into the
+   bug where Approve silently pressed a row the human never read. */
+.qoptions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.qoptions-head {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.qoption {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--bench-line);
+  border-radius: var(--radius-xs);
+  background: var(--bench-panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-swift),
+    border-color var(--dur-1) var(--ease-swift),
+    color var(--dur-1) var(--ease-swift);
+}
+
+.qoption-index {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--faint);
+  text-align: center;
+}
+
+.qoption-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.qoption.approve:hover {
+  background: rgba(var(--ok-rgb), 0.14);
+  border-color: rgba(var(--ok-rgb), 0.4);
+  color: var(--ok);
+}
+
+.qoption.deny:hover {
+  background: rgba(var(--coral-rgb), 0.16);
+  border-color: rgba(var(--coral-rgb), 0.42);
+  color: var(--coral);
+}
+
+.qoption:hover .qoption-index {
+  color: inherit;
+}
+
 /* The keys a decision will press, shown before it presses them. This is the
    whole honesty argument for sending keystrokes into someone else's TUI. */
 .keycap {

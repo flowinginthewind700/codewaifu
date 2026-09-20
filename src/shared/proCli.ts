@@ -152,6 +152,9 @@ const VALUE_FLAGS = new Set([
   'kind',
   'action',
   'minutes',
+  // Which numbered row of the agent's own menu to press. It rides beside
+  // `--action approve` exactly as it rides beside a bubble chip.
+  'option',
   'text',
   'dir',
   'agent',
@@ -206,6 +209,7 @@ Act on it:
   answer <id> <text...>       answer an agent; <id> is an item id or a task id
     --action <verb>           answer | approve | deny | snooze | done | dismiss | reprompt
     --minutes <n>             snooze length (default 15)
+    --option <n>              press row n of the menu on screen (1-based)
     --pane <id> --kind <k>    narrow a task id to one pane or one kind of need
   approve <id> / deny <id>    sugar for --action approve / --action deny
 
@@ -736,6 +740,8 @@ export function parseProCli(args: readonly string[]): ProCliParse {
       }
       const minutes = num(flags.get('minutes'))
       if (minutes > 0) body.minutes = Math.trunc(minutes)
+      const option = num(flags.get('option'))
+      if (option > 0) body.option = Math.trunc(option)
       return call('answer', 'POST', '/pro/answer', body, json)
     }
 

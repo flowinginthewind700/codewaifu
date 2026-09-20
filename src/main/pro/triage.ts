@@ -20,9 +20,11 @@ import type { AgentStatus, PaneInfo, Snapshot, StatusChange } from '../../shared
 import {
   attentionId,
   DEFAULT_SNOOZE_MINUTES,
+  parsePaneOptions,
   type AttentionItem,
   type AttentionKind,
   type AttentionSource,
+  type PaneOption,
   type TaskStatus
 } from '../../shared/pro'
 
@@ -73,6 +75,8 @@ export interface PaneReadHint {
   detail?: string
   toolName?: string
   command?: string
+  /** The numbered menu on screen, when there was one we could swear to. */
+  options?: PaneOption[]
   /** A read can reclassify: a `blocked` pane may be asking a question. */
   kind?: AttentionKind
 }
@@ -346,8 +350,16 @@ export class Triage {
     if (status === 'blocked') {
       // Waiting on a human is not a stall; the pane is exactly where it should be.
       this.clearKinds(hint, ['stalled'], 'agent is blocked')
-      // Never duplicate a hook item: the hook knows more than the pixel state.
-      if (this.blockedItem(hint, 'hook')) return null
+      // Never duplicate a hook item that *is* the decision: the hook knows more
+      // than the pixel state. A `failed` row is not that. It is our reading of a
+      // stop event, and a pane that is `blocked` right now is the agent's own
+      // proof of life waiting on a prompt. Suppressing the permission row behind
+      // a stale failure is how a real approval overlay ended up with no approve
+      // button anywhere: the queue offered only `reprompt`, which types a
+      // paragraph into a menu that wanted one key.
+      const hookRow = this.blockedItem(hint, 'hook')
+      if (hookRow && (hookRow.kind === 'permission' || hookRow.kind === 'question')) return null
+      if (hookRow) this.clearKinds(hint, ['failed'], 'agent is blocked and asking again')
       return this.raise('permission', 'herdr', hint, { title: title || 'Waiting on you', detail: '' }, at)
     }
     if (status === 'done') {
@@ -528,7 +540,10 @@ export class Triage {
         title: item.title || existing.item.title,
         detail: item.detail || existing.item.detail,
         toolName: item.toolName || existing.item.toolName,
-        command: item.command || existing.item.command
+        command: item.command || existing.item.command,
+        // Read off the pane by `applyRead`, never by a status event, so a
+        // re-raise must not blank the menu the buttons are drawn from.
+        options: existing.item.options
       }
       // Repeated identical signals are the common case (herdr re-emits on every
       // snapshot); touching the row then would repaint the queue for nothing.
@@ -720,8 +735,12 @@ export class Triage {
       if (row.readAttempts >= MAX_READ_ATTEMPTS) return false
       if (row.lastReadAt && at - row.lastReadAt < READ_RETRY_MS) return false
       if (!item.paneId) return false
-      // A hook item already carries the decision; only read what is missing.
-      return !item.detail && !item.command
+      // A hook item already carries the decision, so only read what is missing.
+      // The exception is the menu: a hook says *that* the agent is waiting, and
+      // only the screen says which rows it is waiting between - and those rows
+      // are what the buttons press. Reading for them is worth a pane read.
+      if (!item.detail && !item.command) return true
+      return isBlockingKind(item.kind) && !item.options?.length
     })
     if (!targets.length) return 0
     let filled = 0
@@ -756,7 +775,12 @@ export class Triage {
     const detail = String(hint.detail ?? '').trim()
     const toolName = String(hint.toolName ?? '').trim()
     const command = String(hint.command ?? '').trim()
-    if (!title && !detail && !toolName && !command) return false
+    // The menu is trusted only while the pane is genuinely blocked, for the same
+    // reason the kind is: a scrollback keeps every menu the pane ever drew, and a
+    // row from an overlay the agent answered an hour ago would become a button
+    // that presses a digit into whatever is on screen now.
+    const options = blockedNow && hint.options?.length ? hint.options : row.item.options
+    if (!title && !detail && !toolName && !command && !options?.length) return false
 
     const item: AttentionItem = {
       ...row.item,
@@ -764,6 +788,7 @@ export class Triage {
       detail: detail || row.item.detail,
       toolName: toolName || row.item.toolName,
       command: command || row.item.command,
+      options,
       updatedAt: this.now()
     }
     if (kind === row.item.kind) {
@@ -1061,13 +1086,18 @@ export function paneReadHint(text: string, current: AttentionKind): PaneReadHint
 
   const detail = clipBlock(raw, READ_DETAIL_MAX)
   const title = clip(prompt || lastLine, 160)
-  if (!title && !detail && !command) return null
+  // The agent's own menu, read in one pass over the whole screen: the buttons
+  // the queue draws come from these rows, and a prompt matched by regex is not
+  // enough to know that "2" means approve-for-session and "4" means refuse.
+  const options = parsePaneOptions(raw)
+  if (!title && !detail && !command && !options.length) return null
 
   const kind: AttentionKind = prompt ? 'permission' : current
   const hint: PaneReadHint = {}
   if (title) hint.title = title
   if (detail) hint.detail = detail
   if (command) hint.command = clip(command, 400)
+  if (options.length) hint.options = options
   if (kind !== current) hint.kind = kind
   return hint
 }
