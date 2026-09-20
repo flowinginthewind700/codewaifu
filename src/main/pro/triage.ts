@@ -702,6 +702,29 @@ export class Triage {
     return count
   }
 
+  /**
+   * A task was renamed, so the rows it has open have to say so.
+   *
+   * `taskTitle` is copied onto an item when it is raised and never re-read: the
+   * queue, the companion bubble and the widget all print it. A rename that did
+   * not reach those rows leaves the human reading the old name in the place they
+   * just changed it - and `resync` will not fix it, because it only fills in
+   * rows that have no title at all. Returns how many rows moved.
+   */
+  retitle(taskId: string, title: string): number {
+    if (!taskId || !title) return 0
+    const at = this.now()
+    let count = 0
+    for (const row of [...this.rows.values()]) {
+      if (row.item.taskId !== taskId || row.item.taskTitle === title) continue
+      const item: AttentionItem = { ...row.item, taskTitle: title, updatedAt: at }
+      row.item = item
+      this.emit({ type: 'updated', item })
+      count += 1
+    }
+    return count
+  }
+
   snooze(itemId: string, until: number): AttentionItem | null {
     const row = this.rows.get(itemId)
     if (!row) return null

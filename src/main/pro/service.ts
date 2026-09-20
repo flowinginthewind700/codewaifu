@@ -2061,8 +2061,19 @@ export class ProService implements CompanionApi {
         if (request.goal) patch.goal = request.goal
         if (request.branch) patch.branch = request.branch
         if (!Object.keys(patch).length) return failResult('bad-payload', 'nothing to change')
+        const before = this.registry.get(request.taskId)
         const task = this.registry.patch(request.taskId, patch)
         if (!task) return this.noTask(request.taskId)
+        // A rename has to travel: the rows this task already has open carry a
+        // copy of the old title (see Triage.retitle), and the ledger is where a
+        // human later asks what this task was actually about.
+        if (patch.title && before && before.title !== task.title) {
+          this.triage.retitle(task.id, task.title)
+          this.ledger.append(
+            { taskId: task.id, kind: 'event', text: `renamed to ${task.title}`, source: 'gui' },
+            this.timers.now()
+          )
+        }
         this.registry.save()
         this.invalidate()
         return okResult<ProTaskEnvelope>({ task }, '', 'patched')

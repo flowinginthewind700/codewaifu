@@ -41,6 +41,7 @@ import {
   type ProSshRoster,
   type ProSshSetup,
   type ProTaskCreated,
+  type ProTaskEnvelope,
   type ProTaskRequest
 } from '../src/shared/proIpc'
 import {
@@ -2852,5 +2853,108 @@ describe('ProService reviving a finished task', () => {
       snapOf([{ workspaceId: 'w1', status: 'working', title: 'still after' }])
     )
     expect(statuses(bench)).toEqual(['t-done:active'])
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Renaming a task that already has rows open
+ * ------------------------------------------------------------------ */
+
+/**
+ * The half of a rename a tree row cannot show you: `taskTitle` is copied onto an
+ * attention item when it is raised and never re-read, so the queue, the companion
+ * bubble and the widget all keep printing the name the human just replaced - in
+ * the very panel where they renamed it. `resync` will not catch up either,
+ * because it only fills in rows that have no title at all.
+ *
+ * The ledger row is the other promise. Weeks later "what was this task about" is
+ * answered from the task's own history, and a rename that never lands there reads
+ * as a task that silently changed subject.
+ */
+describe('ProService renaming a task', () => {
+  /** One live task with a pane, so a Stop from it is raised as a review. */
+  function running(): TaskRecord[] {
+    return [
+      { ...seedTask(), id: 't-run', title: 'the old name', paneIds: ['w1:p1'], workspaceId: 'w1' }
+    ]
+  }
+
+  /** A finish as the relay hands it over: pane in the header, rest in the body. */
+  function stop(sessionId = 'sess-run', paneId = 'w1:p1'): ReturnType<typeof normalizeHook> {
+    return normalizeHook(
+      'codex',
+      { hook_event_name: 'Stop', session_id: sessionId, cwd: WORKDIR, last_assistant_message: 'done' },
+      START,
+      paneId
+    )
+  }
+
+  function rename(title: string, goal = ''): Extract<ProTaskRequest, { op: 'patch' }> {
+    return { op: 'patch', taskId: 't-run', title, goal, branch: '' }
+  }
+
+  /** The titles the projection prints, one per open row. */
+  function titles(bench: Bench): string[] {
+    return (bench.service.view()?.attention ?? []).map((item) => item.taskTitle)
+  }
+
+  it('moves the rows that are already open onto the new name', async () => {
+    const bench = await boot({ tasks: running() })
+    expect(bench.service.onHook(stop())?.taskId).toBe('t-run')
+    expect(titles(bench)).toEqual(['the old name'])
+
+    const result = await bench.service.taskOp(rename('ship the release'))
+    expect(result.ok, result.detail).toBe(true)
+    expect((result.data as ProTaskEnvelope).task.title).toBe('ship the release')
+
+    // The same row, renamed: the queue is not rebuilt from scratch, so the human
+    // does not lose the place they were looking at.
+    expect(titles(bench)).toEqual(['ship the release'])
+  })
+
+  it('writes the rename into the history of the task it happened to', async () => {
+    const bench = await boot({ tasks: running() })
+    bench.service.onHook(stop())
+
+    await bench.service.taskOp(rename('ship the release'))
+
+    const row = bench.ledgerTape.find((entry) => entry.text === 'renamed to ship the release')
+    expect(row?.taskId).toBe('t-run')
+    expect(row?.kind).toBe('event')
+    expect(row?.source).toBe('gui')
+  })
+
+  it('says nothing when the name it was given is the name it already had', async () => {
+    const bench = await boot({ tasks: running() })
+    bench.service.onHook(stop())
+    const before = bench.ledgerTape.length
+
+    // A form submitted untouched, and a field that trims down to what it was:
+    // both arrive here, and neither is an event worth a line in the history.
+    const result = await bench.service.taskOp(rename('the old name', 'a goal is a change'))
+    expect(result.ok, result.detail).toBe(true)
+    expect(bench.ledgerTape.length).toBe(before)
+    expect(titles(bench)).toEqual(['the old name'])
+  })
+
+  it('leaves the rows of another task alone', async () => {
+    const bench = await boot({
+      tasks: [
+        ...running(),
+        {
+          ...seedTask(),
+          id: 't-other',
+          title: 'someone else',
+          paneIds: ['w2:p1'],
+          workspaceId: 'w2'
+        }
+      ]
+    })
+    bench.service.onHook(stop())
+    bench.service.onHook(stop('sess-other', 'w2:p1'))
+    expect(titles(bench).sort()).toEqual(['someone else', 'the old name'])
+
+    await bench.service.taskOp(rename('ship the release'))
+    expect(titles(bench).sort()).toEqual(['ship the release', 'someone else'])
   })
 })

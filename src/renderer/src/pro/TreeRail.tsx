@@ -19,12 +19,18 @@
  * the Bench knows both the tree order and which groups are folded. The origin
  * filter is the same kind of state, so it is applied there too and handed down
  * already filtered - one derivation, or the cursor walks rows nobody can see.
+ *
+ * Renaming is the opposite kind of state and does belong here: which row has an
+ * open title field is a fact about this list, it outlives no projection, and the
+ * Bench has nothing to decide with it. What the Bench owns is the write.
  */
-import { useEffect, useMemo, useRef, type ReactElement } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { ChevronRight, PencilLine } from 'lucide-react'
 import { TREE_FILTERS, type GroupView, type OriginCounts, type TreeFilter } from '@shared/pro'
+import { Tip } from '../Tip'
 import { agentClass } from './agentTag'
 import { fill, type Translate } from './i18n'
+import { RenameField } from './RenameField'
 import { dur } from './time'
 
 export interface TreeRailProps {
@@ -44,6 +50,8 @@ export interface TreeRailProps {
   onToggleNeedsMe: () => void
   onToggleGroup: (key: string) => void
   onSelect: (taskId: string) => void
+  /** A title the human committed. Already trimmed and known to differ. */
+  onRename: (taskId: string, title: string) => void
 }
 
 const STATUS_KEY = {
@@ -84,9 +92,11 @@ export function TreeRail({
   onFilter,
   onToggleNeedsMe,
   onToggleGroup,
-  onSelect
+  onSelect,
+  onRename
 }: TreeRailProps): ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [editingId, setEditingId] = useState('')
 
   const shown = useMemo(() => {
     if (!needsMeOnly) return groups
@@ -97,6 +107,13 @@ export function TreeRail({
 
   const shownCount = useMemo(() => shown.reduce((n, group) => n + group.tasks.length, 0), [shown])
 
+  /** A row that is no longer on screen cannot be the one being renamed. */
+  useEffect(() => {
+    if (!editingId) return
+    if (shown.some((group) => group.tasks.some((task) => task.id === editingId))) return
+    setEditingId('')
+  }, [editingId, shown])
+
   // Keep the keyboard cursor in view without yanking the list: `nearest` is the
   // only scroll behaviour that does not move a row you were about to click.
   useEffect(() => {
@@ -104,6 +121,12 @@ export function TreeRail({
     scrollRef.current.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({
       block: 'nearest'
     })
+  }, [cursorId])
+
+  const stopEditing = useCallback(() => setEditingId(''), [])
+  /** The head button names the row `j/k` left highlighted, so it is never a guess. */
+  const renameCursor = useCallback(() => {
+    if (cursorId) setEditingId(cursorId)
   }, [cursorId])
 
   return (
@@ -115,6 +138,17 @@ export function TreeRail({
           <input type="checkbox" checked={needsMeOnly} onChange={onToggleNeedsMe} />
           {t('countNeedsMe')}
         </label>
+        <Tip label={t('renameTask')} side="bottom">
+          <button
+            type="button"
+            className="btn ghost icon rename-toggle"
+            aria-label={t('renameTask')}
+            disabled={!cursorId}
+            onClick={renameCursor}
+          >
+            <PencilLine />
+          </button>
+        </Tip>
       </div>
 
       {counts.imported > 0 ? (
@@ -160,8 +194,12 @@ export function TreeRail({
                     task={task}
                     selectedId={selectedId}
                     cursorId={cursorId}
+                    editing={editingId === task.id}
                     t={t}
                     onSelect={onSelect}
+                    onEdit={() => setEditingId(task.id)}
+                    onRename={onRename}
+                    onDone={stopEditing}
                   />
                 ))}
             </div>
@@ -178,24 +216,79 @@ interface TaskRowProps {
   task: TaskRowTask
   selectedId: string
   cursorId: string
+  /** This row's title field is open. */
+  editing: boolean
   t: Translate
   onSelect: (taskId: string) => void
+  onEdit: () => void
+  onRename: (taskId: string, title: string) => void
+  onDone: () => void
 }
 
 /** The slice of a `TaskView` a row reads. Named so the props stay honest. */
 type TaskRowTask = GroupView['tasks'][number]
 
-function TaskRow({ task, selectedId, cursorId, t, onSelect }: TaskRowProps): ReactElement {
+/**
+ * One row, in two shapes.
+ *
+ * An `<input>` inside a `<button>` is invalid HTML and Chromium quietly drops
+ * the keystrokes, so while the title is open the row is a `div` that keeps every
+ * class and data attribute it had - the same row, minus one thing it may not
+ * contain. `data-editing` is what the stylesheet uses to stop the row from
+ * looking clickable while you are typing into it.
+ */
+function TaskRow({
+  task,
+  selectedId,
+  cursorId,
+  editing,
+  t,
+  onSelect,
+  onEdit,
+  onRename,
+  onDone
+}: TaskRowProps): ReactElement {
   const selected = task.id === selectedId
   const agent = task.agentKind || task.panes[0]?.displayAgent || ''
+  const flags = {
+    'data-selected': selected,
+    'data-cursor': task.id === cursorId,
+    'data-editing': editing || undefined
+  }
+
+  if (editing) {
+    return (
+      <div className="task-row" {...flags}>
+        <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
+        <span className="task-main">
+          <RenameField
+            value={task.title}
+            className="task-rename"
+            ariaLabel={t('renameTask')}
+            hint={t('renameKeys')}
+            onCommit={(title) => {
+              onDone()
+              onRename(task.id, title)
+            }}
+            onCancel={onDone}
+          />
+          <span className="task-sub">
+            {agent && <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>}
+            {task.branch && <span className="branch">{task.branch}</span>}
+          </span>
+        </span>
+      </div>
+    )
+  }
+
   return (
     <button
       type="button"
       className="task-row"
-      data-selected={selected}
-      data-cursor={task.id === cursorId}
+      {...flags}
       aria-current={selected || undefined}
       onClick={() => onSelect(task.id)}
+      onDoubleClick={onEdit}
     >
       <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
       <span className="task-main">

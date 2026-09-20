@@ -106,6 +106,15 @@ export type TaskOrigin = 'created' | 'adopted' | 'imported'
 
 const TASK_ORIGINS: readonly string[] = ['created', 'adopted', 'imported']
 
+/**
+ * How long a task title may be, everywhere it is written.
+ *
+ * One constant rather than three literal `160`s: the wire parser clamps to it,
+ * so an input that does not is a title the user watched themselves type and
+ * then lost the tail of.
+ */
+export const TASK_TITLE_MAX = 160
+
 /** Unknown or hand-edited means `created`: the oldest records have no origin. */
 export function taskOriginOf(value: unknown): TaskOrigin {
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''

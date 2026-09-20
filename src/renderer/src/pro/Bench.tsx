@@ -678,6 +678,24 @@ export function Bench(): ReactElement {
     [bump, report, taskId]
   )
 
+  /**
+   * A title the human just wrote. Both callers have already trimmed it and
+   * checked it against what was there, so a patch reaching the service is a
+   * change worth a ledger line.
+   *
+   * No success toast: the row under the caret now reads the new name, and a
+   * bubble announcing what is already on screen is the one notification that
+   * adds no information.
+   */
+  const renameTask = useCallback(
+    (id: string, title: string): void => {
+      void proApi.task.patch(id, { title }).then((result) => {
+        if (report(result)) bump()
+      })
+    },
+    [bump, report]
+  )
+
   const confirmRemove = useCallback((): void => {
     const id = removeId
     const closeShell = removeClose
@@ -970,6 +988,7 @@ export function Bench(): ReactElement {
             onToggleGroup={toggleGroup}
             onSelect={(id) => selectTask(id)}
             onFilter={setTreeFilter}
+            onRename={renameTask}
           />
 
           <main className="bench-center">
@@ -982,6 +1001,7 @@ export function Bench(): ReactElement {
                 t={t}
                 onNotify={push}
                 onStatus={setStatus}
+                onRename={renameTask}
                 onRemove={() => askRemove(selectedTask.id)}
               />
             )}

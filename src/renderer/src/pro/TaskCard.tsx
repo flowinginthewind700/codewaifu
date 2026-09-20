@@ -21,6 +21,7 @@ import {
   FolderOpen,
   Hand,
   MessageSquare,
+  PencilLine,
   Pause,
   Play,
   RotateCcw,
@@ -34,6 +35,8 @@ import { ago } from './time'
 import type { Tone } from './toast'
 import { proApi } from './api'
 import { PlanSteps } from './PlanSteps'
+import { RenameField } from './RenameField'
+import { Tip } from '../Tip'
 
 export interface TaskCardProps {
   task: TaskView
@@ -44,6 +47,8 @@ export interface TaskCardProps {
   t: Translate
   onNotify: (text: string, tone?: Tone) => void
   onStatus: (status: 'active' | 'parked' | 'done') => void
+  /** A committed new title. The write and its ledger line belong to the Bench. */
+  onRename: (taskId: string, title: string) => void
   onRemove: () => void
 }
 
@@ -65,11 +70,14 @@ export function TaskCard({
   t,
   onNotify,
   onStatus,
+  onRename,
   onRemove
 }: TaskCardProps): ReactElement {
   const [digest, setDigest] = useState<LedgerDigest | null>(null)
   const [steering, setSteering] = useState(false)
   const [draft, setDraft] = useState('')
+  /** The title is a field right now rather than a heading. */
+  const [renaming, setRenaming] = useState(false)
 
   const paneId = task.panes[0]?.paneId ?? ''
   const goal = digest?.goal || task.goal
@@ -93,6 +101,7 @@ export function TaskCard({
   useEffect(() => {
     setSteering(false)
     setDraft('')
+    setRenaming(false)
   }, [task.id])
 
   const steer = useCallback(async (): Promise<void> => {
@@ -174,9 +183,38 @@ export function TaskCard({
     <section className="task-card">
       <div className="task-card-head">
         <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
-        <h2 className="task-card-title" title={task.title}>
-          {task.title || t('unfiled')}
-        </h2>
+        {renaming ? (
+          <RenameField
+            value={task.title}
+            className="task-card-title task-title-field"
+            ariaLabel={t('renameTask')}
+            hint={t('renameKeys')}
+            onCommit={(title) => {
+              setRenaming(false)
+              onRename(task.id, title)
+            }}
+            onCancel={() => setRenaming(false)}
+          />
+        ) : (
+          <>
+            <h2 className="task-card-title" title={task.title}>
+              {task.title || t('unfiled')}
+            </h2>
+            {/* The same field the tree opens on a double-click, with a control to
+                find it: the tree is a narrow column where double-click is the
+                obvious gesture, and this is the heading people actually read. */}
+            <Tip label={t('renameTask')}>
+              <button
+                type="button"
+                className="btn ghost icon rename-task"
+                aria-label={t('renameTask')}
+                onClick={() => setRenaming(true)}
+              >
+                <PencilLine />
+              </button>
+            </Tip>
+          </>
+        )}
         <span className="spacer" />
         {agent && <span className="tag">{agent}</span>}
         <span className="pill quiet">{t(STATUS_KEY[task.status])}</span>

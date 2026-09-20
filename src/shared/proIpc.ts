@@ -19,6 +19,7 @@ import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT } from './chat'
 import {
   attentionKindOf,
   DEFAULT_SNOOZE_MINUTES,
+  TASK_TITLE_MAX,
   taskStatusOf,
   type AttentionAction,
   type AttentionItem,
@@ -391,7 +392,7 @@ export function parseProTask(payload: unknown): ProTaskParse {
       if (!workdir) return reject('needs-workdir', 'workdir is required')
       return {
         op,
-        title: str(raw.title, 160).trim(),
+        title: str(raw.title, TASK_TITLE_MAX).trim(),
         goal: str(raw.goal, 4000),
         workdir,
         branch: str(raw.branch, 200).trim(),
@@ -408,7 +409,7 @@ export function parseProTask(payload: unknown): ProTaskParse {
       return {
         op,
         taskId,
-        title: str(raw.title, 160).trim(),
+        title: str(raw.title, TASK_TITLE_MAX).trim(),
         goal: str(raw.goal, 4000),
         branch: str(raw.branch, 200).trim()
       }

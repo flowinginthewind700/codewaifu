@@ -779,6 +779,25 @@ textarea {
   flex: 0 0 auto;
 }
 
+/* The rail's one icon button. The head is short on vertical room and already
+   carries a labelled toggle, so this is the smallest button in the bench. */
+.rail-head .rename-toggle {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  color: var(--faint);
+}
+
+.rail-head .rename-toggle:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.rail-head .rename-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* The origin facet: chips above the tree, not a fourth group in it. The spine
    of this tree is directories, and an Imported folder would move a task out of
    the checkout it lives in to satisfy a fact about where it came from. The row
@@ -985,6 +1004,36 @@ textarea {
   white-space: nowrap;
 }
 
+/* The row while its title is open. It is a `div` then (an input cannot live in
+   a button), so the pointer has to be told this is not something to click, and
+   the hover wash has to stay off: a row that lights up under a caret reads as
+   one more selection. */
+.task-row[data-editing='true'] {
+  cursor: text;
+}
+
+/* Selected and cursor washes are declared after the hover rule in the sheet, so
+   they already win: only the unselected row needs its hover taken away. */
+.task-row[data-editing='true']:not([data-selected='true']):hover {
+  background: transparent;
+}
+
+/* Same tokens as `.input`, one notch tighter: this field has to fit a 180px
+   rail, and the row it replaces is 22px tall. */
+.task-rename {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  background: var(--bench-bg);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-family: inherit;
+  line-height: 1.4;
+  outline: none;
+}
+
 .task-sub {
   display: flex;
   align-items: center;
@@ -1072,6 +1121,31 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* The card's title as a field. It keeps the heading's class so the type does not
+   jump when the pencil is pressed; the rest is the same recipe as `.input`. */
+input.task-title-field {
+  flex: 1 1 auto;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  background: var(--bench-bg);
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  text-overflow: ellipsis;
+}
+
+/* Sits between the heading and the spacer, so it must not be the thing that
+   takes the slack when the title is long. */
+.task-card-head .rename-task {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.task-card-head .rename-task:hover {
+  color: var(--text);
 }
 
 /* Facts are a definition list, not chips: they are read as "branch = x", and a

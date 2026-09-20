@@ -174,6 +174,14 @@ const STRINGS = {
   originImported: { zh: '导入', en: 'imported' },
   treeFoot: { zh: '{shown} / {total} 个任务', en: '{shown} of {total} tasks' },
   unfiled: { zh: '未归档', en: 'Unfiled' },
+  /**
+   * Renaming a task. The label names the row that will be edited (double-click
+   * a row, or the pencil in the rail head for whatever `j/k` last highlighted),
+   * and the hint gives the two keys because a field with no visible buttons has
+   * no other way to say how it closes.
+   */
+  renameTask: { zh: '重命名任务（或在树里双击）', en: 'Rename this task (or double-click it in the tree)' },
+  renameKeys: { zh: 'Enter 保存 · Esc 取消', en: 'Enter to save · Esc to cancel' },
   statusActive: { zh: '进行中', en: 'Active' },
   statusParked: { zh: '已搁置', en: 'Parked' },
   statusDone: { zh: '已完成', en: 'Done' },
