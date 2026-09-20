@@ -28,14 +28,19 @@ export function CharacterPicker({ t, lang, selected, onPick, onClose }: Props): 
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
+    // Capture, and swallowed: the chat view and the stage menus also listen
+    // for Escape on window, and a modal dismiss must not back the thread out
+    // from under the sheet that just closed.
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      onClose()
     }
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     // The thumbs are the point of a picker: land the focus inside the sheet so
     // the first Tab reaches a character, not the stage behind it.
     rootRef.current?.querySelector<HTMLButtonElement>('button[data-char]')?.focus()
-    return () => window.removeEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
   return (

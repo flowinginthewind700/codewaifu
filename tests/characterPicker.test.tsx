@@ -90,4 +90,29 @@ describe('CharacterPicker', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
     expect(onPick).not.toHaveBeenCalled()
   })
+
+  it('keeps its Escape from the thread view behind it', async () => {
+    // The chat panel backs out of the thread on a window-level Escape, in the
+    // bubble phase. Dismissing the sheet must not also walk the thread out from
+    // under it, so the sheet claims the key first and does not let it travel.
+    const backed = vi.fn()
+    window.addEventListener('keydown', backed)
+    await render(
+      <CharacterPicker
+        t={t}
+        lang="en"
+        selected={LIVE2D_CATALOG.characters[0].id}
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    await act(async () => {
+      // From the focused thumb, the way a real keypress arrives: window is an
+      // ancestor here, so the capture pass reaches the sheet before the chat's
+      // bubble-phase listener does.
+      items()[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(backed).not.toHaveBeenCalled()
+    window.removeEventListener('keydown', backed)
+  })
 })
