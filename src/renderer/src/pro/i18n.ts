@@ -26,6 +26,33 @@ const STRINGS = {
   modeBench: { zh: '工作台', en: 'Bench' },
   backToStage: { zh: '回到舞台', en: 'Back to the stage' },
   booting: { zh: '正在启动工作台…', en: 'Starting the bench…' },
+  /**
+   * The two column toggles, and the two splitters between the columns.
+   *
+   * Named as a pair of verbs rather than one, because "Tasks" is not an
+   * instruction: a control that hides something has to say so while it is still
+   * visible, or the tooltip reads the same in both states and the panel
+   * disappears for what looks like no reason.
+   */
+  collapseRail: { zh: '收起左侧任务树', en: 'Hide the task tree' },
+  expandRail: { zh: '展开左侧任务树', en: 'Show the task tree' },
+  collapseRight: { zh: '收起右侧面板', en: 'Hide the side panel' },
+  expandRight: { zh: '展开右侧面板', en: 'Show the side panel' },
+  /**
+   * The splitter handles. Both gestures are named because the handle is a real
+   * control: a seam you can only find with a mouse is a seam nobody without one
+   * can move, and a width you cannot undo is a width you are stuck with.
+   */
+  splitRail: {
+    zh: '拖动或按 ←/→ 调整任务树宽度 · Enter 恢复默认',
+    en: 'Drag or press ←/→ to resize the tree · Enter resets'
+  },
+  splitRight: {
+    zh: '拖动或按 ←/→ 调整侧栏宽度 · Enter 恢复默认',
+    en: 'Drag or press ←/→ to resize the panel · Enter resets'
+  },
+  /** Said once, when a splitter is reset to the shipped width. */
+  splitReset: { zh: '栏宽已恢复默认', en: 'Column width reset' },
   keyHints: {
     zh: 'j/k 移动 · Enter 打开 · i 聚焦终端 · c 连接 · t 开新终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
     en: 'j/k move · Enter open · i focus pane · c connect · t shell · Space filter · a/d/s decide · 1/2/3 tabs'

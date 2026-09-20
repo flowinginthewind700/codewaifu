@@ -3,6 +3,7 @@ import { normalizeRequestedPort } from './portPolicy'
 import { DEFAULT_HOTKEY } from './hotkey'
 import type { AvatarMode } from './ui'
 import { ZOOM_MAX, ZOOM_MIN, clampZoom } from './zoom'
+import { RIGHT_DEFAULT, RAIL_DEFAULT, clampColumnWidth } from './benchLayout'
 
 export interface AvatarConfig {
   mode: AvatarMode
@@ -132,8 +133,15 @@ export interface ProConfig {
   stalledAfterMs: number
   /** Approve/deny keystrokes per agent: `codex.approve` -> `1`. */
   keys: Record<string, string>
-  /** Bench window geometry; -1 means centred on first open. */
-  bench: { width: number; height: number; x: number; y: number }
+  /**
+   * Bench window geometry; -1 means centred on first open.
+   *
+   * `railW`/`rightW` are the two side columns in CSS pixels, remembered so a
+   * splitter you dragged stays where you put it. Both are clamped by
+   * `benchLayout`, which is also what the renderer drags against, so the value
+   * on disk cannot disagree with what the window will draw.
+   */
+  bench: { width: number; height: number; x: number; y: number; railW: number; rightW: number }
   /** Open the Bench window on launch instead of waiting to be summoned. */
   openBenchOnLaunch: boolean
   /**
@@ -176,7 +184,7 @@ export const DEFAULT_PRO: ProConfig = {
   badge: true,
   stalledAfterMs: 300000,
   keys: {},
-  bench: { width: 1180, height: 760, x: -1, y: -1 },
+  bench: { width: 1180, height: 760, x: -1, y: -1, railW: RAIL_DEFAULT, rightW: RIGHT_DEFAULT },
   openBenchOnLaunch: false,
   autoStartHerdr: true,
   autoResumeOnBoot: true
@@ -389,7 +397,12 @@ function parsePro(rawPro: Record<string, unknown>, rawBench: Record<string, unkn
       width: Math.trunc(num(rawBench.width, d.bench.width, 480, 4000)),
       height: Math.trunc(num(rawBench.height, d.bench.height, 360, 2400)),
       x: Math.trunc(num(rawBench.x, d.bench.x, -1, 100000)),
-      y: Math.trunc(num(rawBench.y, d.bench.y, -1, 100000))
+      y: Math.trunc(num(rawBench.y, d.bench.y, -1, 100000)),
+      // Side columns. `clampColumnWidth` is the same rule a splitter drag runs
+      // through, so a hand-written config and a dragged one land on the same set
+      // of allowed widths.
+      railW: clampColumnWidth('rail', num(rawBench.railW, d.bench.railW, 0, 100000)),
+      rightW: clampColumnWidth('right', num(rawBench.rightW, d.bench.rightW, 0, 100000))
     },
     openBenchOnLaunch: bool(rawPro.openBenchOnLaunch, d.openBenchOnLaunch),
     autoStartHerdr: bool(rawPro.autoStartHerdr, d.autoStartHerdr),

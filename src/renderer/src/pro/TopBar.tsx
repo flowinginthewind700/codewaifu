@@ -137,11 +137,14 @@ export function TopBar({
 
   return (
     <header className="bench-topbar">
-      <Tip label={t('treeTitle')}>
+      {/* Names the verb, not the panel: at every width this is a hide/show
+          control, and a label that reads "Tasks" in both states says nothing
+          about what the click will do. */}
+      <Tip label={railOpen ? t('collapseRail') : t('expandRail')}>
         <button
           type="button"
           className="btn ghost icon rail-toggle"
-          aria-label={t('treeTitle')}
+          aria-label={railOpen ? t('collapseRail') : t('expandRail')}
           aria-expanded={railOpen}
           onClick={onToggleRail}
         >
@@ -287,11 +290,11 @@ export function TopBar({
           <Plus />
           {t('newTask')}
         </button>
-        <Tip label={t('queueTitle')}>
+        <Tip label={rightOpen ? t('collapseRight') : t('expandRight')}>
           <button
             type="button"
             className="btn ghost icon right-toggle"
-            aria-label={t('queueTitle')}
+            aria-label={rightOpen ? t('collapseRight') : t('expandRight')}
             aria-expanded={rightOpen}
             data-count={attentionCount}
             onClick={onToggleRight}

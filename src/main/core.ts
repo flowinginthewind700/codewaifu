@@ -421,7 +421,13 @@ export class Core {
     ) {
       return
     }
-    this.config = writeConfig({ ...this.config, pro: { ...this.config.pro, bench } })
+    // Spread first: the frame is only four of the six numbers in `bench`, and a
+    // geometry write that dropped `railW`/`rightW` would undo a splitter drag
+    // the next time the window moved.
+    this.config = writeConfig({
+      ...this.config,
+      pro: { ...this.config.pro, bench: { ...current, ...bench } }
+    })
   }
 
   ingest(event: HookEvent): void {

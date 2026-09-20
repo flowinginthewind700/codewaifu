@@ -109,11 +109,124 @@ textarea {
 .bench {
   display: grid;
   height: 100%;
+  /* The splitters are positioned against the shell, not against a column: they
+     have to sit on the seam and still be there while the column beside them is
+     being dragged under the pointer. */
+  position: relative;
   grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--right-w);
   grid-template-rows: var(--topbar-h) minmax(0, 1fr);
   grid-template-areas:
     'top top top'
     'rail center right';
+}
+
+/* ==========================================================================
+   Collapsible columns and their splitters
+
+   On a wide window both side columns are furniture, so "hide it" means the grid
+   track goes to zero rather than the panel becoming an overlay: the center
+   simply gets the pixels back, which is the whole reason to collapse a tree you
+   have already read. Below the drawer breakpoints the narrow-window rules take
+   over and these stay out of the way (each one is fenced behind the same width
+   its media query uses).
+   ========================================================================== */
+
+/* Where both columns are furniture. Each collapsed state has to name every
+   track, because `grid-template-columns` is not merged property by property: a
+   two-value override under a three-area template leaves a third implicit track,
+   which is dead space at the right edge rather than a hidden column. */
+@media (min-width: 981px) {
+  .bench[data-rail='closed'] {
+    grid-template-columns: 0 minmax(0, 1fr) var(--right-w);
+  }
+
+  .bench[data-right='closed'] {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) 0;
+  }
+
+  .bench[data-rail='closed'][data-right='closed'] {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+
+  .bench[data-right='closed'] .bench-right {
+    display: none;
+  }
+}
+
+/* Between the two breakpoints the right panel is already a drawer, so the grid
+   only has two tracks and the rail is the only column left to collapse. These
+   rules are more specific than the `.bench` inside the drawer query below, so
+   they are what decides the template here - naming three tracks in this range
+   would add an empty 344px strip beside a window that has no room for one. */
+@media (min-width: 721px) and (max-width: 980px) {
+  .bench[data-rail='closed'] {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+}
+
+/* The panel itself is hidden wherever the rail is furniture. Not below 721px:
+   there it slides in as a drawer, and `display: none` would take the slide away. */
+@media (min-width: 721px) {
+  .bench[data-rail='closed'] .bench-rail {
+    display: none;
+  }
+}
+
+/* The seam you drag. Six pixels wide so it is easy to hit, invisible until you
+   are on it, and it lights the column's own border rather than drawing a second
+   line beside it - a splitter that changes colour when grabbed is enough
+   feedback, and one that is always lit is a stripe down the middle of the app. */
+.bench-split {
+  position: absolute;
+  top: var(--topbar-h);
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  z-index: 20;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background var(--dur-1) var(--ease-swift);
+}
+
+.bench-split:hover,
+.bench-split:focus-visible,
+.bench-split[data-dragging='1'] {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.bench-split-rail {
+  left: var(--rail-w);
+}
+
+.bench-split-right {
+  left: calc(100% - var(--right-w));
+}
+
+@media (min-width: 721px) {
+  .bench[data-rail='closed'] .bench-split-rail {
+    display: none;
+  }
+}
+
+@media (min-width: 981px) {
+  .bench[data-right='closed'] .bench-split-right {
+    display: none;
+  }
+}
+
+/* Inside a drawer there is no seam to drag: the column overlays the panes, so
+   widening it would only cover more terminal. */
+@media (max-width: 980px) {
+  .bench-split-right {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .bench-split-rail {
+    display: none;
+  }
 }
 
 .boot {
@@ -2358,10 +2471,27 @@ button.plan-title:focus-visible {
    1080p screen beside an editor). Below 980px the right rail becomes a drawer
    that overlays the panes rather than stealing width from them: a terminal
    squeezed to 300px is useless, a queue you summon when you need it is not.
+
+   Both toggles live on the bar at every width: collapsing a column you have
+   finished reading is a wide-window move, not only a narrow one.
    ========================================================================== */
 
 .right-toggle {
-  display: none;
+  display: inline-flex;
+}
+
+/* The bell carries the queue length only while the panel it opens is hidden.
+   With the panel on screen its own rows say it better; collapsed, the number is
+   the only reason left to click. One selector covers the wide collapse and the
+   narrow drawer, which are the same state. */
+.bench[data-right='closed'] .right-toggle[data-count]:not([data-count='0'])::after {
+  content: attr(data-count);
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: #06170d;
+  font-weight: 650;
 }
 
 @media (max-width: 980px) {
@@ -2370,20 +2500,6 @@ button.plan-title:focus-visible {
     grid-template-areas:
       'top top'
       'rail center';
-  }
-
-  .right-toggle {
-    display: inline-flex;
-  }
-
-  .right-toggle[data-count]:not([data-count='0'])::after {
-    content: attr(data-count);
-    font-size: 9.5px;
-    padding: 0 4px;
-    border-radius: 99px;
-    background: var(--accent);
-    color: #06170d;
-    font-weight: 650;
   }
 
   .bench-right {
@@ -2440,7 +2556,7 @@ button.plan-title:focus-visible {
 }
 
 .rail-toggle {
-  display: none;
+  display: inline-flex;
 }
 
 /* ------------------------------------------------------------ provenance */

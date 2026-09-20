@@ -19,8 +19,30 @@
  * `Enter` opens one, and `a/d/s` decide the head of the queue *without focusing
  * its pane*. That last one is the whole product - see MVP F3.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement
+} from 'react'
 import type { ProConfig } from '@shared/config'
+import {
+  COLUMN_RANGE,
+  COLUMN_SAVE_DELAY,
+  clampColumnWidth,
+  columnVar,
+  columnVarValue,
+  draggedColumnWidth,
+  isDrawerColumn,
+  RAIL_DEFAULT,
+  RIGHT_DEFAULT,
+  SPLIT_STEP,
+  type BenchColumn
+} from '@shared/benchLayout'
 import { resolveUiLang, systemLangFromLocales } from '@shared/lang'
 import {
   DEFAULT_SNOOZE_MINUTES,
@@ -50,6 +72,7 @@ import { NewTaskDialog } from './NewTaskDialog'
 import { PaneGrid } from './PaneGrid'
 import { RecoveryPanel } from './RecoveryPanel'
 import { TaskCard } from './TaskCard'
+import { Tip } from '../Tip'
 import { BenchBrand, TopBar } from './TopBar'
 import { TreeRail } from './TreeRail'
 import { fill, makeTranslator, type Translate } from './i18n'
@@ -95,6 +118,23 @@ export function Bench(): ReactElement {
   const [tab, setTab] = useState<RightTab>('queue')
   const [railOpen, setRailOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
+  /**
+   * The two side columns, in CSS pixels.
+   *
+   * Local state while you drag, so a 120Hz pointer stream repaints columns
+   * without a config write per frame; the width lands in `pro.bench` once, when
+   * you let go. Config is the source of truth between drags - see the sync below.
+   */
+  const [railW, setRailW] = useState(RAIL_DEFAULT)
+  const [rightW, setRightW] = useState(RIGHT_DEFAULT)
+  /** Which column a splitter drag owns, if any. */
+  const [splitting, setSplitting] = useState<BenchColumn | null>(null)
+  const splitRef = useRef<{
+    column: BenchColumn
+    pointerId: number
+    startX: number
+    startWidth: number
+  } | null>(null)
   const [newTaskOpen, setNewTaskOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [connectOpen, setConnectOpen] = useState(false)
@@ -165,10 +205,13 @@ export function Bench(): ReactElement {
     setTaskId(task.id)
     setCursorId(task.id)
     setPaneId(chosen)
-    // Both drawers close. On a narrow window the point of opening a task is to
-    // see its terminal, and the drawers overlay it.
-    setRailOpen(false)
-    setRightOpen(false)
+    // Drawers close, columns do not. Below its breakpoint each side panel
+    // overlays the panes, and on a narrow window the point of opening a task is
+    // to see its terminal - so the overlay gets out of the way. On a wide window
+    // both panels *are* the layout, and a row click that folded the tree and the
+    // queue away would rearrange the furniture every time you looked at a task.
+    if (isDrawerColumn('rail', window.innerWidth)) setRailOpen(false)
+    if (isDrawerColumn('right', window.innerWidth)) setRightOpen(false)
     return true
   }, [])
 
@@ -365,6 +408,197 @@ export function Bench(): ReactElement {
     [patchConfig]
   )
 
+  /* ---- side columns: collapse and resize ------------------------------- */
+
+  const shellRef = useRef<HTMLDivElement | null>(null)
+  const savedRailW = pro?.bench.railW ?? RAIL_DEFAULT
+  const savedRightW = pro?.bench.rightW ?? RIGHT_DEFAULT
+
+  /**
+   * Config in, local state out. A drag leads with local state so the column
+   * follows the pointer without a round trip per frame; once the write lands the
+   * config is the same clamped number, so this is a no-op. Not applied while a
+   * drag is in flight, or a late push would fight the hand.
+   */
+  useEffect(() => {
+    if (splitRef.current) return
+    setRailW(savedRailW)
+    setRightW(savedRightW)
+  }, [savedRailW, savedRightW])
+
+  // The grid and both splitter positions read these two variables from CSS, so
+  // they are written on the shell element rather than threaded through props.
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!shell) return
+    shell.style.setProperty(columnVar('rail'), columnVarValue(railW))
+    shell.style.setProperty(columnVar('right'), columnVarValue(rightW))
+    // `booted` is in the list because the shell element only exists once the
+    // boot screen is gone: the first run has nothing to write to.
+  }, [railW, rightW, booted])
+
+  /** Remember the settled width, once per drag. */
+  const saveColumn = useCallback(
+    (column: BenchColumn, width: number): void => {
+      const bench = configRef.current?.pro?.bench
+      if (!bench) return
+      void patchConfig({
+        bench: column === 'rail' ? { ...bench, railW: width } : { ...bench, rightW: width }
+      })
+    },
+    [patchConfig]
+  )
+
+  /**
+   * The same write, coalesced.
+   *
+   * A drag ends once, so it writes once. Arrow keys do not: holding one down
+   * repeats at the OS rate, and every `setConfig` is a synchronous
+   * write-tmp-then-rename in the main process, so a write per keypress is a disk
+   * write per keypress for a width that is still moving. The last width in a
+   * burst is the only one worth keeping, so that is the only one written.
+   */
+  const columnTimer = useRef<number | undefined>(undefined)
+  const pendingColumn = useRef<{ column: BenchColumn; width: number } | null>(null)
+
+  const flushColumn = useCallback((): void => {
+    if (columnTimer.current !== undefined) {
+      window.clearTimeout(columnTimer.current)
+      columnTimer.current = undefined
+    }
+    const queued = pendingColumn.current
+    if (!queued) return
+    pendingColumn.current = null
+    saveColumn(queued.column, queued.width)
+  }, [saveColumn])
+
+  const saveColumnSoon = useCallback(
+    (column: BenchColumn, width: number): void => {
+      pendingColumn.current = { column, width }
+      if (columnTimer.current !== undefined) window.clearTimeout(columnTimer.current)
+      columnTimer.current = window.setTimeout(flushColumn, COLUMN_SAVE_DELAY)
+    },
+    [flushColumn]
+  )
+
+  // An arrow-key burst that ends by closing the window still has to land: the
+  // unmount is the last chance to write the width the user just stepped to.
+  useEffect(() => flushColumn, [flushColumn])
+
+  /**
+   * Grab a splitter.
+   *
+   * Pointer capture on the handle: the pointer keeps arriving at this element
+   * after it slides off a 7px seam, which is exactly what happens the moment the
+   * column starts to grow. Widths go through `draggedColumnWidth`, so the limits
+   * live in one place and a flick cannot squeeze the terminal out of the window.
+   */
+  const onSplitDown = useCallback(
+    (column: BenchColumn) =>
+      (event: ReactPointerEvent<HTMLElement>): void => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        // A queued arrow-key write lands first, so the drag starts from the
+        // width that is actually on disk rather than from a stale config value.
+        flushColumn()
+        splitRef.current = {
+          column,
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startWidth: column === 'rail' ? railW : rightW
+        }
+        setSplitting(column)
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId)
+        } catch {
+          /* capture is a nicety; the deltas still arrive while the button is down */
+        }
+      },
+    [flushColumn, railW, rightW]
+  )
+
+  const onSplitMove = useCallback((event: ReactPointerEvent<HTMLElement>): void => {
+    const drag = splitRef.current
+    if (!drag || event.pointerId !== drag.pointerId) return
+    // The rail is on the left, so dragging right grows it; the right panel is on
+    // the right, so the same motion shrinks it.
+    const sign: 1 | -1 = drag.column === 'rail' ? 1 : -1
+    const width = draggedColumnWidth(
+      drag.column,
+      drag.startWidth,
+      event.clientX - drag.startX,
+      sign
+    )
+    if (drag.column === 'rail') setRailW(width)
+    else setRightW(width)
+  }, [])
+
+  /** Let go: one durable write for the whole drag, and none if nothing moved. */
+  const onSplitUp = useCallback(
+    (event: ReactPointerEvent<HTMLElement>): void => {
+      const drag = splitRef.current
+      splitRef.current = null
+      setSplitting(null)
+      if (!drag) return
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      const width = clampColumnWidth(drag.column, drag.column === 'rail' ? railW : rightW)
+      if (width === drag.startWidth) return
+      saveColumn(drag.column, width)
+    },
+    [railW, rightW, saveColumn]
+  )
+
+  /**
+   * Double-click a splitter, or press Enter on it: back to the shipped width.
+   * The handle is a real control rather than an invisible strip, so there is a
+   * keyboard way to do what the mouse does, and a way to undo a drag you did not
+   * mean.
+   */
+  const onSplitReset = useCallback(
+    (column: BenchColumn) => (): void => {
+      const width = column === 'rail' ? RAIL_DEFAULT : RIGHT_DEFAULT
+      if (column === 'rail') setRailW(width)
+      else setRightW(width)
+      // Deliberate and finished, so write it now: the toast and the config have
+      // to agree the moment either of them appears.
+      pendingColumn.current = null
+      saveColumn(column, width)
+      // One durable write, one sentence. The width is already back where it
+      // shipped; the toast is what says so, because nothing on screen moved.
+      push(tRef.current('splitReset'), 'ok')
+    },
+    [push, saveColumn]
+  )
+
+  /**
+   * Arrow keys on a focused splitter: the pointerless way to do what a drag does.
+   *
+   * Every press moves the column at once - a step you have to wait for is a step
+   * nobody can repeat - while the durable write is coalesced by `saveColumnSoon`.
+   * The keys are ones the window-level handler would otherwise eat, so this stops
+   * the event before it reaches `handleKey`.
+   */
+  const onSplitStep = useCallback(
+    (column: BenchColumn) =>
+      (event: ReactKeyboardEvent<HTMLElement>): void => {
+        const key = event.key
+        if (key !== 'ArrowLeft' && key !== 'ArrowRight') return
+        event.preventDefault()
+        event.stopPropagation()
+        const sign: 1 | -1 = column === 'rail' ? 1 : -1
+        const delta = key === 'ArrowLeft' ? -SPLIT_STEP : SPLIT_STEP
+        const current = column === 'rail' ? railW : rightW
+        const width = draggedColumnWidth(column, current, delta, sign)
+        if (width === current) return
+        if (column === 'rail') setRailW(width)
+        else setRightW(width)
+        saveColumnSoon(column, width)
+      },
+    [railW, rightW, saveColumnSoon]
+  )
+
   const setSummon = useCallback(
     (value: ProConfig['summon']): void => void patchConfig({ summon: value }),
     [patchConfig]
@@ -491,8 +725,9 @@ export function Bench(): ReactElement {
       setNewTaskOpen(false)
       setTaskId(task.id)
       setCursorId(task.id)
-      setRailOpen(false)
-      setRightOpen(false)
+      // Same rule as `selectTask`: only a drawer yields to the new task.
+      if (isDrawerColumn('rail', window.innerWidth)) setRailOpen(false)
+      if (isDrawerColumn('right', window.innerWidth)) setRightOpen(false)
       bump()
     },
     [bump]
@@ -677,6 +912,7 @@ export function Bench(): ReactElement {
   return (
     <div
       className="bench"
+      ref={shellRef}
       data-rail={railOpen ? 'open' : 'closed'}
       data-right={rightOpen ? 'open' : 'closed'}
     >
@@ -822,6 +1058,32 @@ export function Bench(): ReactElement {
 
             {tab === 'queue' && <div className="panel-foot">{t('keyHints')}</div>}
           </aside>
+
+          {/* The two seams. Rendered as siblings of the columns and positioned
+              from the same variables, so a handle always sits exactly on the
+              border it resizes - including the moment the column is mid-drag. */}
+          <Splitter
+            column="rail"
+            label={t('splitRail')}
+            dragging={splitting === 'rail'}
+            width={railW}
+            onDown={onSplitDown('rail')}
+            onMove={onSplitMove}
+            onUp={onSplitUp}
+            onStep={onSplitStep('rail')}
+            onReset={onSplitReset('rail')}
+          />
+          <Splitter
+            column="right"
+            label={t('splitRight')}
+            dragging={splitting === 'right'}
+            width={rightW}
+            onDown={onSplitDown('right')}
+            onMove={onSplitMove}
+            onUp={onSplitUp}
+            onStep={onSplitStep('right')}
+            onReset={onSplitReset('right')}
+          />
         </>
       )}
 
@@ -938,6 +1200,77 @@ function Tab({
       {label}
       {count > 0 && <span className="tab-count">{count}</span>}
     </button>
+  )
+}
+
+/**
+ * The seam between a column and the panes: a resize handle, not a decoration.
+ *
+ * It is a `role="separator"` carrying the real value range, so the width is
+ * legible to a screen reader and reachable with arrow keys - a splitter you can
+ * only find with a mouse is a splitter nobody without one can move. The limits
+ * come from `benchLayout` rather than being re-spelled here, because the same
+ * numbers already decide where a drag may go and what `parseConfig` accepts.
+ *
+ * The handle owns no width of its own: CSS positions it from `--rail-w` /
+ * `--right-w`, so it sits on the border it resizes and cannot drift away from
+ * the column while that column is being dragged under the pointer.
+ */
+function Splitter({
+  column,
+  label,
+  dragging,
+  width,
+  onDown,
+  onMove,
+  onUp,
+  onStep,
+  onReset
+}: {
+  column: BenchColumn
+  label: string
+  dragging: boolean
+  width: number
+  onDown: (event: ReactPointerEvent<HTMLElement>) => void
+  onMove: (event: ReactPointerEvent<HTMLElement>) => void
+  onUp: (event: ReactPointerEvent<HTMLElement>) => void
+  onStep: (event: ReactKeyboardEvent<HTMLElement>) => void
+  onReset: () => void
+}): ReactElement {
+  const { min, max } = COLUMN_RANGE[column]
+  return (
+    <Tip label={label} side="top">
+      <div
+        className={`bench-split bench-split-${column}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={label}
+        aria-valuenow={clampColumnWidth(column, width)}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        tabIndex={0}
+        data-dragging={dragging ? '1' : undefined}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+        onDoubleClick={onReset}
+        onKeyDown={(event) => {
+          // Enter is the undo: a drag you did not mean has to be reversible
+          // without a mouse, and without reading the tooltip first. Space too,
+          // because a focused control that does nothing on Space reads as
+          // broken - and the window-level handler would otherwise use it to
+          // flip the needs-me filter while you are resizing a column.
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            event.stopPropagation()
+            onReset()
+            return
+          }
+          onStep(event)
+        }}
+      />
+    </Tip>
   )
 }
 

@@ -83,13 +83,23 @@ async function render(node: ReactNode): Promise<void> {
   })
 }
 
-function renderBar(view: BenchView, onPurgeDeclined = vi.fn()): Promise<void> {
+function renderBar(
+  view: BenchView,
+  opts: {
+    railOpen?: boolean
+    rightOpen?: boolean
+    onPurgeDeclined?: () => void
+  } = {}
+): Promise<void> {
+  const railOpen = opts.railOpen ?? true
+  const rightOpen = opts.rightOpen ?? true
+  const onPurgeDeclined = opts.onPurgeDeclined ?? vi.fn()
   return render(
     <TopBar
       view={view}
       pro={null}
-      railOpen={true}
-      rightOpen={true}
+      railOpen={railOpen}
+      rightOpen={rightOpen}
       t={t}
       onToggle={vi.fn()}
       onSummon={vi.fn()}
@@ -118,6 +128,12 @@ function chip(): HTMLElement {
 function bell(): HTMLElement {
   const el = container.querySelector<HTMLElement>('.right-toggle')
   if (!el) throw new Error('the queue bell is not rendered')
+  return el
+}
+
+function tree(): HTMLElement {
+  const el = container.querySelector<HTMLElement>('.rail-toggle')
+  if (!el) throw new Error('the tree toggle is not rendered')
   return el
 }
 
@@ -180,7 +196,26 @@ describe('the needs-me chip', () => {
     const view = bench([item()], 1)
     await renderBar(view)
     expect(chip().textContent).toContain(t('countNeedsMe'))
-    expect(bell().getAttribute('aria-label')).toBe(t('queueTitle'))
+  })
+
+  /**
+   * The bell is a hide/show control at every width now, so it names the verb
+   * rather than the panel: a label that reads "Queue" while the queue is already
+   * on screen says nothing about what the click will do. `aria-expanded` is what
+   * carries the state, and the two labels have to differ or the control cannot
+   * be told apart from its own tooltip.
+   */
+  it('names what the click will do, and which way the panel is going', async () => {
+    expect(t('collapseRight')).not.toBe(t('expandRight'))
+    expect(t('collapseRail')).not.toBe(t('expandRail'))
+    const view = bench([item()], 1)
+    await renderBar(view)
+    expect(bell().getAttribute('aria-label')).toBe(t('collapseRight'))
+    expect(bell().getAttribute('aria-expanded')).toBe('true')
+    await renderBar(view, { railOpen: false, rightOpen: false })
+    expect(bell().getAttribute('aria-label')).toBe(t('expandRight'))
+    expect(bell().getAttribute('aria-expanded')).toBe('false')
+    expect(tree().getAttribute('aria-label')).toBe(t('expandRail'))
   })
 })
 
@@ -225,7 +260,7 @@ describe('the declined chip', () => {
 
   it('closes them all from the one button on it, which is the only way to reach them', async () => {
     const purge = vi.fn()
-    await renderBar(withDeclined(3), purge)
+    await renderBar(withDeclined(3), { onPurgeDeclined: purge })
     const button = declinedChip()?.querySelector<HTMLButtonElement>('button')
     expect(button?.getAttribute('aria-label')).toBe(t('declinedClose'))
     await act(async () => {
