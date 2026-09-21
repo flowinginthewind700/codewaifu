@@ -9,15 +9,16 @@
  *    silently base-grey - you only notice when you diff against an editor.
  * 2. A rule added under one container's scope and not the others. The widget and
  *    the bench are two bundles with two stylesheets, and highlight.css is
- *    imported by both; each window also holds two kinds of code - the fenced
- *    blocks an agent writes and the output a tool printed. A selector that only
- *    says `.msg-bubble .code` means the same TypeScript is a different colour in
- *    three of the four places it can appear. Tool output is the one a human
- *    actually reads: 11,513 rows against zero fenced blocks over 40 real Codex
+ *    imported by both; each window also holds three kinds of code - the fenced
+ *    blocks an agent writes, the output a tool printed, and the command line a
+ *    tool row shows while its output stays folded. A selector that only says
+ *    `.msg-bubble .code` means the same TypeScript is a different colour in five
+ *    of the six places it can appear. Tool rows are the ones a human actually
+ *    reads: 11,513 of them against zero fenced blocks over 40 real Codex
  *    rollouts, which is how that mistake stayed invisible for a release.
  *
  * So: collect every class the shipped grammars actually produce from a corpus of
- * the fences agents write, then require the CSS to style each one under all four
+ * the fences agents write, then require the CSS to style each one under all six
  * scopes. Neutral scopes (operator, punctuation, a declaration wrapper) inherit
  * the block's own colour on purpose, so they are listed as expected-unstyled
  * rather than being allowed to slip in unreviewed.
@@ -142,13 +143,17 @@ const NEUTRAL = new Set([
 ])
 
 /**
- * Every container the theme has to cover: two windows times two kinds of code.
+ * Every container the theme has to cover: two windows times three kinds of
+ * code - the fences an agent writes, the output a tool printed, and the
+ * command line every tool row shows even while its output stays folded.
  */
 const CONTAINERS = {
   widgetFence: '.msg-bubble .code',
   widgetOutput: '.tool-output',
   benchFence: '.convo-code',
-  benchOutput: '.convo-output'
+  benchOutput: '.convo-output',
+  widgetCommand: '.tool-cmd',
+  benchCommand: '.convo-cmd'
 } as const
 
 type ContainerName = keyof typeof CONTAINERS
@@ -211,7 +216,7 @@ describe('highlight.css', () => {
     for (const cls of classesOf(codeSpans(lang, source))) emitted.add(cls)
   }
 
-  it('styles every scope the shipped grammars emit, in all four containers', () => {
+  it('styles every scope the shipped grammars emit, in all six containers', () => {
     const unstyled: string[] = []
     const oneSided: string[] = []
     for (const cls of [...emitted].sort()) {

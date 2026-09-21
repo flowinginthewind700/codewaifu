@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest'
 import {
   clearCodeCache,
   codeSpans,
+  commandSpans,
   MAX_HIGHLIGHT_CHARS,
   outputSpans
 } from '../src/renderer/src/highlight'
@@ -245,5 +246,39 @@ describe('outputSpans', () => {
     // body is not re-tokenized on every poll tick of the widget.
     expect(second.length).toBe(first.length)
     expect(second[1]).toBe(first[1])
+  })
+})
+
+describe('commandSpans', () => {
+  it('colours a shell command line and keeps every character', () => {
+    clearCodeCache()
+    const line = 'cd /srv/app && grep -rn "TODO" src | head -20'
+    const spans = commandSpans(line)
+    expect(textOf(spans)).toBe(line)
+    // A string node would mean "no colour at all"; a real command line has to
+    // tokenize into at least one scoped span.
+    expect(classesOf(spans).length).toBeGreaterThan(0)
+  })
+
+  it('survives the 120-character clip with a trailing ellipsis', () => {
+    clearCodeCache()
+    const line = `sed -n '1,40p' ${'very/long/'.repeat(12)}src/app.ts…`
+    const spans = commandSpans(line)
+    expect(textOf(spans)).toBe(line)
+  })
+
+  it('returns nothing for an empty or missing command', () => {
+    clearCodeCache()
+    expect(commandSpans('')).toEqual([])
+    expect(commandSpans(null)).toEqual([])
+    expect(commandSpans(undefined)).toEqual([])
+  })
+
+  it('returns the identical node list for the same line twice (cache hit)', () => {
+    clearCodeCache()
+    const line = 'git log --oneline -5'
+    const first = commandSpans(line)
+    const second = commandSpans(line)
+    expect(second).toBe(first)
   })
 })

@@ -158,6 +158,24 @@ export function clearCodeCache(): void {
 }
 
 /**
+ * The coloured children for one tool row's command line - the one sentence of
+ * code a history shows for every tool row even while its output stays folded,
+ * which is what makes it the text a human scanning a transcript actually
+ * reads. `bash` is the grammar: these lines are shell, and `codeSpans()` keeps
+ * the whole line as one plain string whenever tokenizing fails or the line is
+ * over the size gate, so a mangled summary can never render half-coloured.
+ *
+ * The summary is clipped at 120 characters with a trailing ellipsis
+ * (`summarizeArgs`), which bash reads as an unfinished word - the same thing a
+ * truncated file would look like, and harmless in a one-line chip.
+ */
+export function commandSpans(command: string | null | undefined): ReactNode[] {
+  const source = String(command ?? '')
+  if (!source) return []
+  return codeSpans('bash', source)
+}
+
+/**
  * The children for one tool row's *output*, coloured where the output is
  * provably code and plain everywhere else.
  *

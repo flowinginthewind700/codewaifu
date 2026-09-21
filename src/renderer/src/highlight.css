@@ -8,13 +8,15 @@
    in both - a code block that changes hue when you move it from the stage to
    the bench reads as two different apps.
 
-   Four containers, two per window, because a transcript holds two kinds of
+   Six containers, three per window, because a transcript holds three kinds of
    code: the fenced blocks an agent writes (`.msg-bubble .code` in the widget,
-   `.convo-code` in the bench) and the output a tool printed (`.tool-output`,
-   `.convo-output`). Over 40 real Codex rollouts the second kind is 11,513 rows
-   against zero of the first, so a theme that covers only fences colours
-   nothing a human actually reads. Every group below names all four, and
-   tests/highlightTheme.test.tsx fails if one of them is left out.
+   `.convo-code` in the bench), the output a tool printed (`.tool-output`,
+   `.convo-output`), and the command line every tool row shows even while its
+   output stays folded (`.tool-cmd`, `.convo-cmd`). Over 40 real Codex rollouts
+   the fenced kind is zero rows against 11,513 tool rows, so a theme that
+   covers only fences colours nothing a human actually reads. Every group
+   below names all six, and tests/highlightTheme.test.tsx fails if one of them
+   is left out.
 
    The palette is RobotWorld's dark syntax set, mapped scope-for-scope onto the
    `.dark .token-*` colours the site already uses (globals.css): comment grey
@@ -26,7 +28,9 @@
 .msg-bubble .code,
 .tool-output,
 .convo-code,
-.convo-output {
+.convo-output,
+.tool-cmd,
+.convo-cmd {
   /* Foreground stays whatever the block already set; only scopes recolor. */
   color-scheme: dark;
 }
@@ -35,10 +39,14 @@
 .tool-output .hljs-comment,
 .convo-code .hljs-comment,
 .convo-output .hljs-comment,
+.tool-cmd .hljs-comment,
+.convo-cmd .hljs-comment,
 .msg-bubble .code .hljs-quote,
 .tool-output .hljs-quote,
 .convo-code .hljs-quote,
-.convo-output .hljs-quote {
+.convo-output .hljs-quote,
+.tool-cmd .hljs-quote,
+.convo-cmd .hljs-quote {
   color: #8b98a9;
   font-style: italic;
 }
@@ -47,10 +55,14 @@
 .tool-output .hljs-string,
 .convo-code .hljs-string,
 .convo-output .hljs-string,
+.tool-cmd .hljs-string,
+.convo-cmd .hljs-string,
 .msg-bubble .code .hljs-regexp,
 .tool-output .hljs-regexp,
 .convo-code .hljs-regexp,
-.convo-output .hljs-regexp {
+.convo-output .hljs-regexp,
+.tool-cmd .hljs-regexp,
+.convo-cmd .hljs-regexp {
   color: #fbbf24;
 }
 
@@ -58,14 +70,20 @@
 .tool-output .hljs-keyword,
 .convo-code .hljs-keyword,
 .convo-output .hljs-keyword,
+.tool-cmd .hljs-keyword,
+.convo-cmd .hljs-keyword,
 .msg-bubble .code .hljs-literal,
 .tool-output .hljs-literal,
 .convo-code .hljs-literal,
 .convo-output .hljs-literal,
+.tool-cmd .hljs-literal,
+.convo-cmd .hljs-literal,
 .msg-bubble .code .hljs-selector-tag,
 .tool-output .hljs-selector-tag,
 .convo-code .hljs-selector-tag,
-.convo-output .hljs-selector-tag {
+.convo-output .hljs-selector-tag,
+.tool-cmd .hljs-selector-tag,
+.convo-cmd .hljs-selector-tag {
   color: #c4b5fd;
 }
 
@@ -73,18 +91,26 @@
 .tool-output .hljs-built_in,
 .convo-code .hljs-built_in,
 .convo-output .hljs-built_in,
+.tool-cmd .hljs-built_in,
+.convo-cmd .hljs-built_in,
 .msg-bubble .code .hljs-number,
 .tool-output .hljs-number,
 .convo-code .hljs-number,
 .convo-output .hljs-number,
+.tool-cmd .hljs-number,
+.convo-cmd .hljs-number,
 .msg-bubble .code .hljs-type,
 .tool-output .hljs-type,
 .convo-code .hljs-type,
 .convo-output .hljs-type,
+.tool-cmd .hljs-type,
+.convo-cmd .hljs-type,
 .msg-bubble .code .hljs-symbol,
 .tool-output .hljs-symbol,
 .convo-code .hljs-symbol,
-.convo-output .hljs-symbol {
+.convo-output .hljs-symbol,
+.tool-cmd .hljs-symbol,
+.convo-cmd .hljs-symbol {
   color: #67e8f9;
 }
 
@@ -92,30 +118,44 @@
 .tool-output .hljs-title,
 .convo-code .hljs-title,
 .convo-output .hljs-title,
+.tool-cmd .hljs-title,
+.convo-cmd .hljs-title,
 .msg-bubble .code .hljs-title.function_,
 .tool-output .hljs-title.function_,
 .convo-code .hljs-title.function_,
 .convo-output .hljs-title.function_,
+.tool-cmd .hljs-title.function_,
+.convo-cmd .hljs-title.function_,
 .msg-bubble .code .hljs-title.class_,
 .tool-output .hljs-title.class_,
 .convo-code .hljs-title.class_,
 .convo-output .hljs-title.class_,
+.tool-cmd .hljs-title.class_,
+.convo-cmd .hljs-title.class_,
 .msg-bubble .code .hljs-attr,
 .tool-output .hljs-attr,
 .convo-code .hljs-attr,
 .convo-output .hljs-attr,
+.tool-cmd .hljs-attr,
+.convo-cmd .hljs-attr,
 .msg-bubble .code .hljs-attribute,
 .tool-output .hljs-attribute,
 .convo-code .hljs-attribute,
 .convo-output .hljs-attribute,
+.tool-cmd .hljs-attribute,
+.convo-cmd .hljs-attribute,
 .msg-bubble .code .hljs-selector-attr,
 .tool-output .hljs-selector-attr,
 .convo-code .hljs-selector-attr,
 .convo-output .hljs-selector-attr,
+.tool-cmd .hljs-selector-attr,
+.convo-cmd .hljs-selector-attr,
 .msg-bubble .code .hljs-selector-pseudo,
 .tool-output .hljs-selector-pseudo,
 .convo-code .hljs-selector-pseudo,
-.convo-output .hljs-selector-pseudo {
+.convo-output .hljs-selector-pseudo,
+.tool-cmd .hljs-selector-pseudo,
+.convo-cmd .hljs-selector-pseudo {
   color: #5eead4;
 }
 
@@ -125,10 +165,14 @@
 .tool-output .hljs-selector-class,
 .convo-code .hljs-selector-class,
 .convo-output .hljs-selector-class,
+.tool-cmd .hljs-selector-class,
+.convo-cmd .hljs-selector-class,
 .msg-bubble .code .hljs-selector-id,
 .tool-output .hljs-selector-id,
 .convo-code .hljs-selector-id,
-.convo-output .hljs-selector-id {
+.convo-output .hljs-selector-id,
+.tool-cmd .hljs-selector-id,
+.convo-cmd .hljs-selector-id {
   color: #5eead4;
 }
 
@@ -136,10 +180,14 @@
 .tool-output .hljs-meta,
 .convo-code .hljs-meta,
 .convo-output .hljs-meta,
+.tool-cmd .hljs-meta,
+.convo-cmd .hljs-meta,
 .msg-bubble .code .hljs-decorator,
 .tool-output .hljs-decorator,
 .convo-code .hljs-decorator,
-.convo-output .hljs-decorator {
+.convo-output .hljs-decorator,
+.tool-cmd .hljs-decorator,
+.convo-cmd .hljs-decorator {
   color: #f0abfc;
 }
 
@@ -147,14 +195,20 @@
 .tool-output .hljs-variable,
 .convo-code .hljs-variable,
 .convo-output .hljs-variable,
+.tool-cmd .hljs-variable,
+.convo-cmd .hljs-variable,
 .msg-bubble .code .hljs-template-variable,
 .tool-output .hljs-template-variable,
 .convo-code .hljs-template-variable,
 .convo-output .hljs-template-variable,
+.tool-cmd .hljs-template-variable,
+.convo-cmd .hljs-template-variable,
 .msg-bubble .code .hljs-params,
 .tool-output .hljs-params,
 .convo-code .hljs-params,
-.convo-output .hljs-params {
+.convo-output .hljs-params,
+.tool-cmd .hljs-params,
+.convo-cmd .hljs-params {
   color: #fcd34d;
 }
 
@@ -163,21 +217,29 @@
 .tool-output .hljs-tag,
 .convo-code .hljs-tag,
 .convo-output .hljs-tag,
+.tool-cmd .hljs-tag,
+.convo-cmd .hljs-tag,
 .msg-bubble .code .hljs-name,
 .tool-output .hljs-name,
 .convo-code .hljs-name,
 .convo-output .hljs-name,
+.tool-cmd .hljs-name,
+.convo-cmd .hljs-name,
 .msg-bubble .code .hljs-section,
 .tool-output .hljs-section,
 .convo-code .hljs-section,
-.convo-output .hljs-section {
+.convo-output .hljs-section,
+.tool-cmd .hljs-section,
+.convo-cmd .hljs-section {
   color: #6aa9ff;
 }
 
 .msg-bubble .code .hljs-link,
 .tool-output .hljs-link,
 .convo-code .hljs-link,
-.convo-output .hljs-link {
+.convo-output .hljs-link,
+.tool-cmd .hljs-link,
+.convo-cmd .hljs-link {
   color: #9cc7ff;
   text-decoration: underline;
 }
@@ -187,7 +249,9 @@
 .msg-bubble .code .hljs-addition,
 .tool-output .hljs-addition,
 .convo-code .hljs-addition,
-.convo-output .hljs-addition {
+.convo-output .hljs-addition,
+.tool-cmd .hljs-addition,
+.convo-cmd .hljs-addition {
   color: #3ddc97;
   background: rgba(61, 220, 151, 0.1);
 }
@@ -195,7 +259,9 @@
 .msg-bubble .code .hljs-deletion,
 .tool-output .hljs-deletion,
 .convo-code .hljs-deletion,
-.convo-output .hljs-deletion {
+.convo-output .hljs-deletion,
+.tool-cmd .hljs-deletion,
+.convo-cmd .hljs-deletion {
   color: #f87171;
   background: rgba(248, 113, 113, 0.1);
 }
@@ -207,16 +273,22 @@
 .tool-output .hljs-keyword,
 .convo-code .hljs-keyword,
 .convo-output .hljs-keyword,
+.tool-cmd .hljs-keyword,
+.convo-cmd .hljs-keyword,
 .msg-bubble .code .hljs-strong,
 .tool-output .hljs-strong,
 .convo-code .hljs-strong,
-.convo-output .hljs-strong {
+.convo-output .hljs-strong,
+.tool-cmd .hljs-strong,
+.convo-cmd .hljs-strong {
   font-weight: 700;
 }
 
 .msg-bubble .code .hljs-emphasis,
 .tool-output .hljs-emphasis,
 .convo-code .hljs-emphasis,
-.convo-output .hljs-emphasis {
+.convo-output .hljs-emphasis,
+.tool-cmd .hljs-emphasis,
+.convo-cmd .hljs-emphasis {
   font-style: italic;
 }

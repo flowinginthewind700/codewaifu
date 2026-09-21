@@ -24,7 +24,7 @@ import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT, splitBlocks, type ChatMessage
 import { isImeKey } from '@shared/ime'
 import type { SteerResult, ThreadInfo } from '@shared/protocol'
 import { api, platform } from './api'
-import { codeSpans, outputSpans } from './highlight'
+import { codeSpans, commandSpans, outputSpans } from './highlight'
 import { useAttachField } from './useAttach'
 import { useImeEnter } from './useIme'
 import type { StringKey, Translate } from './i18n'
@@ -443,7 +443,15 @@ function MessageRow({ message, previous, open, reasoningOpen, unfolded, t, onTog
             <ChevronRight size={12} className={open ? 'rot' : ''} />
             {message.tool === 'output' ? <Wrench size={11} /> : <Terminal size={11} />}
             <span className="tool-name">{message.tool}</span>
-            {message.text ? <span className="tool-args">{message.text}</span> : null}
+            {message.text ? (
+              <span className="tool-args">
+                {message.command ? (
+                  <span className="tool-cmd">{commandSpans(message.command)}</span>
+                ) : (
+                  message.text
+                )}
+              </span>
+            ) : null}
             {message.output ? <span className="tool-badge">{message.output.length > 999 ? `${Math.round(message.output.length / 1000)}k` : message.output.length}</span> : null}
           </button>
           {open && message.output ? (

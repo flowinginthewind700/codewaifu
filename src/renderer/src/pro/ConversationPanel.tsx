@@ -29,7 +29,7 @@ import {
 } from '@shared/chat'
 import type { SteerResult } from '@shared/protocol'
 import type { TaskView } from '@shared/pro'
-import { codeSpans, outputSpans } from '../highlight'
+import { codeSpans, commandSpans, outputSpans } from '../highlight'
 import { useImeEnter } from '../useIme'
 import { useAttachField } from '../useAttach'
 import { platform, proApi } from './api'
@@ -108,6 +108,11 @@ function Message({ message, t }: { message: ChatMessage; t: Translate }): ReactE
     <article className="convo-msg" data-role={message.role} data-side={message.sidechain || undefined}>
       <header className="convo-msg-head">
         <span className="convo-role">{roleLabel(message, t)}</span>
+        {message.role === 'tool' && message.command ? (
+          <code className="convo-cmd mono" title={message.command}>
+            {commandSpans(message.command)}
+          </code>
+        ) : null}
         {message.at ? <span className="convo-when">{clockAt(message.at)}</span> : null}
         {message.truncated ? <span className="pill quiet">{t('convoTruncated')}</span> : null}
       </header>

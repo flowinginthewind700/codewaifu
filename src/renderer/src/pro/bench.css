@@ -3199,6 +3199,19 @@ button.plan-title:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* The command line of a tool row, coloured as shell (highlight.css holds the
+   token colours; this is only the chip's own shape). One line, clipped, and
+   the full command stays in the title attribute. */
+.convo-cmd {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-term);
+  color: var(--text);
+}
+
 .convo-text {
   margin: 0 0 4px;
   font-size: var(--fs-body);
