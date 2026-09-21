@@ -1,6 +1,6 @@
 {
   "name": "codewaifu",
-  "version": "0.4.28",
+  "version": "0.4.29",
   "desktopName": "codewaifu",
   "description": "A Live2D-style desktop companion that watches your coding agents - Codex, Claude Code, Cursor, Gemini CLI, Antigravity and Kimi CLI - speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
   "keywords": [
