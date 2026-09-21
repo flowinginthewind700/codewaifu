@@ -1,6 +1,6 @@
 {
   "name": "codewaifu",
-  "version": "0.4.19",
+  "version": "0.4.20",
   "desktopName": "codewaifu",
   "description": "A Live2D-style desktop companion that watches Codex and Claude Code, speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
   "keywords": [
