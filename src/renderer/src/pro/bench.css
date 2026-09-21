@@ -1121,7 +1121,14 @@ textarea {
   display: none;
 }
 
-.center-body[data-view='term'] > .panes,
+/* Each view keeps its OWN display type when shown: `.panes` is a grid (its
+   column tracks are what give a terminal the full center width), `.convo` is
+   a column flex. Overriding both with one `display: flex` rule - as 0.4.25
+   did - turned the pane grid into a content-width strip on every platform. */
+.center-body[data-view='term'] > .panes {
+  display: grid;
+}
+
 .center-body[data-view='convo'] > .convo {
   display: flex;
 }
