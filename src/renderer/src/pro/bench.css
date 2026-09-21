@@ -1096,6 +1096,36 @@ textarea {
   background: var(--bench-bg);
 }
 
+/* The terminal/transcript switch and the body that holds both. Both children
+   stay mounted; `display` picks the one the human is reading, because an xterm
+   that remounts loses its scrollback position and a transcript that remounts
+   re-reads its file. */
+.center-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  background: var(--bench-panel);
+}
+
+.center-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.center-body > .panes,
+.center-body > .convo {
+  display: none;
+}
+
+.center-body[data-view='term'] > .panes,
+.center-body[data-view='convo'] > .convo {
+  display: flex;
+}
+
 .task-card {
   flex: 0 0 auto;
   padding: 9px 12px 10px;

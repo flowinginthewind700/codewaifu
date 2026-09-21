@@ -416,6 +416,14 @@ const STRINGS = {
   phaseIdle: { zh: '未接管', en: 'Idle' },
   phaseStarting: { zh: '正在接管…', en: 'Attaching…' },
   phaseLive: { zh: '实时', en: 'Live' },
+  /**
+   * The center of the bench can show either the task's terminal or its
+   * transcript. The terminal is what the agent sees (its own TUI, flat by
+   * design); the transcript is what the agent said, with syntax colours.
+   */
+  centerViewLabel: { zh: '中间视图', en: 'Center view' },
+  centerTerm: { zh: '终端', en: 'Terminal' },
+  centerConvo: { zh: '对话', en: 'Transcript' },
   phaseRespawning: { zh: '重连中…', en: 'Reconnecting…' },
   phaseClosed: { zh: '已关闭', en: 'Closed' },
   phaseError: { zh: '桥接错误', en: 'Bridge error' },

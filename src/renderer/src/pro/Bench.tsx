@@ -293,6 +293,19 @@ export function Bench(): ReactElement {
         : null,
     [selectedTask]
   )
+  /**
+   * A task can have BOTH a terminal and a transcript: herdr owns the pane while
+   * the agent keeps writing its rollout file. The terminal shows what the agent
+   * sees (its own TUI, one flat colour by design); the transcript shows what the
+   * agent said, with the colours the chat view gives it. Which one fills the
+   * center is the human's call, remembered per task for the session - a bench
+   * that resets the choice on every click makes reading a history a fight.
+   * Tasks with no pane (imported, or adopted after the terminal died) skip the
+   * switch: there is nothing to switch to.
+   */
+  const switchable = Boolean(selectedTask?.panes.length) && Boolean(selectedTask?.agentSessionId)
+  const [centerView, setCenterView] = useState<Record<string, 'term' | 'convo'>>({})
+  const centerMode = selectedTask ? (centerView[selectedTask.id] ?? 'term') : 'term'
   const plan = useMemo(
     () => view?.recovery.find((entry) => entry.taskId === taskId) ?? null,
     [view, taskId]
@@ -1005,22 +1018,57 @@ export function Bench(): ReactElement {
                 onRemove={() => askRemove(selectedTask.id)}
               />
             )}
-            {conversationTask ? (
-              // A task with a session but no pane: imported from the companion,
-              // or adopted from a herdr workspace whose terminal is gone. The
-              // pane grid's honest answer here is "no panes", which tells the
-              // human nothing about work that is still running in their own
-              // terminal, so the transcript takes the center instead.
-              <ConversationPanel task={conversationTask} t={t} onNotify={push} />
-            ) : (
-              <PaneGrid
-                task={selectedTask}
-                selectedPaneId={paneId}
-                t={t}
-                onSelectPane={setPaneId}
-                onNotify={push}
-              />
-            )}
+            {switchable ? (
+              <div className="center-tabs" role="tablist" aria-label={t('centerViewLabel')}>
+                <button
+                  type="button"
+                  className="tab"
+                  role="tab"
+                  aria-selected={centerMode === 'term'}
+                  data-active={centerMode === 'term'}
+                  onClick={() => setCenterView((views) => ({ ...views, [selectedTask!.id]: 'term' }))}
+                >
+                  {t('centerTerm')}
+                </button>
+                <button
+                  type="button"
+                  className="tab"
+                  role="tab"
+                  aria-selected={centerMode === 'convo'}
+                  data-active={centerMode === 'convo'}
+                  onClick={() => setCenterView((views) => ({ ...views, [selectedTask!.id]: 'convo' }))}
+                >
+                  {t('centerConvo')}
+                </button>
+              </div>
+            ) : null}
+            {/* Hidden, not unmounted: an xterm pane that remounts replays its
+                scrollback from scratch and loses the cursor position the human
+                had; a transcript that remounts re-reads the file. CSS display
+                keeps both alive while the other one fills the center. */}
+            <div className="center-body" data-view={conversationTask ? 'convo' : centerMode}>
+              {conversationTask ? (
+                // A task with a session but no pane: imported from the companion,
+                // or adopted from a herdr workspace whose terminal is gone. The
+                // pane grid's honest answer here is "no panes", which tells the
+                // human nothing about work that is still running in their own
+                // terminal, so the transcript takes the center instead.
+                <ConversationPanel task={conversationTask} t={t} onNotify={push} />
+              ) : (
+                <>
+                  <PaneGrid
+                    task={selectedTask}
+                    selectedPaneId={paneId}
+                    t={t}
+                    onSelectPane={setPaneId}
+                    onNotify={push}
+                  />
+                  {switchable ? (
+                    <ConversationPanel task={selectedTask!} t={t} onNotify={push} />
+                  ) : null}
+                </>
+              )}
+            </div>
           </main>
 
           <aside className="bench-right">
