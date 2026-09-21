@@ -359,6 +359,7 @@ function fakeCompanion(announced: string[] = []): CompanionLike {
     counts: emptyCounts(),
     benchFocused: false,
     widgetVisible: false,
+    benchOpen: false,
     announcing: '',
     at: START
   }
@@ -404,6 +405,8 @@ interface FakeHostOpts {
   steer?: SteerResult | null
   /** Window verbs the service asked for, in order. */
   calls?: string[]
+  /** Whether the fake machine has the Bench window on screen. */
+  benchOpen?: boolean
   /** Every main -> renderer push, as `{channel, payload}`; absent drops them. */
   emits?: Array<{ channel: string; payload: unknown }>
 }
@@ -429,10 +432,14 @@ function fakeHost(logs: string[], opts: FakeHostOpts = {}): ProHost {
     setWidget: () => {},
     widgetVisible: () => false,
     benchFocused: () => false,
+    benchOpen: () => opts.benchOpen ?? false,
     setBadge: () => {},
     bubbleMs: () => 0,
     openBench: () => {
       opts.calls?.push('openBench')
+    },
+    closeBench: () => {
+      opts.calls?.push('closeBench')
     },
     openStage: () => {
       opts.calls?.push('openStage')
@@ -720,6 +727,8 @@ interface BootOpts {
   gitRoots?: Record<string, string>
   /** Build the real companion bridge instead of the tape. */
   realCompanion?: boolean
+  /** Whether this machine's Bench window starts out on screen. */
+  benchOpen?: boolean
   /** The ssh roster the connect palette reads. Absent builds the real one. */
   ssh?: SshService
   /**
@@ -772,6 +781,7 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
       steers,
       calls,
       emits,
+      benchOpen: opts.benchOpen,
       pro: opts.pro
     }),
     timers: clock.timers,
@@ -1522,6 +1532,31 @@ describe('ProService mode switch', () => {
     // being put away here.
     expect(bench.calls).toEqual(['openStage'])
     expect(bench.service.view()?.tasks).toHaveLength(1)
+  })
+})
+
+/**
+ * The stage's bench button is one switch with two directions. Which way it goes
+ * is a fact about the window, and the only layer holding that fact is main - so
+ * a renderer one push behind still lands on the right verb instead of always
+ * opening.
+ */
+describe('ProService bench switch', () => {
+  it('opens the bench when the window is not on screen', async () => {
+    const bench = await boot({ realCompanion: true })
+
+    const result = await bench.service.command({ type: 'toggleBench' })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('toggled')
+    expect(bench.calls).toEqual(['openBench'])
+  })
+
+  it('puts the bench away when the window is showing', async () => {
+    const bench = await boot({ realCompanion: true, benchOpen: true })
+
+    const result = await bench.service.command({ type: 'toggleBench' })
+    expect(result.ok).toBe(true)
+    expect(bench.calls).toEqual(['closeBench'])
   })
 })
 

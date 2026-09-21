@@ -43,6 +43,12 @@ describe('parseBenchCommand', () => {
     expect(command({ type: 'openBench' })).toEqual({ type: 'openBench' })
   })
 
+  it('accepts the stage switch, spelled out and short', () => {
+    expect(command({ type: 'toggleBench' })).toEqual({ type: 'toggleBench' })
+    expect(command({ type: 'toggle' })).toEqual({ type: 'toggleBench' })
+    expect(command({ op: 'ToggleBench' })).toEqual({ type: 'toggleBench' })
+  })
+
   it('accepts the focusTask the widget sends, with and without a pane', () => {
     expect(command({ type: 'focusTask', taskId: 'task-1' })).toEqual({
       type: 'focusTask',

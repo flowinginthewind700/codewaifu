@@ -22,6 +22,11 @@ interface StageToolsProps {
    */
   proAvailable: boolean
   onBench: () => void
+  /**
+   * Whether the Bench window is on screen. The door is a switch: pressed while
+   * the bench is up (one more click puts it away), flat while it is not.
+   */
+  benchOpen: boolean
   onReport: () => void
   /** `null` asks for a random face. */
   onExpression: (name: string | null) => void
@@ -51,6 +56,7 @@ export function StageTools({
   motions,
   proAvailable,
   onBench,
+  benchOpen,
   onReport,
   onExpression,
   onMotion,
@@ -99,11 +105,13 @@ export function StageTools({
           that leaves the stage. The hairline says so without a label. */}
       {proAvailable ? (
         <>
-          <Tip label={t('openBench')} side="top">
+          <Tip label={benchOpen ? t('closeBench') : t('openBench')} side="top">
             <button
               className="icon-btn"
               type="button"
-              aria-label={t('openBench')}
+              aria-label={benchOpen ? t('closeBench') : t('openBench')}
+              aria-pressed={benchOpen}
+              data-on={benchOpen ? '1' : undefined}
               onClick={onBench}
             >
               <PanelsTopLeft size={14} strokeWidth={2.2} />

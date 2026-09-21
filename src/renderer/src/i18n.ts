@@ -240,7 +240,8 @@ const STRINGS = {
    * The other mode. The wording matters: this is a door into the workbench of
    * the same app, not a launcher for a second product.
    */
-  openBench: { zh: '切到工作台', en: 'Switch to the bench' },
+  openBench: { zh: '展开工作台', en: 'Open the bench' },
+  closeBench: { zh: '收起工作台', en: 'Close the bench' },
   expression: { zh: '表情', en: 'Expression' },
   expressionRandom: { zh: '随机', en: 'Random' },
   motion: { zh: '动作', en: 'Motion' },

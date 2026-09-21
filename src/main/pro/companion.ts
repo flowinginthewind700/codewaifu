@@ -68,6 +68,13 @@ export interface CompanionApi {
   snoozeAll(minutes: number): number
   /** Show and focus the Bench window without selecting anything. */
   openBench(): void
+  /**
+   * One verb for both directions of the stage's door: open when the Bench is
+   * hidden, put it away when it is showing. The state lives in main (the only
+   * place that knows whether the window is on screen), so the bridge asks
+   * rather than remembers.
+   */
+  toggleBench(): void
 }
 
 export interface CompanionTimer {
@@ -113,6 +120,8 @@ export interface CompanionDeps {
   openStage: () => void
   widgetVisible: () => boolean
   benchFocused: () => boolean
+  /** Whether the Bench window is on screen; the stage's door reads as a switch. */
+  benchOpen: () => boolean
   setBadge: (count: number) => void
   push: (state: ProCompanionPush) => void
   /** How long a bubble stays up, from the app config. */
@@ -162,7 +171,10 @@ export class CompanionBridge {
 
   /** The last state we pushed; null before the first sync. */
   state(): ProCompanionPush | null {
-    return this.last
+    if (!this.last) return null
+    // `benchOpen` is window state, not fleet state: a push that happened while
+    // the window was hidden must not keep saying so after it opened.
+    return { ...this.last, benchOpen: this.deps.benchOpen() }
   }
 
   /** The badge number as the tray sees it right now. */
@@ -283,6 +295,7 @@ export class CompanionBridge {
       notices,
       benchFocused: this.deps.benchFocused(),
       widgetVisible: this.deps.widgetVisible(),
+      benchOpen: this.deps.benchOpen(),
       announcing: this.announcing,
       speaking: this.deps.speaking(),
       now: this.timers.now()
@@ -357,6 +370,9 @@ export class CompanionBridge {
       case 'openBench':
         this.api.openBench()
         return okResult(null, '', 'open-bench')
+      case 'toggleBench':
+        this.api.toggleBench()
+        return okResult(null, '', 'toggled')
       case 'focus':
         this.api.focusBench(resolved.taskId, resolved.paneId, 'widget')
         return okResult(null, '', 'focused')

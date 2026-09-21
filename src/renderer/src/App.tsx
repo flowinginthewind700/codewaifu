@@ -112,6 +112,7 @@ function sameBench(previous: ProCompanionPush | null, next: ProCompanionPush): b
     previous.announcing === next.announcing &&
     previous.benchFocused === next.benchFocused &&
     previous.widgetVisible === next.widgetVisible &&
+    previous.benchOpen === next.benchOpen &&
     a.working === b.working &&
     a.blocked === b.blocked &&
     a.done === b.done &&
@@ -533,9 +534,13 @@ export function App(): ReactElement {
     [notice, t]
   )
 
-  /** The door from the stage into the bench: the same command the bubble sends. */
+  /**
+   * The door from the stage into the bench, and back: one switch, not two
+   * doors. The bench's own visibility decides the direction (main knows it),
+   * so a stale renderer can never open a window the human just closed.
+   */
   const onBench = useCallback((): void => {
-    void api.proCommand({ type: 'openBench' }).then(reportPro)
+    void api.proCommand({ type: 'toggleBench' }).then(reportPro)
   }, [reportPro])
 
   const onBubbleOpen = useCallback(
@@ -831,6 +836,7 @@ export function App(): ReactElement {
               motions={avatar?.character.motions ?? []}
               proAvailable={runtime.pro}
               onBench={onBench}
+              benchOpen={Boolean(bench?.benchOpen)}
               onReport={() => void onReport()}
               onExpression={onExpression}
               onMotion={onMotion}

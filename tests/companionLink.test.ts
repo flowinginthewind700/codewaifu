@@ -15,7 +15,12 @@ import { describe, expect, it } from 'vitest'
 import { emptyCounts } from '../src/shared/pro'
 import type { ProCompanionPush } from '../src/shared/proIpc'
 import type { BubbleMessage, BubbleRoute } from '../src/shared/ui'
-import { routeCanAnswer, routeFor, shouldClearBubble } from '../src/shared/companionLink'
+import {
+  resolveCommand,
+  routeCanAnswer,
+  routeFor,
+  shouldClearBubble
+} from '../src/shared/companionLink'
 import { attentionItem } from './helpers/pro'
 
 const AT = 1_700_000_000_000
@@ -27,6 +32,7 @@ function push(patch: Partial<ProCompanionPush> = {}): ProCompanionPush {
     counts: emptyCounts(),
     benchFocused: false,
     widgetVisible: true,
+    benchOpen: false,
     announcing: '',
     at: AT,
     ...patch
@@ -114,5 +120,17 @@ describe('shouldClearBubble', () => {
   it('has nothing to say when either side is missing', () => {
     expect(shouldClearBubble(null, bubble())).toBe(false)
     expect(shouldClearBubble(drained, null)).toBe(false)
+  })
+})
+
+/**
+ * The stage's door is a switch, and a switch has to work when nobody is
+ * answering: degrading it to `openBench` would leave the button stuck on "open"
+ * for exactly as long as the bench state feed is down, which is the moment a
+ * human is most likely to be pressing it.
+ */
+describe('resolveCommand', () => {
+  it('resolves the toggle without a view to resolve against', () => {
+    expect(resolveCommand({ type: 'toggleBench' }, null)).toEqual({ type: 'toggleBench' })
   })
 })

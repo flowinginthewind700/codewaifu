@@ -39,6 +39,7 @@ export type CompanionCommand =
 /** What the widget asks the Bench to do. */
 export type BenchCommand =
   | { type: 'openBench' }
+  | { type: 'toggleBench' }
   | { type: 'focusTask'; taskId: string; paneId?: string }
   | {
       type: 'act'
@@ -60,6 +61,7 @@ export type BenchCommand =
  */
 export type ResolvedCommand =
   | { type: 'openBench'; reason: string }
+  | { type: 'toggleBench' }
   | { type: 'focus'; taskId: string; paneId: string }
   | {
       type: 'act'
@@ -74,6 +76,10 @@ export type ResolvedCommand =
   | { type: 'drop'; reason: string }
 
 export function resolveCommand(command: BenchCommand, view: BenchView | null): ResolvedCommand {
+  // A toggle does not need to know the bench state: the main process holds the
+  // window and decides which way the switch flips. Degrading it to "openBench"
+  // would make the button sticky exactly when the state feed is down.
+  if (command.type === 'toggleBench') return { type: 'toggleBench' }
   if (!view) return { type: 'openBench', reason: 'bench state unavailable' }
   switch (command.type) {
     case 'openBench':
@@ -367,6 +373,8 @@ export interface CompanionViewInput {
   notices: number
   benchFocused: boolean
   widgetVisible: boolean
+  /** The Bench window is on screen; the stage's door reads as a switch. */
+  benchOpen: boolean
   /** The item being announced right now, or nothing. */
   announcing?: { itemId: string; kind: AttentionKind | string } | null
   /** True while a line of speech is playing: her mouth moves, so `talk` wins. */
@@ -386,6 +394,7 @@ export function companionView(input: CompanionViewInput): ProCompanionPush {
     counts: input.counts,
     benchFocused: Boolean(input.benchFocused),
     widgetVisible: Boolean(input.widgetVisible),
+    benchOpen: Boolean(input.benchOpen),
     announcing: announcing?.itemId ?? '',
     at: input.now
   }

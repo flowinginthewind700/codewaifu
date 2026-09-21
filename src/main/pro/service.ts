@@ -181,6 +181,10 @@ export interface ProHost {
   setBadge: (count: number) => void
   bubbleMs: () => number
   openBench: () => void
+  /** Whether the Bench window is on screen right now. */
+  benchOpen: () => boolean
+  /** Put the Bench window away; its terminal scrollback survives. */
+  closeBench: () => void
   /**
    * The other half of the mode switch: the bench goes away and the stage comes
    * forward, *with* focus, because this one is a human clicking "take me back"
@@ -753,6 +757,7 @@ export class ProService implements CompanionApi {
       setWidget: (visible) => this.host.setWidget(visible),
       widgetVisible: () => this.host.widgetVisible(),
       benchFocused: () => this.host.benchFocused(),
+      benchOpen: () => this.host.benchOpen(),
       setBadge: (count) => this.host.setBadge(count),
       bubbleMs: () => this.host.bubbleMs(),
       openStage: () => this.host.openStage(),
@@ -3629,6 +3634,18 @@ export class ProService implements CompanionApi {
 
   openBench(): void {
     this.host.openBench()
+  }
+
+  /**
+   * The stage's switch. The window state is main's, so this reads it there and
+   * takes exactly one of the two window verbs; a bridge that remembered the
+   * last thing it asked for would disagree with a human who closed the Bench
+   * by its own title bar.
+   */
+  toggleBench(): void {
+    if (this.host.benchOpen()) this.host.closeBench()
+    else this.host.openBench()
+    this.invalidate()
   }
 
   /* ---------------------------------------------------------------- *

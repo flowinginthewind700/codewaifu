@@ -17,6 +17,7 @@ import { closeLog, log } from './log'
 import { getMediaState, platformSupportsMedia } from './media'
 import * as neuralTts from './neuralTts'
 import { createBenchWindow, type BenchHandle } from './pro/benchWindow'
+import type { FlightPoint } from '../shared/benchFlight'
 import { narrowLogLevel, proAudience } from './pro/host'
 import { registerProIpc } from './pro/ipc'
 import { ProService, type ProHost } from './pro/service'
@@ -281,9 +282,36 @@ function attachZoomTo(contents: WebContents): void {
 }
 
 /**
+ * Where the Bench's flight comes from and goes to: the centre of the stage
+ * widget, or `null` when she is not on screen. The dart is the whole point of
+ * the animation - a window that leaves toward nothing merely slid sideways.
+ *
+ * Read per flight, not captured: the widget is dragged around constantly, and
+ * an anchor frozen at creation time would send the bench toward a corner she
+ * left minutes ago.
+ */
+function widgetAnchor(): FlightPoint | null {
+  const win = handle?.win
+  if (!win || win.isDestroyed() || !win.isVisible()) return null
+  try {
+    const bounds = win.getBounds()
+    return {
+      x: Math.round(bounds.x + bounds.width / 2),
+      y: Math.round(bounds.y + bounds.height / 2)
+    }
+  } catch (error) {
+    log('warn', 'widget anchor read failed', String(error))
+    return null
+  }
+}
+
+/**
  * Create the Bench on first open, then keep it. A cockpit that re-spawns on
  * every bubble click loses the terminal scrollback the human was reading, so
  * closing it hides it and only quitting destroys it.
+ *
+ * Creation does not show the window: both doors (`openBench` and the tray item)
+ * show it themselves, so the first open flies once rather than twice.
  */
 function ensureBench(): BenchHandle | null {
   const existing = benchAlive()
@@ -297,7 +325,12 @@ function ensureBench(): BenchHandle | null {
       // resize must not re-merge the agents' hook files or wake Pro's diff.
       saveGeometry: (geometry) => instance.setBenchGeometry(geometry),
       zoom: () => zoomRung,
+      anchor: widgetAnchor,
       onFocusChange: () => pro?.refreshCompanion(),
+      // The stage's bench button is a switch, and window visibility is its
+      // state. Refresh on every change rather than relying on focus, which a
+      // hidden window does not always give up in a way we are told about.
+      onVisibility: () => pro?.refreshCompanion(),
       onLoaded: () => pro?.replayFocus(),
       onClosed: () => {
         bench = null
@@ -381,7 +414,16 @@ function proHost(instance: Core): ProHost {
     benchFocused: () => benchAlive()?.isFocused() ?? false,
     setBadge: (count) => handle?.setBadge(count),
     bubbleMs: () => instance.config.bubbleMs,
-    openBench: () => ensureBench()?.show(true),
+    openBench: () => {
+      void ensureBench()?.showAnimated()
+    },
+    benchOpen: () => benchAlive()?.isVisible() ?? false,
+    // The other half of the stage's switch: the bench is sucked back in.
+    closeBench: () => {
+      const alive = benchAlive()
+      if (!alive) return
+      void alive.hideAnimated()
+    },
     // One app, two modes: the Bench hides (it is kept alive, so its terminal
     // scrollback survives the trip back) and the stage window comes forward
     // with focus, because a human just clicked "take me back".
@@ -566,7 +608,9 @@ async function boot(): Promise<void> {
     // through `pro.openBenchOnLaunch` or by clicking a bubble that carries no
     // task, which means a fleet with nothing blocked cannot be opened at all.
     onOpenBench: () => {
-      ensureBench()?.show(true)
+      // Same arrival as the stage's switch: one way the bench comes forward, so
+      // the two doors do not feel like two different windows.
+      void ensureBench()?.showAnimated()
     },
     // `view()` is null while Pro is off: the same contract `/pro/*` answers 503
     // on, so the item disappears with the feature instead of dying on click.

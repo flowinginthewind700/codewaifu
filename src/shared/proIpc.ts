@@ -1130,6 +1130,9 @@ export function parseBenchCommand(payload: unknown): ProCommandParse {
     case 'openbench':
     case 'open':
       return { type: 'openBench' }
+    case 'togglebench':
+    case 'toggle':
+      return { type: 'toggleBench' }
     case 'snoozeall':
       return { type: 'snoozeAll', minutes: int(raw.minutes, DEFAULT_SNOOZE_MINUTES, 1, 240) }
     case 'focustask':
@@ -1233,6 +1236,8 @@ export interface ProCompanionPush {
   counts: StateCounts
   benchFocused: boolean
   widgetVisible: boolean
+  /** The Bench window is on screen. The stage's door reads as a switch. */
+  benchOpen: boolean
   /** Item id currently being announced, '' when idle. */
   announcing: string
   at: number
