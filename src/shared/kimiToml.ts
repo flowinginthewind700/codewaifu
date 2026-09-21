@@ -13,7 +13,7 @@
 // orphaned marker therefore owns nothing but its own stray line, while the
 // tables we actually wrote are reclaimed by recognition instead.
 
-import { HOOK_MARKER } from './hookScript'
+import { isOurHookCommand } from './hookScript'
 
 /**
  * The lifecycle events Kimi emits. Same names Claude uses for the four we care
@@ -36,9 +36,13 @@ const START_MARKER = '# >>> codewaifu-managed-kimi-hooks (managed by CodeWaifu; 
 const END_MARKER = '# <<< codewaifu-managed-kimi-hooks <<<'
 const TABLE_HEADER = '[[hooks]]'
 
-/** A command pointing into our hooks dir is ours, however it is quoted. */
+/**
+ * A command pointing at a runner we generated is ours, however it is quoted.
+ * Same recognition the JSON agents use, so a relocated `CODEWAIFU_HOME` is
+ * reclaimed here too instead of stacking one `[[hooks]]` table per install.
+ */
 export function isKimiManagedCommand(command: string | undefined): boolean {
-  return typeof command === 'string' && HOOK_MARKER.test(command)
+  return isOurHookCommand(command)
 }
 
 interface ScannedLine {

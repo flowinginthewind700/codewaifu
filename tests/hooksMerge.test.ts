@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { isOurHookCommand } from '../src/shared/hookScript'
+import {
+  hookCommand,
+  hookCommandWindows,
+  isOurHookCommand,
+  runnerPaths
+} from '../src/shared/hookScript'
 import {
   ANTIGRAVITY_BUNDLE,
   mergeClaudeHooks,
@@ -191,6 +196,38 @@ describe('isOurHookCommand', () => {
     expect(isOurHookCommand(42)).toBe(false)
     // A lookalike path must not be claimed, or uninstall would eat it.
     expect(isOurHookCommand("/bin/sh '/Users/dev/.codewaifu-ish/hooks/run.sh'")).toBe(false)
+  })
+
+  it('recognises every command shape a relocated state dir produces', () => {
+    /*
+     * `CODEWAIFU_HOME` moves the hooks dir, and then `.codewaifu` is not in the
+     * command any more. Recognition by state-dir name alone called those
+     * foreign, which is not cosmetic: `stripOurs` keeps them, so every install
+     * appended another copy of each event and uninstall left them all behind -
+     * and on Cursor and Antigravity each stale copy prints
+     * `{"permission":"ask"}`, so N copies meant N prompts for one tool call.
+     *
+     * Built from `hookCommand`/`hookCommandWindows` rather than spelled out, so
+     * this sweeps the shapes the installer actually writes - stub and stubless,
+     * silent and decision-printing - instead of the ones remembered here.
+     */
+    const posix = runnerPaths('/data/cw-state/hooks', 'linux', ['cursor:preToolUse'])
+    const win = runnerPaths('C:\\cw-state\\hooks', 'win32', ['cursor:preToolUse'])
+    const generated = [
+      hookCommand(posix, 'codex', 'linux', 'Stop'),
+      hookCommand(posix, 'cursor', 'linux', 'preToolUse'),
+      hookCommandWindows(win, 'codex', 'win32'),
+      hookCommandWindows(win, 'cursor', 'win32', 'preToolUse')
+    ]
+    for (const command of generated) {
+      // The point of the case: none of these carries the state-dir name.
+      expect(command, `this one still says .codewaifu: ${command}`).not.toContain('.codewaifu')
+      expect(isOurHookCommand(command), command).toBe(true)
+    }
+    // Still path-shaped, so another tool's runner of the same name is not ours.
+    expect(isOurHookCommand("/bin/sh '/Users/dev/.orca/agent-hooks/run-hook.sh'")).toBe(false)
+    expect(isOurHookCommand('/Users/dev/.superpowers/hooks/run-hook.shx')).toBe(false)
+    expect(isOurHookCommand('/Users/dev/hooks/run-hook.sh.bak')).toBe(false)
   })
 })
 

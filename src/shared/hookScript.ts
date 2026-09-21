@@ -282,12 +282,36 @@ export function hookCommandWindows(paths: RunnerPaths, agent: string, event?: st
 }
 
 /**
- * Owns-entries marker. Anything whose command points inside our hooks dir is
- * ours, which is what makes merge/uninstall idempotent and safe next to other
- * tools' hooks (orca, superpowers, ...) living in the same config files.
+ * Owns-entries markers. Anything whose command points at a runner we generated
+ * is ours, which is what makes merge/uninstall idempotent and safe next to
+ * other tools' hooks (orca, superpowers, ...) living in the same config files.
+ *
+ * Two patterns, because one is not enough:
+ *
+ * - `HOOK_MARKER` is the default state dir. It matches every install that never
+ *   set `CODEWAIFU_HOME`, which is nearly all of them.
+ * - `RUNNER_MARKER` is the shape of the files `runnerPaths` writes: a `hooks/`
+ *   directory holding `run-hook.sh|cmd|ps1` or a per-event `hook-*.cmd` stub.
+ *   Without it, a relocated state dir produces commands that look foreign, and
+ *   the consequences are not cosmetic. `stripOurs` keeps them, so every install
+ *   appends another copy of each event, and uninstall leaves them all behind.
+ *   For Cursor and Antigravity that is worse than noise: their commands print
+ *   `{"permission":"ask"}` unconditionally, so N stale copies mean the user
+ *   answers N permission prompts for one tool call.
+ *
+ * Both stay path-shaped rather than name-shaped on purpose. A basename alone
+ * would claim another tool's `run-hook.sh`, and uninstall would then eat it.
  */
 export const HOOK_MARKER = /\.codewaifu[\\/]+hooks[\\/]/
 
+/**
+ * Our runner basenames, anchored to a `hooks/` directory and to a terminating
+ * quote, space or end of string, so a lookalike such as `agent-hooks/run.sh` or
+ * `hooks/run-hook.shx` is not claimed.
+ */
+export const RUNNER_MARKER =
+  /[\\/]hooks[\\/](?:run-hook\.(?:sh|cmd|ps1)|hook-[\w-]+\.cmd)(?=['"\s]|$)/
+
 export function isOurHookCommand(command: unknown): boolean {
-  return typeof command === 'string' && HOOK_MARKER.test(command)
+  return typeof command === 'string' && (HOOK_MARKER.test(command) || RUNNER_MARKER.test(command))
 }
