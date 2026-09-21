@@ -24,7 +24,7 @@ import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT, splitBlocks, type ChatMessage
 import { isImeKey } from '@shared/ime'
 import type { SteerResult, ThreadInfo } from '@shared/protocol'
 import { api, platform } from './api'
-import { codeSpans } from './highlight'
+import { codeSpans, outputSpans } from './highlight'
 import { useAttachField } from './useAttach'
 import { useImeEnter } from './useIme'
 import type { StringKey, Translate } from './i18n'
@@ -446,7 +446,9 @@ function MessageRow({ message, previous, open, reasoningOpen, unfolded, t, onTog
             {message.text ? <span className="tool-args">{message.text}</span> : null}
             {message.output ? <span className="tool-badge">{message.output.length > 999 ? `${Math.round(message.output.length / 1000)}k` : message.output.length}</span> : null}
           </button>
-          {open && message.output ? <pre className="tool-output">{message.output}</pre> : null}
+          {open && message.output ? (
+            <pre className="tool-output">{outputSpans(message)}</pre>
+          ) : null}
         </div>
       </>
     )

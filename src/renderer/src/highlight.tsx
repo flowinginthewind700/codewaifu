@@ -29,6 +29,7 @@ import cmake from 'highlight.js/lib/languages/cmake'
 import nginx from 'highlight.js/lib/languages/nginx'
 import protobuf from 'highlight.js/lib/languages/protobuf'
 import { isStylableLanguage, resolveLanguage } from '@shared/highlightLang'
+import { outputLanguage, splitToolOutput } from '@shared/toolOutput'
 
 /**
  * Above this, render plain. A fenced dump of a whole file is the one shape
@@ -154,4 +155,36 @@ export function codeSpans(fence: string | undefined | null, text: string): React
 export function clearCodeCache(): void {
   cache.clear()
   cacheChars = 0
+}
+
+/**
+ * The children for one tool row's *output*, coloured where the output is
+ * provably code and plain everywhere else.
+ *
+ * Tool rows are what a terminal history is actually made of - 11,513 of them
+ * against zero fenced blocks in agent prose across 40 real Codex rollouts - so
+ * this, not `codeSpans()`, is the path that decides whether the transcript
+ * reads like a terminal or like a text file. Which grammar applies comes from
+ * `shared/toolOutput.ts`: the command that printed the bytes, else the output's
+ * own shape when a parser agrees with it, else nothing.
+ *
+ * The harness wrapper this app prints around a command's stdout (`Chunk ID:`,
+ * `Wall time:`, the exit code, `Output:`) stays plain. Colouring it would paint
+ * `Chunk ID: 4ae44c` as a TypeScript type, and it is not the agent's output.
+ */
+export function outputSpans(input: {
+  tool?: string | null
+  command?: string | null
+  output?: string | null
+}): ReactNode[] {
+  const raw = String(input.output ?? '')
+  if (!raw) return []
+  const language = outputLanguage(input)
+  if (!language) return [raw]
+  const { head, body } = splitToolOutput(raw)
+  if (!body) return [raw]
+  // A string node needs no key; `codeSpans()` keys its own spans.
+  const nodes: ReactNode[] = head ? [`${head}\n`] : []
+  nodes.push(...codeSpans(language, body))
+  return nodes
 }

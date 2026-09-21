@@ -16,7 +16,12 @@
  *    being a visible stutter while an agent streams.
  */
 import { describe, expect, it } from 'vitest'
-import { clearCodeCache, codeSpans, MAX_HIGHLIGHT_CHARS } from '../src/renderer/src/highlight'
+import {
+  clearCodeCache,
+  codeSpans,
+  MAX_HIGHLIGHT_CHARS,
+  outputSpans
+} from '../src/renderer/src/highlight'
 
 /** Concatenate a ReactNode tree the way the DOM would, ignoring span nesting. */
 function textOf(nodes: unknown): string {
@@ -133,5 +138,112 @@ describe('codeSpans', () => {
     // than one empty string node; what matters is that it renders no text and
     // does not throw on the way there.
     expect(textOf(codeSpans('json', undefined as unknown as string))).toBe('')
+  })
+})
+
+/**
+ * The wrapper this app's own harness prints around a command's stdout, exactly
+ * as it reaches the renderer. `Chunk ID: 4ae44c` and `Process exited with code
+ * 0` are not TypeScript, and the tests below pin that they stay uncoloured.
+ */
+const HARNESS_HEAD = [
+  'Chunk ID: 4ae44c',
+  'Wall time: 0.0123 seconds',
+  'Process exited with code 0',
+  'Original token count: 96',
+  'Output:'
+].join('\n')
+
+const TS_FILE = 'import { x } from "./y"\n\nexport const n: number = 1\n'
+
+describe('outputSpans', () => {
+  it('colours the file a reader printed and keeps every character', () => {
+    clearCodeCache()
+    const raw = `${HARNESS_HEAD}\n${TS_FILE}`
+    const spans = outputSpans({ tool: 'exec_command', command: 'cat src/app.ts', output: raw })
+    expect(textOf(spans)).toBe(raw)
+    expect(classesOf(spans).some((c) => c.includes('hljs-keyword'))).toBe(true)
+    expect(classesOf(spans).some((c) => c.includes('hljs-string'))).toBe(true)
+  })
+
+  it('leaves the harness wrapper plain - it is not the agent\'s output', () => {
+    clearCodeCache()
+    const raw = `${HARNESS_HEAD}\n${TS_FILE}`
+    const spans = outputSpans({ tool: 'exec_command', command: 'cat src/app.ts', output: raw })
+    // The wrapper is handed over as one bare string node, so the theme cannot
+    // paint `Chunk ID:` as a type or the exit code as a number.
+    expect(spans[0]).toBe(`${HARNESS_HEAD}\n`)
+    expect(classesOf(spans[0])).toEqual([])
+    expect(classesOf(spans.slice(1)).some((c) => c.includes('hljs-'))).toBe(true)
+  })
+
+  it('colours a command with no wrapper, because nothing was stripped', () => {
+    clearCodeCache()
+    const raw = 'export const a = 1\n'
+    const spans = outputSpans({ tool: 'local_shell_call', command: 'head -20 src/a.ts', output: raw })
+    expect(textOf(spans)).toBe(raw)
+    expect(classesOf(spans).some((c) => c.includes('hljs-keyword'))).toBe(true)
+  })
+
+  it('colours a JSON body on the strength of the parser alone', () => {
+    clearCodeCache()
+    const raw = `${HARNESS_HEAD}\n{"ok":true,"n":2}\n`
+    // No command at all: a `tool_output` row whose bytes parse as JSON.
+    const spans = outputSpans({ output: raw })
+    expect(textOf(spans)).toBe(raw)
+    expect(classesOf(spans).some((c) => c.includes('hljs-attr'))).toBe(true)
+  })
+
+  it('renders plain when nothing vouches for the bytes', () => {
+    clearCodeCache()
+    const raw = `${HARNESS_HEAD}\n2026-09-20 12:00:01 INFO started\nok\n`
+    const spans = outputSpans({ tool: 'exec_command', command: 'npm test', output: raw })
+    expect(spans).toEqual([raw])
+  })
+
+  it('renders plain when the command rewrites what it prints', () => {
+    clearCodeCache()
+    // `nl` line numbers are *shaped* like source without being it; painting
+    // them would be a confident wrong answer.
+    const raw = '     1\timport { x } from "./y"\n'
+    const spans = outputSpans({ tool: 'exec_command', command: 'nl -ba src/app.ts', output: raw })
+    expect(spans).toEqual([raw])
+  })
+
+  it('renders plain when a non-shell tool prints a path', () => {
+    clearCodeCache()
+    const raw = 'Patch applied successfully.'
+    const spans = outputSpans({ tool: 'apply_patch', command: '', output: raw })
+    expect(spans).toEqual([raw])
+  })
+
+  it('gives up on an output too large to be worth the main thread', () => {
+    clearCodeCache()
+    const raw = 'const a = 1\n'.repeat(Math.ceil(MAX_HIGHLIGHT_CHARS / 12) + 10)
+    const spans = outputSpans({ tool: 'exec_command', command: 'cat big.ts', output: raw })
+    expect(spans).toEqual([raw])
+  })
+
+  it('keeps an empty output empty instead of rendering a stray newline', () => {
+    clearCodeCache()
+    expect(outputSpans({ tool: 'exec_command', command: 'cat a.ts', output: '' })).toEqual([])
+  })
+
+  it('treats null-ish fields as an empty output rather than throwing', () => {
+    clearCodeCache()
+    expect(outputSpans({})).toEqual([])
+    expect(textOf(outputSpans({ tool: null, command: null, output: null }))).toBe('')
+  })
+
+  it('returns the identical node list for the same row twice (cache hit)', () => {
+    clearCodeCache()
+    const row = { tool: 'exec_command', command: 'cat src/app.ts', output: `${HARNESS_HEAD}\n${TS_FILE}` }
+    const first = outputSpans(row)
+    const second = outputSpans(row)
+    // `outputSpans()` rebuilds its own array each call, but the coloured body
+    // comes out of the cache, so the nodes it holds are the same objects: the
+    // body is not re-tokenized on every poll tick of the widget.
+    expect(second.length).toBe(first.length)
+    expect(second[1]).toBe(first[1])
   })
 })

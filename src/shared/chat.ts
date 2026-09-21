@@ -25,6 +25,15 @@ export interface ChatMessage {
   tool?: string
   /** Tool result, paired onto the call so one bubble holds both. */
   output?: string
+  /**
+   * The shell command that produced `output`, kept whole and unclipped.
+   *
+   * `text` is a one-line summary cut at 120 characters, which is right for the
+   * chip and wrong for deciding what language the output is in: `cat` of a deep
+   * path loses its extension to the cut, and the cut is what makes the output
+   * render grey. See `shared/toolOutput.ts`, which reads this field.
+   */
+  command?: string
   /** Epoch ms; 0 when the row carried no timestamp. */
   at: number
   /** Sub-agent (Claude `isSidechain`) traffic. */
@@ -170,15 +179,10 @@ function argText(value: unknown): string {
 
 /** Compact one-line summary of a tool call's arguments. */
 export function summarizeArgs(raw: unknown): string {
-  let value: unknown = raw
-  if (typeof raw === 'string') {
-    try {
-      value = JSON.parse(raw)
-    } catch {
-      // Not JSON at all (Codex `apply_patch` sends the raw patch body).
-      return clipArgs(raw)
-    }
-  }
+  const { value, notJson } = unwrapArgs(raw)
+  // Not JSON at all (Codex `apply_patch` sends the raw patch body): the body is
+  // the summary.
+  if (notJson) return clipArgs(String(raw ?? ''))
   const row = asRow(value)
   if (!row) return clipArgs(argText(value))
   const preferred = ['cmd', 'command', 'file_path', 'path', 'pattern', 'query', 'url', 'description', 'prompt']
@@ -189,6 +193,41 @@ export function summarizeArgs(raw: unknown): string {
   for (const entry of Object.values(row)) {
     const text = argText(entry)
     if (text) return clipArgs(text)
+  }
+  return ''
+}
+
+/**
+ * Take the JSON string layer off a tool call's arguments. Codex stores them as
+ * a JSON *string* (`arguments`), Claude as an object (`input`), and Codex
+ * `apply_patch` sends a raw patch body that is not JSON at all.
+ */
+function unwrapArgs(raw: unknown): { value: unknown; notJson: boolean } {
+  if (typeof raw !== 'string') return { value: raw, notJson: false }
+  try {
+    return { value: JSON.parse(raw), notJson: false }
+  } catch {
+    return { value: raw, notJson: true }
+  }
+}
+
+/**
+ * The shell command behind a tool call, or `''`.
+ *
+ * Only shell tools get one: `commandLanguage()` is strict about which command
+ * words may vouch for their own stdout, so handing it `apply_patch`'s patch body
+ * or `view_image`'s path would just be noise it has to reject. The key list is
+ * the union of what both agents actually send - Codex `cmd` (34,929 calls in 40
+ * recent rollouts) and `command` (1), Claude Bash `command` and `script`.
+ */
+export function toolCommand(raw: unknown): string {
+  const { value, notJson } = unwrapArgs(raw)
+  if (notJson) return ''
+  const row = asRow(value)
+  if (!row) return ''
+  for (const key of ['cmd', 'command', 'script']) {
+    const entry = row[key]
+    if (typeof entry === 'string' && entry.trim()) return entry
   }
   return ''
 }
@@ -226,8 +265,14 @@ export function parseCodexRow(row: Row, index: number): ChatMessage | null {
 
   if (kind === 'function_call' || kind === 'custom_tool_call') {
     const name = textOf(payload.name) || 'tool'
-    const detail = summarizeArgs(kind === 'custom_tool_call' ? payload.input : payload.arguments)
-    return { ...base, role: 'tool', tool: name, text: detail }
+    const args = kind === 'custom_tool_call' ? payload.input : payload.arguments
+    return {
+      ...base,
+      role: 'tool',
+      tool: name,
+      text: summarizeArgs(args),
+      command: toolCommand(args) || undefined
+    }
   }
 
   return null
@@ -289,7 +334,15 @@ export function parseClaudeRow(row: Row, index: number): ChatMessage | null {
   // because it is what the user actually reads, and the tool call follows as
   // its own row in the normalized stream.
   if (text) return { ...base, role: 'assistant', text }
-  if (toolUse) return { ...base, role: 'tool', tool: textOf(toolUse.name) || 'tool', text: summarizeArgs(toolUse.input) }
+  if (toolUse) {
+    return {
+      ...base,
+      role: 'tool',
+      tool: textOf(toolUse.name) || 'tool',
+      text: summarizeArgs(toolUse.input),
+      command: toolCommand(toolUse.input) || undefined
+    }
+  }
   if (thinking) return { ...base, role: 'reasoning', text: thinking }
   return null
 }

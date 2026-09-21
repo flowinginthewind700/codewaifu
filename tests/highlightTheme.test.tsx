@@ -7,13 +7,17 @@
  * 1. A scope the grammar emits that the CSS never mentions. The block renders,
  *    the colours look right at a glance, and one whole class of token is
  *    silently base-grey - you only notice when you diff against an editor.
- * 2. A rule added under one window's scope and not the other. The widget and the
- *    bench are two bundles with two stylesheets, and highlight.css is imported
- *    by both; a selector that only says `.msg-bubble .code` means the same
- *    TypeScript is two different colours depending on which window you read it in.
+ * 2. A rule added under one container's scope and not the others. The widget and
+ *    the bench are two bundles with two stylesheets, and highlight.css is
+ *    imported by both; each window also holds two kinds of code - the fenced
+ *    blocks an agent writes and the output a tool printed. A selector that only
+ *    says `.msg-bubble .code` means the same TypeScript is a different colour in
+ *    three of the four places it can appear. Tool output is the one a human
+ *    actually reads: 11,513 rows against zero fenced blocks over 40 real Codex
+ *    rollouts, which is how that mistake stayed invisible for a release.
  *
  * So: collect every class the shipped grammars actually produce from a corpus of
- * the fences agents write, then require the CSS to style each one under both
+ * the fences agents write, then require the CSS to style each one under all four
  * scopes. Neutral scopes (operator, punctuation, a declaration wrapper) inherit
  * the block's own colour on purpose, so they are listed as expected-unstyled
  * rather than being allowed to slip in unreviewed.
@@ -32,6 +36,7 @@ import {
   registeredGrammars
 } from '../src/renderer/src/highlight'
 import { aliasKeys, resolveLanguage } from '../src/shared/highlightLang'
+import { extensionLanguageValues } from '../src/shared/toolOutput'
 
 const RAW_CSS = readFileSync(path.join(__dirname, '../src/renderer/src/highlight.css'), 'utf8')
 /**
@@ -136,14 +141,33 @@ const NEUTRAL = new Set([
   'hljs-class'
 ])
 
-function rulesFor(cls: string): { widget: boolean; bench: boolean } {
+/**
+ * Every container the theme has to cover: two windows times two kinds of code.
+ */
+const CONTAINERS = {
+  widgetFence: '.msg-bubble .code',
+  widgetOutput: '.tool-output',
+  benchFence: '.convo-code',
+  benchOutput: '.convo-output'
+} as const
+
+type ContainerName = keyof typeof CONTAINERS
+
+/** Escape one selector for use inside a RegExp. */
+function escapeSelector(selector: string): string {
+  return selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function rulesFor(cls: string): Record<ContainerName, boolean> {
   // `.hljs-title.function_` arrives from lowlight as two classes on one span;
   // the theme styles the parent `.hljs-title`, so match on the scope root.
   const scope = cls.split('.')[0]
-  const escaped = scope.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const widget = new RegExp(`\\.msg-bubble \\.code \\.${escaped}\\b`).test(CSS)
-  const bench = new RegExp(`\\.convo-code \\.${escaped}\\b`).test(CSS)
-  return { widget, bench }
+  const escaped = escapeSelector(scope)
+  const found = {} as Record<ContainerName, boolean>
+  for (const name of Object.keys(CONTAINERS) as ContainerName[]) {
+    found[name] = new RegExp(`${escapeSelector(CONTAINERS[name])} \\.${escaped}\\b`).test(CSS)
+  }
+  return found
 }
 
 describe('highlight.css', () => {
@@ -170,20 +194,34 @@ describe('highlight.css', () => {
     expect(dangling).toEqual([])
   })
 
+  it('points every file extension at a grammar that is actually registered', () => {
+    // The same check for the other table that names grammars: the one
+    // `shared/toolOutput.ts` uses to colour the result of `cat src/app.ts`. A
+    // typo there renders every file with that extension plain and nothing else
+    // in the app complains. It lives here rather than in toolOutput.test.ts
+    // because `isRegistered()` is the renderer's, and a `.ts` test sits in the
+    // node project, which cannot compile the renderer's `.tsx`.
+    const dangling = extensionLanguageValues().filter((language) => !isRegistered(language))
+    expect(dangling).toEqual([])
+  })
+
   const emitted = new Set<string>()
   clearCodeCache()
   for (const [lang, source] of Object.entries(CORPUS)) {
     for (const cls of classesOf(codeSpans(lang, source))) emitted.add(cls)
   }
 
-  it('styles every scope the shipped grammars emit, in both windows', () => {
+  it('styles every scope the shipped grammars emit, in all four containers', () => {
     const unstyled: string[] = []
     const oneSided: string[] = []
     for (const cls of [...emitted].sort()) {
       if (NEUTRAL.has(cls) || NEUTRAL.has(cls.split('.')[0])) continue
-      const { widget, bench } = rulesFor(cls)
-      if (!widget && !bench) unstyled.push(cls)
-      else if (widget !== bench) oneSided.push(`${cls} widget=${widget} bench=${bench}`)
+      const coverage = rulesFor(cls)
+      const styled = (Object.keys(coverage) as ContainerName[]).filter((name) => coverage[name])
+      if (styled.length === 0) unstyled.push(cls)
+      else if (styled.length !== Object.keys(coverage).length) {
+        oneSided.push(`${cls} styled=${styled.join(',')}`)
+      }
     }
     expect({ unstyled, oneSided }).toEqual({ unstyled: [], oneSided: [] })
   })
@@ -203,7 +241,7 @@ describe('highlight.css', () => {
   it('scopes every colour rule, so the theme cannot leak onto the interface', () => {
     // A bare `.hljs-keyword { color }` would also paint any hljs class that
     // appears outside a code block, and highlight.css is loaded globally in both
-    // windows. Every selector that sets a colour must start from one of the two
+    // windows. Every selector that sets a colour must start from one of the four
     // block scopes.
     const bodies = CSS.split('}').filter((chunk) => /(^|\n)\s*(color|background|font-)/.test(chunk))
     expect(bodies.length).toBeGreaterThan(0)
@@ -215,7 +253,7 @@ describe('highlight.css', () => {
         .filter(Boolean)
       expect(selectors.length).toBeGreaterThan(0)
       for (const sel of selectors) {
-        expect(sel.startsWith('.msg-bubble .code') || sel.startsWith('.convo-code')).toBe(true)
+        expect(Object.values(CONTAINERS).some((container) => sel.startsWith(container))).toBe(true)
       }
     }
   })

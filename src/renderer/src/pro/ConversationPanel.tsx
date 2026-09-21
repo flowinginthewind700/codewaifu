@@ -29,7 +29,7 @@ import {
 } from '@shared/chat'
 import type { SteerResult } from '@shared/protocol'
 import type { TaskView } from '@shared/pro'
-import { codeSpans } from '../highlight'
+import { codeSpans, outputSpans } from '../highlight'
 import { useImeEnter } from '../useIme'
 import { useAttachField } from '../useAttach'
 import { platform, proApi } from './api'
@@ -103,6 +103,7 @@ function Message({ message, t }: { message: ChatMessage; t: Translate }): ReactE
   const [unfolded, setUnfolded] = useState(false)
   const lines = message.text.split('\n').length
   const foldable = lines > FOLD_LINES
+  const output = useMemo(() => (message.output ? outputSpans(message) : null), [message])
   return (
     <article className="convo-msg" data-role={message.role} data-side={message.sidechain || undefined}>
       <header className="convo-msg-head">
@@ -111,9 +112,9 @@ function Message({ message, t }: { message: ChatMessage; t: Translate }): ReactE
         {message.truncated ? <span className="pill quiet">{t('convoTruncated')}</span> : null}
       </header>
       {message.text ? <Blocks text={message.text} unfold={unfolded || !foldable} /> : null}
-      {message.output ? (
+      {output ? (
         <pre className="convo-output mono" data-unfold={unfolded || undefined}>
-          {message.output}
+          {output}
         </pre>
       ) : null}
       {foldable ? (
