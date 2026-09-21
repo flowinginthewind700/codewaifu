@@ -21,7 +21,7 @@ import type {
 import type { ChatTranscript } from '../shared/chat'
 import type { MediaCommand, MediaState } from '../shared/media'
 import { detectLang, resolveUiLang, systemLangFromLocales, toSpeakable } from '../shared/lang'
-import { claudeHome, codexHome, endpointFile, envPinnedPort } from './env'
+import { detectionHomes, endpointFile, envPinnedPort } from './env'
 import {
   installAgentHooks,
   reportHooks,
@@ -522,6 +522,7 @@ export class Core {
   hooksStatus(): HooksReport {
     if (this.hooksReport) {
       return {
+        agents: this.hooksReport.agents,
         codex: this.hooksReport.codex,
         claude: this.hooksReport.claude,
         runnerInstalled: this.hooksReport.runnerInstalled,
@@ -569,13 +570,18 @@ export class Core {
   }
 
   runtimeState(): RuntimeState {
+    // Which agents this machine actually has. A home directory is the cheapest
+    // honest signal, and it is deliberately read-only: probing a missing agent
+    // must never create its config dir, or the bench would offer it.
+    const agents: Record<string, boolean> = {}
+    for (const [name, dir] of Object.entries(detectionHomes)) agents[name] = exists(dir)
     return {
       version: this.version,
       relay: this.relayStatus(),
       speaking: this.speaking,
       queueLength: this.queueLength,
       hooks: this.hooksStatus(),
-      agents: { codex: exists(codexHome), claude: exists(claudeHome) },
+      agents: agents as RuntimeState['agents'],
       voices: this.speaker.listVoices(),
       neural: this.neuralStatus(),
       // `view()` answers null while herdr is unreachable, so this reads as

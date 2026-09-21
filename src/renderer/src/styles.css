@@ -1664,6 +1664,26 @@ input[type='number'] {
   color: var(--faint);
 }
 
+/* The other agents we integrate. The border is `currentColor` on this surface,
+   so one declaration each is enough; the identity hues and the rule that they
+   are never status colours live in tokens.css. A manifest with no class here
+   stays neutral rather than getting a guessed colour. */
+.tag.cursor {
+  color: var(--agent-cursor);
+}
+
+.tag.gemini {
+  color: var(--agent-gemini);
+}
+
+.tag.antigravity {
+  color: var(--agent-antigravity);
+}
+
+.tag.kimi {
+  color: var(--agent-kimi);
+}
+
 .empty {
   padding: 20px 12px;
   text-align: center;

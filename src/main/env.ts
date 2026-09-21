@@ -61,6 +61,41 @@ export const codexSessionsDir = path.join(codexHome, 'sessions')
 export const claudeSettingsFile = path.join(claudeHome, 'settings.json')
 export const claudeProjectsDir = path.join(claudeHome, 'projects')
 
+/**
+ * Hook targets beyond Codex and Claude Code. Each keeps its own layout: Cursor
+ * wants a `version: 1` file of flat definitions, Gemini reuses the Claude shape
+ * under a different file with a millisecond timeout, Antigravity nests global
+ * hooks under a named bundle inside *Gemini's* config dir, and Kimi has no JSON
+ * at all (TOML `[[hooks]]` tables, see `shared/kimiToml.ts`).
+ */
+export const cursorHome = path.join(home, '.cursor')
+export const cursorHooksFile = path.join(cursorHome, 'hooks.json')
+export const geminiHome = path.join(home, '.gemini')
+export const geminiSettingsFile = path.join(geminiHome, 'settings.json')
+/** Antigravity shares Gemini's config dir; its global hooks live one level down. */
+export const antigravityHooksFile = path.join(geminiHome, 'config', 'hooks.json')
+/** Same resolution Kimi's own CLI uses, so hooks land in the home Kimi reads. */
+export const kimiHome = resolveOverride(process.env.KIMI_CODE_HOME, path.join(home, '.kimi-code'))
+export const kimiConfigToml = path.join(kimiHome, 'config.toml')
+
+/**
+ * Homes of every agent we can name. Presence here is what the bench's agent menu
+ * and the settings panel use to decide a runner is worth offering; absence just
+ * means the row stays hidden. Codex and Claude Code key off the same override
+ * their CLIs use, so a relocated config is still found.
+ */
+export const detectionHomes: Record<string, string> = {
+  codex: codexHome,
+  claude: claudeHome,
+  cursor: cursorHome,
+  gemini: geminiHome,
+  kimi: kimiHome,
+  opencode: path.join(home, '.opencode'),
+  kiro: path.join(home, '.kiro'),
+  pi: path.join(home, '.pi'),
+  trae: path.join(home, '.trae')
+}
+
 export const isMac = platform === 'darwin'
 export const isLinux = platform === 'linux'
 

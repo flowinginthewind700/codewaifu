@@ -1,4 +1,5 @@
 import { clipboard } from 'electron'
+import { agentLabel } from '../shared/phrases'
 import type { Agent, SteerResult } from '../shared/protocol'
 import { CONFIRM_MS, confirmDelivery, isActive } from './delivery'
 import { run } from './exec'
@@ -15,8 +16,9 @@ import { childEnv, findBinary } from './shellPath'
  * own transcript, and an unconfirmed one says so and also copies the text to
  * the clipboard, which is the one path that always works.
  *
- * Claude Code has no injection API at all, so the honest fallback there is the
- * clipboard plus a line telling the user to paste it.
+ * Every other agent has no injection API at all - Claude Code, Cursor, Gemini,
+ * Antigravity, Kimi all talk to their own TUI and nothing else - so the honest
+ * fallback there is the clipboard plus a line telling the user to paste it.
  */
 export async function steer(agent: Agent, threadId: string, message: string): Promise<SteerResult> {
   const text = String(message || '').trim()
@@ -72,11 +74,12 @@ export async function steer(agent: Agent, threadId: string, message: string): Pr
   }
 
   copyToClipboard(text)
+  const name = agentLabel(agent, 'en')
   return {
     ok: true,
     method: 'clipboard',
     reason: 'clipboard',
-    message: 'Claude Code cannot be injected from outside; the message is on your clipboard, paste it in.'
+    message: `${name} cannot be injected from outside; the message is on your clipboard, paste it in.`
   }
 }
 

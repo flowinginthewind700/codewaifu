@@ -4,9 +4,10 @@
 
 **A desktop companion that lives next to your coding agents.** CodeWaifu sits in
 your menu bar as a small, draggable, always-on-top character. It listens to
-Codex and Claude Code through their hook systems, speaks every event that needs
-you out loud, keeps a live board of all your agent threads, lets you steer them
-without leaving the keyboard, and drives your music player while you work.
+Codex, Claude Code, Cursor, Gemini CLI, Antigravity and Kimi CLI through their
+hook systems, speaks every event that needs you out loud, keeps a live board of
+all your agent threads, lets you steer them without leaving the keyboard, and
+drives your music player while you work.
 
 ![CodeWaifu companion](docs/assets/companion.png)
 
@@ -20,10 +21,26 @@ what every agent is doing right now.
 
 ## Features
 
-- **Speaks your agents.** Hook events from Codex and Claude Code (session start,
+- **Speaks your agents.** Hook events from six agent flavors (session start,
   stop, permission request, notification, tool call, compaction, subagent,
   interrupt) become short spoken lines through the system TTS, with per-event
   toggles and a phrase pool so the same event never sounds identical twice.
+  Each agent gets the events it really emits - a name nobody invented, and no
+  config file is written for an agent that is not installed.
+
+  | Agent | Hooks | Config it writes | Transcript + steer |
+  |-------|-------|------------------|--------------------|
+  | Codex | yes | `~/.codex/hooks.json` | yes |
+  | Claude Code | yes | `~/.claude/settings.json` | yes |
+  | Cursor Agent | yes | `~/.cursor/hooks.json` | no |
+  | Gemini CLI | yes | `~/.gemini/settings.json` | no |
+  | Antigravity | yes | `~/.gemini/config/hooks.json` | no |
+  | Kimi CLI | yes | `~/.kimi-code/config.toml` | no |
+
+  The last column is the honest limit: only Codex and Claude Code write JSONL we
+  know how to find and parse, so those two are the ones whose history the panel
+  can open and whose thread you can queue a message into. The other four still
+  speak, bubble, and land in the ledger and the bench tree.
 - **Bilingual by default.** Language is auto-detected per message (one CJK
   character switches the voice), or pinned to Chinese / English in Settings.
 - **A greeting, not a splash screen.** On launch the companion says something
@@ -165,7 +182,7 @@ session (or XWayland) is what those two features were tested against.
 
 Per-user, no admin prompt: it installs into the `%LOCALAPPDATA%` location named
 above, with the Start-menu shortcut and the uninstaller entry NSIS writes, and
-the hooks land in your Codex and Claude Code config folders exactly as they do
+the hooks land in your agents' config folders exactly as they do
 on the other platforms. A release carries both a setup and a portable artifact;
 the installer prefers the setup one, because that is what writes the shortcut
 and the uninstaller. The build is x64 and unsigned, so SmartScreen asks once
@@ -221,18 +238,19 @@ the plugin commands both drive the same installer.
 1. Open the app. It greets you and parks in the menu bar (macOS) or tray
    (Windows, Linux).
 2. Codex gates third-party hooks behind a one-time trust prompt: open Codex,
-   run `/hooks`, and trust the CodeWaifu entries. Claude Code needs nothing.
+   run `/hooks`, and trust the CodeWaifu entries. Every other agent needs
+   nothing.
 3. Start an agent session. Stop events, permission requests and notifications
    now arrive as speech and bubbles.
 
 Requirements: macOS 12+, Windows 10+, or a glibc desktop Linux (Ubuntu 22.04+,
 Debian 12+, Fedora 40+; x64), plus Codex CLI and/or Claude Code recent enough
-to support hooks.
+to support hooks - or any of Cursor Agent, Gemini CLI, Antigravity, Kimi CLI.
 
 ## How it works
 
 ```text
-Codex / Claude Code hook
+any agent hook
         |  stdin = event JSON
         v
 ~/.codewaifu/hooks/run-hook.sh        fail-open: exit 0 on every path,
@@ -369,8 +387,9 @@ drawn from signed distance fields at build time - the repo stays text-only.
 - On Linux the companion runs unsandboxed when installed without root, because
   a user-space install cannot add the AppArmor profile Chromium wants. The
   `.deb` is the sandboxed path.
-- Steer can queue into Codex threads; for Claude Code it copies the message to
-  your clipboard, because there is no supported injection API.
+- Steer can queue into Codex threads; every other flavor copies the message to
+  your clipboard and names the agent it is for, because none of them has a
+  supported injection API.
 
 ## License
 

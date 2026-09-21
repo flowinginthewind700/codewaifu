@@ -55,6 +55,7 @@ export function Panel(props: PanelProps): ReactElement {
         <ChatView
           thread={props.chatThread}
           t={t}
+          lang={props.lang}
           onBack={props.onCloseChat}
           onSteer={props.onSteer}
           onNotice={props.onNotice}

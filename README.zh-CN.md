@@ -3,9 +3,9 @@
 [产品落地页](https://robotworld.top/zh/codewaifu) · [English](README.md) · [发行版](https://github.com/flowinginthewind700/codewaifu/releases) · [MIT](LICENSE)
 
 **住在编码 agent 旁边的桌面伙伴。** CodeWaifu 以一个小巧、可拖拽、始终置顶的
-角色停在菜单栏里。它通过 hook 机制监听 Codex 与 Claude Code,把每一个需要你
-出面的事件说出来,维护一块实时线程看板,让你不离开键盘就能指挥它们,顺手还
-能控制你的音乐播放器。
+角色停在菜单栏里。它通过 hook 机制监听 Codex、Claude Code、Cursor、Gemini
+CLI、Antigravity 与 Kimi CLI,把每一个需要你出面的事件说出来,维护一块实时
+线程看板,让你不离开键盘就能指挥它们,顺手还能控制你的音乐播放器。
 
 ![CodeWaifu 桌面伙伴](docs/assets/companion.png)
 
@@ -18,9 +18,24 @@
 
 ## 功能
 
-- **替 agent 说话。** Codex 与 Claude Code 的 hook 事件(会话开始、结束、
+- **替 agent 说话。** 六种 agent 的 hook 事件(会话开始、结束、
   权限请求、通知、工具调用、上下文压缩、子代理、中断)都会变成一句简短语音,
   走系统 TTS;每类事件可单独开关,短语池保证同一件事不会两次说的一模一样。
+  每种 agent 只注册它真正会发出的事件——名字不靠编,没装的 agent 一个字节的
+  配置文件都不会写。
+
+  | Agent | Hooks | 写入的配置 | 历史回放 + 插话 |
+  |-------|-------|------------|------------------|
+  | Codex | 支持 | `~/.codex/hooks.json` | 支持 |
+  | Claude Code | 支持 | `~/.claude/settings.json` | 支持 |
+  | Cursor Agent | 支持 | `~/.cursor/hooks.json` | 不支持 |
+  | Gemini CLI | 支持 | `~/.gemini/settings.json` | 不支持 |
+  | Antigravity | 支持 | `~/.gemini/config/hooks.json` | 不支持 |
+  | Kimi CLI | 支持 | `~/.kimi-code/config.toml` | 不支持 |
+
+  最后一列是诚实的边界:只有 Codex 与 Claude Code 会写我们找得到也解得开的
+  JSONL,所以只有这两家的历史面板打得开、线程能排队插话。另外四家照样说话、
+  弹气泡、进账本和工作台的树。
 - **默认双语。** 每条消息自动判定语言(出现一个汉字就切中文语音),也可以在
   设置里固定中文或英文。
 - **开机是问候,不是闪屏。** 启动时按时间段从短语池里随机挑一句跟你打招呼。
@@ -138,8 +153,8 @@ sudo apt install libgtk-3-0t64 libnotify4 libnss3 libxss1 libxtst6 \
 ### Windows
 
 用户态安装,不弹 UAC:落在上面提到的 `%LOCALAPPDATA%` 目录里,NSIS 顺手写好
-开始菜单快捷方式与卸载项;hook 与其它平台一样进 Codex / Claude Code 的配置
-目录。一个发行版同时带 setup 与 portable 两个产物,安装器优先取 setup——
+开始菜单快捷方式与卸载项;hook 与其它平台一样进各 agent 的配置目录。
+一个发行版同时带 setup 与 portable 两个产物,安装器优先取 setup——
 快捷方式与卸载项是它写的。构建是 x64 且未签名,SmartScreen 会问一次(先点
 「更多信息」,再点「仍要运行」);Windows on ARM 上以模拟方式运行,安装器会
 明说,而不是让你对着慢启动猜原因。
@@ -189,17 +204,17 @@ mkdir -p ~/.codex/skills/codewaifu && curl -fsSL \
 
 1. 打开应用。它会跟你打招呼,然后停进菜单栏(macOS)或托盘(Windows、Linux)。
 2. Codex 对第三方 hook 有一次性信任确认:打开 Codex,执行 `/hooks`,信任
-   CodeWaifu 的条目。Claude Code 无需任何操作。
+   CodeWaifu 的条目。其余 agent 都无需任何操作。
 3. 开一个 agent 会话。结束事件、权限请求、通知从此以语音和气泡到达。
 
 环境要求:macOS 12+、Windows 10+,或 glibc 桌面版 Linux(Ubuntu 22.04+、
 Debian 12+、Fedora 40+;x64),外加支持 hooks 的较新版本 Codex CLI /
-Claude Code。
+Claude Code——或者 Cursor Agent、Gemini CLI、Antigravity、Kimi CLI 中的任意一个。
 
 ## 工作原理
 
 ```text
-Codex / Claude Code hook
+任意 agent 的 hook
         |  stdin = 事件 JSON
         v
 ~/.codewaifu/hooks/run-hook.sh        失败开放:任何路径都 exit 0、
@@ -320,7 +335,8 @@ Node/Electron,图标在构建期由符号距离场画出来——仓库保持纯
 - 语音使用系统自带声音,质量取决于系统装了什么。
 - Linux 上非 root 安装时伙伴以 no-sandbox 运行:用户态安装没法写入 Chromium
   想要的 AppArmor profile。要沙箱就走 `.deb`。
-- 插话对 Codex 线程是排队注入;Claude Code 没有受支持的注入接口,因此走剪贴板。
+- 插话对 Codex 线程是排队注入;其余 agent 没有受支持的注入接口,因此走剪贴板,
+  提示里会点名是给哪个 agent 的。
 
 ## 许可证
 

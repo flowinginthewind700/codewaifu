@@ -58,6 +58,31 @@
   --danger-rgb: 248, 113, 113;
   --danger: rgb(var(--danger-rgb));
 
+  /* Agent identity. The tree can hold a dozen tasks and the pane header repeats
+     the agent in 9px, so a tag that reads only as text costs a scan per row:
+     every agent we install hooks for owns a hue, and both surfaces compose it
+     the same way (coloured text plus a 13% fill).
+
+     These are identity colours, never roles: no status chip, border or glow may
+     borrow them, because a hue that means both "blocked" and "Gemini" means
+     neither. That is also why this ramp is deliberately pastel - kimi's
+     chartreuse sits 27 degrees from warn's amber and only still reads as a
+     different fact because it is desaturated against a saturated pill. Raising
+     the chroma here means re-checking that pairing, and reusing `--review` blue
+     for an agent is out: it is the "awaiting my eyes" state colour.
+
+     Agents we only detect but do not integrate (opencode, kiro, pi, trae, a
+     custom herdr manifest) keep the neutral tag - colouring them would
+     advertise support we do not have. */
+  --agent-cursor-rgb: 127, 212, 232;
+  --agent-cursor: rgb(var(--agent-cursor-rgb));
+  --agent-gemini-rgb: 179, 164, 245;
+  --agent-gemini: rgb(var(--agent-gemini-rgb));
+  --agent-antigravity-rgb: 240, 163, 207;
+  --agent-antigravity: rgb(var(--agent-antigravity-rgb));
+  --agent-kimi-rgb: 207, 224, 122;
+  --agent-kimi: rgb(var(--agent-kimi-rgb));
+
   --glass-blur: 26px;
   --glass-sat: 180%;
   /* A light raking from the top-left: this is what reads as "glass" rather

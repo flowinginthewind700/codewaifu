@@ -10,44 +10,173 @@ import {
   renderHookPs1,
   renderHookSh,
   runnerPaths,
+  stubSpecs,
   type RunnerPaths
 } from '../shared/hookScript'
-import { mergeClaudeHooks, mergeCodexHooks, stripClaudeHooks, stripCodexHooks, type HookSpec } from '../shared/hooksMerge'
-import type { HooksReport } from '../shared/protocol'
-import { claudeSettingsFile, codexHooksFile, endpointFile, hooksDir, isWindows, platform, stateDir } from './env'
+import {
+  ANTIGRAVITY_BUNDLE,
+  mergeAntigravityHooks,
+  mergeClaudeHooks,
+  mergeCodexHooks,
+  mergeCursorHooks,
+  scanFlatEvents,
+  stripAntigravityHooks,
+  stripClaudeHooks,
+  stripCodexHooks,
+  stripCursorHooks,
+  type HookSpec
+} from '../shared/hooksMerge'
+import { applyKimiHooks, stripKimiHooks, scanKimiEvents } from '../shared/kimiToml'
+import type { AgentHookStatus, HooksReport } from '../shared/protocol'
+import {
+  antigravityHooksFile,
+  claudeSettingsFile,
+  codexHooksFile,
+  cursorHooksFile,
+  endpointFile,
+  geminiSettingsFile,
+  hooksDir,
+  isWindows,
+  kimiConfigToml,
+  platform,
+  stateDir
+} from './env'
 import { log } from './log'
 import { backupFile } from './store'
 
 const HOOK_TIMEOUT = 5
+/** Gemini's `timeout` unit is milliseconds, unlike every other agent here. */
+const HOOK_TIMEOUT_MS = HOOK_TIMEOUT * 1000
 
-const paths: RunnerPaths = runnerPaths(hooksDir, platform)
+/**
+ * Every agent we can install into. The first two are the ones we can also read a
+ * transcript for; the rest are hook reporters whose events still drive speech,
+ * bubbles, the ledger and the bench tree.
+ */
+export type HookAgent = 'codex' | 'claude' | 'cursor' | 'gemini' | 'antigravity' | 'kimi'
 
 interface AgentTarget {
-  name: 'codex' | 'claude'
+  name: HookAgent
   file: string
-  flavor: 'codex' | 'claude'
 }
 
 const TARGETS: AgentTarget[] = [
-  { name: 'codex', file: codexHooksFile, flavor: 'codex' },
-  { name: 'claude', file: claudeSettingsFile, flavor: 'claude' }
+  { name: 'codex', file: codexHooksFile },
+  { name: 'claude', file: claudeSettingsFile },
+  { name: 'cursor', file: cursorHooksFile },
+  { name: 'gemini', file: geminiSettingsFile },
+  { name: 'antigravity', file: antigravityHooksFile },
+  { name: 'kimi', file: kimiConfigToml }
 ]
 
-/** Which config event each UI toggle maps to, per agent flavor. */
-const EVENT_MAP: Record<keyof AppConfig['events'], { codex?: string[]; claude?: string[] }> = {
-  sessionStart: { codex: ['SessionStart'], claude: ['SessionStart'] },
-  stop: { codex: ['Stop'], claude: ['Stop'] },
-  permission: { codex: ['PermissionRequest'], claude: [] },
-  notification: { claude: ['Notification'] },
-  tool: { codex: ['PostToolUse'], claude: ['PostToolUse'] },
-  compact: { codex: ['PreCompact'], claude: ['PreCompact'] },
+/**
+ * Which config event each UI toggle maps to, per agent. The names are each
+ * agent's own, and an agent missing from a row simply has no equivalent - we
+ * never invent an event a CLI does not emit, because an unknown name is at best
+ * ignored and at worst makes the agent reject the whole config file.
+ *
+ * Notable shapes: Cursor has no session-boundary event we can use (its
+ * process-level hooks reset the submitted-turn prompt cache, so we stay off
+ * them); Antigravity splits tool events from the rest; Kimi has no
+ * `sessionStart`.
+ *
+ * ⛔ Gemini's `BeforeAgent`/`AfterAgent` are *turn* brackets, not session ones
+ * (BeforeAgent fires "after a user submits a prompt", AfterAgent "once per turn
+ * after the model generates its final response"), so they belong on the `prompt`
+ * and `stop` rows. Gemini has genuine `SessionStart`/`SessionEnd`/`Notification`
+ * /`PreCompress` events for everything else. Mapping AfterAgent to the session
+ * kind used to leave a Gemini finish installed but never announced: `session_end`
+ * has no toggle, so it is always silent.
+ */
+const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, string[]>>> = {
+  sessionStart: {
+    codex: ['SessionStart'],
+    claude: ['SessionStart'],
+    gemini: ['SessionStart'],
+    antigravity: ['PreInvocation']
+  },
+  stop: {
+    codex: ['Stop'],
+    claude: ['Stop'],
+    cursor: ['stop', 'afterAgentResponse'],
+    gemini: ['AfterAgent'],
+    antigravity: ['PostInvocation', 'Stop'],
+    kimi: ['Stop', 'StopFailure']
+  },
+  permission: {
+    codex: ['PermissionRequest'],
+    claude: [],
+    cursor: ['preToolUse'],
+    antigravity: ['PreToolUse'],
+    kimi: ['PermissionRequest']
+  },
+  notification: { claude: ['Notification'], gemini: ['Notification'] },
+  tool: {
+    codex: ['PostToolUse'],
+    claude: ['PostToolUse'],
+    cursor: ['postToolUse', 'postToolUseFailure', 'beforeShellExecution', 'beforeMCPExecution'],
+    gemini: ['BeforeTool', 'AfterTool'],
+    antigravity: ['PostToolUse'],
+    kimi: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']
+  },
+  compact: { codex: ['PreCompact'], claude: ['PreCompact'], gemini: ['PreCompress'] },
   subagent: { codex: ['SubagentStop'], claude: ['SubagentStop'] },
-  prompt: { codex: ['UserPromptSubmit'], claude: ['UserPromptSubmit'] }
+  prompt: {
+    codex: ['UserPromptSubmit'],
+    claude: ['UserPromptSubmit'],
+    cursor: ['beforeSubmitPrompt'],
+    gemini: ['BeforeAgent'],
+    kimi: ['UserPromptSubmit']
+  }
 }
 
 const SESSION_MATCHER = 'startup|resume|clear|compact'
 
-export function buildSpecs(config: AppConfig, agent: 'codex' | 'claude'): HookSpec[] {
+/** Every event name this build can ask for, per agent. Derived, so it cannot drift. */
+function allEventsByAgent(): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const toggle of Object.keys(EVENT_MAP) as Array<keyof typeof EVENT_MAP>) {
+    for (const [agent, events] of Object.entries(EVENT_MAP[toggle])) {
+      for (const event of events || []) {
+        if (!out[agent]) out[agent] = []
+        if (!out[agent].includes(event)) out[agent].push(event)
+      }
+    }
+  }
+  return out
+}
+
+const EVENTS_BY_AGENT = allEventsByAgent()
+
+/**
+ * Windows stub keys, one per command we may emit. Cursor and Antigravity answer
+ * differently per event, so those get a stub each rather than sharing one. Kimi
+ * is excluded: it runs its hook through a shell even on Windows (Git Bash), so
+ * its command is always the POSIX form and never touches cmd.exe.
+ */
+const STUB_AGENTS: HookAgent[] = ['codex', 'claude', 'cursor', 'gemini', 'antigravity']
+const STUB_KEYS = stubSpecs(STUB_AGENTS, EVENTS_BY_AGENT).map((spec) => spec.key)
+
+const paths: RunnerPaths = runnerPaths(hooksDir, platform, STUB_KEYS)
+
+/**
+ * Kimi's paths with forward slashes, on every platform. Kimi executes hook
+ * commands through its shell - Git Bash on Windows - so a backslash path would
+ * be eaten as escapes. On POSIX this is a no-op.
+ */
+const kimiPaths: RunnerPaths = runnerPaths(hooksDir.split('\\').join('/'), 'linux')
+
+/** The command for one agent+event, on the platform that agent's shell is. */
+function commandFor(agent: HookAgent, event: string): string {
+  if (agent === 'kimi') return hookCommand(kimiPaths, agent, 'linux', event)
+  return hookCommand(paths, agent, platform, event)
+}
+
+/**
+ * The hook definitions one agent wants for the enabled toggles. Kimi is not
+ * covered here - its config is TOML, see `buildKimiCommands`.
+ */
+export function buildSpecs(config: AppConfig, agent: Exclude<HookAgent, 'kimi'>): HookSpec[] {
   const specs: HookSpec[] = []
   const toggles = config.events
   for (const key of Object.keys(EVENT_MAP) as Array<keyof typeof EVENT_MAP>) {
@@ -56,19 +185,84 @@ export function buildSpecs(config: AppConfig, agent: 'codex' | 'claude'): HookSp
     for (const event of events) {
       const spec: HookSpec = {
         event,
-        command: hookCommand(paths, agent, platform),
-        timeout: HOOK_TIMEOUT
+        command: commandFor(agent, event),
+        timeout: agent === 'gemini' ? HOOK_TIMEOUT_MS : HOOK_TIMEOUT
       }
-      if (event === 'SessionStart') spec.matcher = SESSION_MATCHER
+      // Codex and Claude read a SessionStart `matcher` as a regex, so one
+      // pattern covers startup/resume/clear. Gemini reads the same field as an
+      // *exact string* for lifecycle events, where that pattern matches nothing
+      // and the greeting would silently never fire - so Gemini gets no matcher,
+      // which means every source.
+      if (event === 'SessionStart' && agent !== 'gemini') spec.matcher = SESSION_MATCHER
+      // Cursor puts `command` straight on the definition; Antigravity only does
+      // that for its non-tool events and wants a `type` when it does.
+      if (agent === 'cursor') spec.flat = true
+      if (agent === 'antigravity') {
+        if (event === 'PreToolUse' || event === 'PostToolUse') spec.matcher = '*'
+        else {
+          spec.flat = true
+          spec.flatType = 'command'
+        }
+      }
       if (agent === 'codex') {
         // Codex hooks are advisory for us: never make the agent wait on TTS.
         spec.async = true
-        if (isWindows) spec.commandWindows = hookCommandWindows(paths, agent)
+        if (isWindows) spec.commandWindows = hookCommandWindows(paths, agent, event)
       }
       specs.push(spec)
     }
   }
   return specs
+}
+
+/**
+ * Kimi's commands, keyed by its own event name. Only the toggles that map to a
+ * Kimi event appear, so a user who turned tool events off gets no tool tables.
+ */
+export function buildKimiCommands(config: AppConfig): Record<string, string> {
+  const commands: Record<string, string> = {}
+  for (const key of Object.keys(EVENT_MAP) as Array<keyof typeof EVENT_MAP>) {
+    if (!config.events[key]) continue
+    for (const event of EVENT_MAP[key].kimi || []) {
+      commands[event] = commandFor('kimi', event)
+    }
+  }
+  return commands
+}
+
+/** Merge a config value with the right schema for this agent. */
+function mergeFor(agent: HookAgent, value: unknown, specs: HookSpec[]) {
+  switch (agent) {
+    case 'codex':
+      return mergeCodexHooks(value, specs)
+    case 'cursor':
+      return mergeCursorHooks(value, specs)
+    case 'antigravity':
+      return mergeAntigravityHooks(value, specs)
+    default:
+      // Claude and Gemini share the nested `hooks.<Event>[].hooks[]` shape.
+      return mergeClaudeHooks(value, specs)
+  }
+}
+
+function stripFor(agent: HookAgent, value: unknown) {
+  switch (agent) {
+    case 'codex':
+      return stripCodexHooks(value)
+    case 'cursor':
+      return stripCursorHooks(value)
+    case 'antigravity':
+      return stripAntigravityHooks(value)
+    default:
+      return stripClaudeHooks(value)
+  }
+}
+
+/** Event names in a parsed config that carry a hook of ours, per agent schema. */
+function scanEventsFor(agent: HookAgent, value: unknown): string[] {
+  if (agent === 'cursor') return scanFlatEvents(value)
+  if (agent === 'antigravity') return scanFlatEvents(value, ANTIGRAVITY_BUNDLE)
+  return scanOurEvents(value)
 }
 
 function readJson(file: string): { value: unknown; exists: boolean; error?: string } {
@@ -104,8 +298,14 @@ export function ensureRunnerScripts(): void {
     [paths.cmd, renderHookCmd(), 0o755],
     [paths.ps1, renderHookPs1(), 0o755]
   ]
-  for (const [agent, file] of Object.entries(paths.cmdByAgent)) {
-    files.push([file, renderHookCmdStub(agent), 0o755])
+  // One stub per stubKey. Cursor and Antigravity answer differently per event,
+  // so their keys read `agent:event` and each stub carries its own decision -
+  // a shared stub would print the wrong JSON for half the events.
+  for (const [key, file] of Object.entries(paths.cmdByAgent)) {
+    const colon = key.indexOf(':')
+    const agent = colon === -1 ? key : key.slice(0, colon)
+    const event = colon === -1 ? undefined : key.slice(colon + 1)
+    files.push([file, renderHookCmdStub(agent, event), 0o755])
   }
   for (const [file, body, mode] of files) {
     const current = (() => {
@@ -155,17 +355,64 @@ export function writeEndpoint(endpoint: Endpoint): void {
 }
 
 export interface InstallReport {
-  codex: HooksReport['codex']
-  claude: HooksReport['claude']
+  /** One entry per target, in menu order. */
+  agents: Record<string, AgentHookStatus>
+  /** Mirrors of `agents`, kept because the CLI and older renderers read them. */
+  codex: AgentHookStatus
+  claude: AgentHookStatus
   runnerInstalled: boolean
   codexTrustNeeded: boolean
   warnings: string[]
 }
 
+/** Blank status for every target, so no caller has to rebuild the shape. */
+function emptyAgents(): Record<string, AgentHookStatus> {
+  const out: Record<string, AgentHookStatus> = {}
+  for (const target of TARGETS) out[target.name] = { path: target.file, installed: false, events: [] }
+  return out
+}
+
+/** Read a config file as text, telling "absent" apart from "unreadable". */
+function readText(file: string): { text: string; exists: boolean; error?: string } {
+  try {
+    return { text: fs.readFileSync(file, 'utf8'), exists: true }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { text: '', exists: false }
+    return { text: '', exists: true, error: `unreadable: ${String(error)}` }
+  }
+}
+
+function writeTextAtomic(file: string, text: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, text, 'utf8')
+  fs.renameSync(tmp, file)
+}
+
 /**
- * Merge our hooks into both agents. Never destructive: unknown keys and other
- * tools' hook entries are preserved, and every file we are about to change is
- * backed up first (both next to the original and under ~/.codewaifu/backups).
+ * True when this agent is actually installed here. We never create a config or a
+ * home directory for an agent the user does not have: a fresh `~/.gemini` is
+ * exactly what makes the bench offer Gemini as a runner, so writing one would
+ * advertise a CLI that is not on the machine.
+ */
+function agentPresent(name: HookAgent, file: string): boolean {
+  try {
+    if (fs.existsSync(file)) return true
+    // Codex and Claude Code are the two we always report on, present or not:
+    // the settings panel lists them unconditionally and says "not installed".
+    if (name === 'codex' || name === 'claude') return true
+    return fs.existsSync(path.dirname(file))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Merge our hooks into every agent that is installed. Never destructive: unknown
+ * keys and other tools' hook entries are preserved, and every file we are about
+ * to change is backed up first (both next to the original and under
+ * ~/.codewaifu/backups).
  */
 /**
  * @param endpoint the live relay address, when the caller has one. `codewaifu
@@ -187,79 +434,101 @@ export function installAgentHooks(config: AppConfig, endpoint?: Endpoint | null)
     warnings.push(`runner scripts not written: ${String(error)}`)
   }
 
+  const agents = emptyAgents()
   const report: InstallReport = {
-    codex: { path: codexHooksFile, installed: false, events: [] },
-    claude: { path: claudeSettingsFile, installed: false, events: [] },
+    agents,
+    codex: agents.codex,
+    claude: agents.claude,
     runnerInstalled: true,
     codexTrustNeeded: false,
     warnings
   }
 
   for (const target of TARGETS) {
-    const entry = report[target.name]
-    const specs = buildSpecs(config, target.name)
-    if (specs.length === 0) {
-      entry.events = []
-      entry.installed = false
-      continue
-    }
-    const { value, exists, error } = readJson(target.file)
-    if (error) {
-      entry.error = error
-      warnings.push(`${target.name}: ${error}`)
-      continue
-    }
-    const merge = target.flavor === 'codex' ? mergeCodexHooks(value, specs) : mergeClaudeHooks(value, specs)
-    warnings.push(...merge.warnings.map((w) => `${target.name}: ${w}`))
-    entry.events = merge.events
-    if (!merge.changed) {
-      entry.installed = true
-      continue
-    }
-    if (exists) backupFile(target.file)
+    const entry = agents[target.name]
+    if (!agentPresent(target.name, target.file)) continue
     try {
-      writeJsonAtomic(target.file, merge.json)
-      entry.installed = true
-      log('info', `hooks installed for ${target.name}`, { events: merge.events, file: target.file })
-    } catch (writeError) {
-      entry.error = String(writeError)
-      warnings.push(`${target.name}: write failed: ${String(writeError)}`)
+      installOne(target.name, target.file, config, entry, warnings)
+    } catch (error) {
+      entry.error = String(error)
+      warnings.push(`${target.name}: ${String(error)}`)
     }
   }
 
   // Codex gates non-managed hooks behind a one-time /hooks trust confirmation.
-  report.codexTrustNeeded = report.codex.installed && report.codex.events.length > 0
+  report.codexTrustNeeded = agents.codex.installed && agents.codex.events.length > 0
   return report
+}
+
+/** Install into one target. Kimi's TOML takes a separate path from the JSON ones. */
+function installOne(
+  name: HookAgent,
+  file: string,
+  config: AppConfig,
+  entry: AgentHookStatus,
+  warnings: string[]
+): void {
+  if (name === 'kimi') {
+    const commands = buildKimiCommands(config)
+    if (Object.keys(commands).length === 0) return
+    const { text, error } = readText(file)
+    if (error) {
+      entry.error = error
+      warnings.push(`${name}: ${error}`)
+      return
+    }
+    const applied = applyKimiHooks(text, commands)
+    entry.events = applied.events
+    if (!applied.changed) {
+      entry.installed = true
+      return
+    }
+    backupFile(file)
+    writeTextAtomic(file, applied.text)
+    entry.installed = true
+    log('info', `hooks installed for ${name}`, { events: applied.events, file })
+    return
+  }
+
+  const specs = buildSpecs(config, name)
+  if (specs.length === 0) return
+  const { value, exists, error } = readJson(file)
+  if (error) {
+    entry.error = error
+    warnings.push(`${name}: ${error}`)
+    return
+  }
+  const merge = mergeFor(name, value, specs)
+  warnings.push(...merge.warnings.map((w) => `${name}: ${w}`))
+  entry.events = merge.events
+  if (!merge.changed) {
+    entry.installed = true
+    return
+  }
+  if (exists) backupFile(file)
+  writeJsonAtomic(file, merge.json)
+  entry.installed = true
+  log('info', `hooks installed for ${name}`, { events: merge.events, file })
 }
 
 export function uninstallAgentHooks(): InstallReport {
   const warnings: string[] = []
+  const agents = emptyAgents()
   const report: InstallReport = {
-    codex: { path: codexHooksFile, installed: false, events: [] },
-    claude: { path: claudeSettingsFile, installed: false, events: [] },
+    agents,
+    codex: agents.codex,
+    claude: agents.claude,
     runnerInstalled: false,
     codexTrustNeeded: false,
     warnings
   }
   for (const target of TARGETS) {
-    const entry = report[target.name]
-    const { value, exists, error } = readJson(target.file)
-    if (error || !exists) {
-      if (error) {
-        entry.error = error
-        warnings.push(`${target.name}: ${error}`)
-      }
-      continue
-    }
-    const strip = target.flavor === 'codex' ? stripCodexHooks(value) : stripClaudeHooks(value)
-    if (!strip.changed) continue
-    backupFile(target.file)
+    const entry = agents[target.name]
     try {
-      writeJsonAtomic(target.file, strip.json)
-      log('info', `hooks removed for ${target.name}`, target.file)
-    } catch (writeError) {
-      entry.error = String(writeError)
-      warnings.push(`${target.name}: write failed: ${String(writeError)}`)
+      uninstallOne(target.name, target.file, entry, warnings)
+    } catch (error) {
+      entry.error = String(error)
+      warnings.push(`${target.name}: ${String(error)}`)
     }
   }
   for (const file of [paths.sh, paths.cmd, paths.ps1, ...Object.values(paths.cmdByAgent)]) {
@@ -277,11 +546,45 @@ export function uninstallAgentHooks(): InstallReport {
   return report
 }
 
+function uninstallOne(name: HookAgent, file: string, entry: AgentHookStatus, warnings: string[]): void {
+  if (name === 'kimi') {
+    const { text, exists, error } = readText(file)
+    if (error) {
+      entry.error = error
+      warnings.push(`${name}: ${error}`)
+      return
+    }
+    if (!exists) return
+    const stripped = stripKimiHooks(text)
+    if (!stripped.changed) return
+    backupFile(file)
+    writeTextAtomic(file, stripped.text)
+    log('info', `hooks removed for ${name}`, file)
+    return
+  }
+
+  const { value, exists, error } = readJson(file)
+  if (error || !exists) {
+    if (error) {
+      entry.error = error
+      warnings.push(`${name}: ${error}`)
+    }
+    return
+  }
+  const strip = stripFor(name, value)
+  if (!strip.changed) return
+  backupFile(file)
+  writeJsonAtomic(file, strip.json)
+  log('info', `hooks removed for ${name}`, file)
+}
+
 /** Read-only status for the settings panel; does not write anything. */
-export function reportHooks(): Pick<HooksReport, 'codex' | 'claude' | 'runnerInstalled'> {
-  const out: Pick<HooksReport, 'codex' | 'claude' | 'runnerInstalled'> = {
-    codex: { path: codexHooksFile, installed: false, events: [] },
-    claude: { path: claudeSettingsFile, installed: false, events: [] },
+export function reportHooks(): Pick<HooksReport, 'agents' | 'codex' | 'claude' | 'runnerInstalled'> {
+  const agents = emptyAgents()
+  const out: Pick<HooksReport, 'agents' | 'codex' | 'claude' | 'runnerInstalled'> = {
+    agents,
+    codex: agents.codex,
+    claude: agents.claude,
     runnerInstalled: false
   }
   try {
@@ -290,18 +593,30 @@ export function reportHooks(): Pick<HooksReport, 'codex' | 'claude' | 'runnerIns
     out.runnerInstalled = false
   }
   for (const target of TARGETS) {
-    const entry = out[target.name]
-    const { value, error } = readJson(target.file)
-    if (error) {
-      entry.error = error
-      continue
-    }
-    const merge = target.flavor === 'codex' ? mergeCodexHooks(value, []) : mergeClaudeHooks(value, [])
-    // Merging zero specs strips ours, so "changed" tells us we were installed.
-    entry.installed = merge.changed
-    entry.events = scanOurEvents(value)
+    reportOne(target.name, target.file, agents[target.name])
   }
   return out
+}
+
+function reportOne(name: HookAgent, file: string, entry: AgentHookStatus): void {
+  if (name === 'kimi') {
+    const { text, error } = readText(file)
+    if (error) {
+      entry.error = error
+      return
+    }
+    entry.events = scanKimiEvents(text)
+    entry.installed = entry.events.length > 0
+    return
+  }
+  const { value, error } = readJson(file)
+  if (error) {
+    entry.error = error
+    return
+  }
+  // Merging zero specs strips ours, so "changed" tells us we were installed.
+  entry.installed = mergeFor(name, value, []).changed
+  entry.events = scanEventsFor(name, value)
 }
 
 function scanOurEvents(value: unknown): string[] {

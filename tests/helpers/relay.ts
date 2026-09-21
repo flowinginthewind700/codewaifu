@@ -81,6 +81,10 @@ export function createTestRelay(
     speaking: false,
     queueLength: 0,
     hooks: {
+      agents: {
+        codex: { path: '/codex/hooks.json', installed: false, events: [] },
+        claude: { path: '/claude/settings.json', installed: false, events: [] }
+      },
       codex: { path: '/codex/hooks.json', installed: false, events: [] },
       claude: { path: '/claude/settings.json', installed: false, events: [] },
       runnerInstalled: false,

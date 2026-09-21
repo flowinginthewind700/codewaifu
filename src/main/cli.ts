@@ -1,6 +1,6 @@
 import { detectLang, toSpeakable } from '../shared/lang'
 import type { Endpoint } from '../shared/endpoint'
-import type { RuntimeState } from '../shared/protocol'
+import { HOOK_AGENTS, type AgentHookStatus, type RuntimeState } from '../shared/protocol'
 import { envPinnedPort } from './env'
 import { cliStderr as stderr, cliStdout as stdout, readEndpoint as endpoint } from './cliIo'
 import { installAgentHooks, reportHooks, uninstallAgentHooks } from './hooksInstaller'
@@ -23,7 +23,7 @@ Usage:
 
 Commands:
   pro <verb>         Drive the bench: state, attention, answer, new, log (see below)
-  install            Write the hook relay and register hooks for Codex + Claude Code
+  install            Write the hook relay and register hooks for every installed agent
   uninstall          Remove CodeWaifu hooks and relay scripts (agent configs are backed up first)
   status             Show hook registration, relay port and whether the app is running
   say <text...>      Speak a line now (through the running app when possible)
@@ -32,6 +32,28 @@ Commands:
 
 Run \`codewaifu pro help\` for the bench's own verbs.
 `
+
+/**
+ * One aligned line per agent flavor. The label column is padded so a machine
+ * with six agents reads as a table rather than as six ragged sentences, and an
+ * agent nobody installed still gets a line: silence there would look like the
+ * install skipped it.
+ */
+const AGENT_LABEL_WIDTH = Math.max(...HOOK_AGENTS.map((name) => name.length)) + 2
+
+function agentLine(name: string, status: AgentHookStatus | undefined): string {
+  const label = `  ${name}`.padEnd(AGENT_LABEL_WIDTH + 2, ' ')
+  if (!status) return `${label}: -`
+  return status.installed
+    ? `${label}: ${status.events.join(', ') || 'no events enabled'}`
+    : `${label}: ${status.error ? `FAILED ${status.error}` : 'not on this machine, skipped'}`
+}
+
+function agentStatusLine(name: string, status: AgentHookStatus | undefined): string {
+  const label = `  ${name}`.padEnd(AGENT_LABEL_WIDTH + 2, ' ')
+  if (!status) return `${label}: -`
+  return `${label}: ${status.installed ? status.events.join(', ') || 'none' : 'not installed'}`
+}
 
 /**
  * Commands that also work with no `--cli` in front of them.
@@ -88,8 +110,9 @@ export async function runCli(args: string[]): Promise<number> {
           asJson,
           [
             portLine,
-            `  codex  : ${report.codex.installed ? report.codex.events.join(', ') || 'no events enabled' : `FAILED ${report.codex.error || ''}`}`,
-            `  claude : ${report.claude.installed ? report.claude.events.join(', ') || 'no events enabled' : `FAILED ${report.claude.error || ''}`}`,
+            // One line per flavor we can install into, so a machine with Cursor
+            // and Kimi reads the same way one with only Codex does.
+            ...HOOK_AGENTS.map((name) => agentLine(name, report.agents[name])),
             ...report.warnings.map((w) => `  warning: ${w}`),
             report.codexTrustNeeded
               ? '  next: open Codex, run /hooks once, and trust the CodeWaifu entries (Codex gates non-managed hooks).'
@@ -130,8 +153,7 @@ export async function runCli(args: string[]): Promise<number> {
             `relay      : ${relay ? `127.0.0.1:${relay.port} (${relay.pinned ? 'pinned' : relay.reason})` : point ? `127.0.0.1:${point.port} (stale - nothing answering as CodeWaifu)` : 'no endpoint file'}`,
             relay?.conflict ? `port note  : ${relay.conflict.hint}` : '',
             relay?.duplicateOf ? `warning    : another CodeWaifu (pid ${relay.duplicateOf}) owns the endpoint` : '',
-            `codex hooks: ${status.codex.installed ? status.codex.events.join(', ') || 'none' : 'not installed'}`,
-            `claude hook: ${status.claude.installed ? status.claude.events.join(', ') || 'none' : 'not installed'}`,
+            ...HOOK_AGENTS.map((name) => agentStatusLine(name, status.agents[name])),
             `runner     : ${status.runnerInstalled ? 'installed' : 'missing'}`
           ]
             .filter(Boolean)

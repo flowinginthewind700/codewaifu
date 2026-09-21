@@ -67,7 +67,13 @@ describe('agentLabel', () => {
     expect(agentLabel('claude', 'zh')).toBe('Claude Code')
     expect(agentLabel('unknown', 'zh')).toBe('agent')
     expect(agentLabel('unknown', 'en')).toBe('the agent')
-    expect(agentLabel('gemini', 'en')).toBe('the agent')
+    // Hook-only flavors still get a name to be spoken as: she says "Cursor
+    // Agent needs a decision", not "the agent needs a decision".
+    expect(agentLabel('cursor', 'en')).toBe('Cursor Agent')
+    expect(agentLabel('gemini', 'zh')).toBe('Gemini CLI')
+    expect(agentLabel('kimi', 'en')).toBe('Kimi CLI')
+    // A flavor nobody named still falls back instead of reading a raw id aloud.
+    expect(agentLabel('aider', 'en')).toBe('the agent')
   })
 })
 

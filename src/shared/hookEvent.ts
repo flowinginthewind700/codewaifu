@@ -1,12 +1,30 @@
 import { detectLang, resolveLang, toSpeakable } from './lang'
 import { greetingKeyForHour, pickPhrase, type Rng } from './phrases'
 import type { AppConfig } from './config'
-import type { Agent, EventKind, EventPlan, HookEvent, Lang } from './protocol'
+import { asAgent, type Agent, type EventKind, type EventPlan, type HookEvent, type Lang } from './protocol'
 
 const KIND_BY_EVENT: Record<string, EventKind> = {
   sessionstart: 'session_start',
   sessionend: 'session_end',
   userpromptsubmit: 'prompt',
+  // Cursor names the same moments differently, and Gemini/Antigravity use
+  // their own verbs. All three fold into the kinds the UI already knows.
+  beforesubmitprompt: 'prompt',
+  afteragentresponse: 'stop',
+  beforeshellexecution: 'tool',
+  beforemcpexecution: 'tool',
+  beforetool: 'tool',
+  aftertool: 'tool',
+  // Gemini's `BeforeAgent`/`AfterAgent` bracket one *turn*, not one session -
+  // the docs put BeforeAgent "after a user submits a prompt" and AfterAgent
+  // "once per turn after the model generates its final response". Gemini has
+  // real SessionStart/SessionEnd events for the session boundaries, so folding
+  // these into the session kinds both stole the window on every prompt and
+  // silenced the one moment worth announcing: the agent finishing.
+  beforeagent: 'prompt',
+  afteragent: 'stop',
+  preinvocation: 'session_start',
+  postinvocation: 'session_end',
   pretooluse: 'tool',
   posttooluse: 'tool',
   posttoolusefailure: 'tool',
@@ -18,19 +36,36 @@ const KIND_BY_EVENT: Record<string, EventKind> = {
   subagentstart: 'subagent',
   subagentstop: 'subagent',
   precompact: 'compact',
+  precompress: 'compact',
   postcompact: 'compact',
   compact: 'compact',
   interrupt: 'interrupt'
 }
 
-export function kindForEvent(name: string): EventKind {
-  return KIND_BY_EVENT[String(name || '').toLowerCase().replace(/[-_\s]/g, '')] || 'other'
+/**
+ * A spelling two agents use for a *different* moment than everyone else does.
+ * Cursor's `preToolUse` and Antigravity's `PreToolUse` are their permission
+ * prompts - that is why our hook answers both with "ask" - so they announce
+ * under the permission toggle, which is also the toggle that installs them.
+ * Read as plain tool activity they would be gated by the tool toggle (off by
+ * default) and stay silent while the UI says permission events are on.
+ * Keyed `agent:event`, both lowercased.
+ */
+const KIND_BY_AGENT_EVENT: Record<string, EventKind> = {
+  'cursor:pretooluse': 'permission',
+  'antigravity:pretooluse': 'permission'
+}
+
+export function kindForEvent(name: string, agent?: string): EventKind {
+  const event = String(name || '').toLowerCase().replace(/[-_\s]/g, '')
+  const who = String(agent || '').toLowerCase()
+  return KIND_BY_AGENT_EVENT[`${who}:${event}`] || KIND_BY_EVENT[event] || 'other'
 }
 
 export function agentFromPath(path: string): Agent {
   const parts = String(path || '').split('/').filter(Boolean)
   const raw = (parts[parts.length - 1] || '').toLowerCase()
-  return raw === 'codex' || raw === 'claude' ? raw : 'unknown'
+  return asAgent(raw)
 }
 
 function firstString(obj: Record<string, unknown>, keys: string[]): string {
@@ -67,17 +102,26 @@ export function nextEventId(at: number): string {
  *
  * `paneId` is not in the body: neither agent knows which terminal it is drawn
  * in, but the runner relaying the hook does, and it says so in a header.
+ *
+ * `fallbackEvent` is the event name the installer wrote into the hook command.
+ * Cursor, Gemini, Antigravity and Kimi do not always repeat the event in the
+ * payload, so the config-side name is what says what fired. A payload that does
+ * carry `hook_event_name` still wins: that is the agent's own account.
  */
 export function normalizeHook(
   agentRaw: string,
   payload: unknown,
   at = Date.now(),
-  paneId = ''
+  paneId = '',
+  fallbackEvent = ''
 ): HookEvent {
   const obj = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>
-  const rawEvent = firstString(obj, ['hook_event_name', 'hookEventName', 'event'])
-  const kind = kindForEvent(rawEvent)
-  const agent: Agent = agentRaw === 'codex' || agentRaw === 'claude' ? agentRaw : agentFromPath(rawEvent)
+  const rawEvent = firstString(obj, ['hook_event_name', 'hookEventName', 'event']) || String(fallbackEvent || '')
+  const agent: Agent = agentRaw ? asAgent(agentRaw) : agentFromPath(rawEvent)
+  // The agent is resolved first, because a spelling's meaning can depend on who
+  // sent it: `PreToolUse` is a permission prompt on Cursor and Antigravity, but
+  // plain tool activity on Kimi.
+  const kind = kindForEvent(rawEvent, agent)
   const matcher = firstString(obj, ['matcher', 'hook_matcher', 'source'])
   const toolName = firstString(obj, ['tool_name', 'toolName', 'tool'])
   const toolInput = (obj.tool_input && typeof obj.tool_input === 'object' ? obj.tool_input : {}) as Record<string, unknown>

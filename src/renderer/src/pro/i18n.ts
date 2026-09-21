@@ -405,8 +405,8 @@ const STRINGS = {
   convoPlaceholder: { zh: '接着这个会话说一句…', en: 'Say something to this session…' },
   convoSend: { zh: '发送', en: 'Send' },
   convoSteerHint: {
-    zh: 'Codex 走队列投递，Claude 没有注入接口、内容进剪贴板。',
-    en: 'Codex takes a queue write; Claude has no injection API, so the text goes to your clipboard.'
+    zh: 'Codex 走队列投递；没有注入接口的 agent，内容进剪贴板。',
+    en: 'Codex takes a queue write; an agent with no injection API gets the text on your clipboard.'
   },
   steerSent: { zh: '已送达会话 {id}', en: 'Delivered to session {id}' },
   steerQueued: {
@@ -419,9 +419,14 @@ const STRINGS = {
   },
   steerNoCli: { zh: '找不到 codex CLI，内容已复制到剪贴板', en: 'Could not find the codex CLI; the text is on your clipboard' },
   steerFailed: { zh: '插话失败，内容已复制到剪贴板', en: 'Steering failed; the text is on your clipboard' },
-  steerClaudeClipboard: {
-    zh: 'Claude 没有注入接口，内容已复制到剪贴板，去它的终端粘贴',
-    en: 'Claude has no injection API; the text is on your clipboard, paste it into its terminal'
+  /**
+   * The clipboard fallback, named by agent. Only codex takes a queue write;
+   * every other flavor lands here, and a notice that says "Claude" under a
+   * Cursor task sends the user looking at the wrong program.
+   */
+  steerClipboard: {
+    zh: '{agent} 没有注入接口，内容已复制到剪贴板，去它的终端粘贴',
+    en: '{agent} has no injection API; the text is on your clipboard, paste it into its terminal'
   },
   phaseIdle: { zh: '未接管', en: 'Idle' },
   phaseStarting: { zh: '正在接管…', en: 'Attaching…' },

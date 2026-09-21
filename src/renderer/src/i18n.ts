@@ -83,9 +83,14 @@ const STRINGS = {
   },
   steerNoCli: { zh: '找不到 codex CLI，内容已复制到剪贴板', en: 'Could not find the codex CLI; the text is on your clipboard' },
   steerFailed: { zh: '插话失败，内容已复制到剪贴板', en: 'Steering failed; the text is on your clipboard' },
-  steerClaudeClipboard: {
-    zh: 'Claude Code 不支持外部插话，内容已复制到剪贴板，粘贴即可',
-    en: 'Claude Code cannot be injected from outside; the text is on your clipboard — paste it in'
+  /**
+   * The clipboard fallback, named by agent. Most flavors have no injection
+   * interface at all, and a notice that says "Claude Code" under a Cursor
+   * thread sends the user looking at the wrong program.
+   */
+  steerClipboard: {
+    zh: '{agent} 不支持外部插话，内容已复制到剪贴板，粘贴即可',
+    en: '{agent} cannot be injected from outside; the text is on your clipboard — paste it in'
   },
   live: { zh: '实时', en: 'live' },
   updated: { zh: '更新', en: 'updated' },
@@ -218,6 +223,12 @@ const STRINGS = {
   hooksRemove: { zh: '移除 hooks', en: 'Remove hooks' },
   hooksCodex: { zh: 'Codex', en: 'Codex' },
   hooksClaude: { zh: 'Claude Code', en: 'Claude Code' },
+  hooksCursor: { zh: 'Cursor Agent', en: 'Cursor Agent' },
+  hooksGemini: { zh: 'Gemini CLI', en: 'Gemini CLI' },
+  hooksAntigravity: { zh: 'Antigravity', en: 'Antigravity' },
+  hooksKimi: { zh: 'Kimi CLI', en: 'Kimi CLI' },
+  /** Fallback label for a flavor this table has not been taught yet. */
+  hooksAgent: { zh: 'Agent', en: 'Agent' },
   installed: { zh: '已接入', en: 'installed' },
   notInstalled: { zh: '未接入', en: 'not installed' },
   notFound: { zh: '未检测到', en: 'not detected' },

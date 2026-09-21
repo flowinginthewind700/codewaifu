@@ -485,10 +485,24 @@ const MAX_FRAMES_PER_PUSH = 96
 /** Wall-clock bucket for the push signature, so a timer alone cannot repaint. */
 const SIGNATURE_BUCKET_MS = 15000
 
-/** herdr's own agent ids. Used when it cannot answer `agent.list` itself. */
+/**
+ * herdr's own agent ids. Used when it cannot answer `agent.list` itself.
+ *
+ * Ordered the way the create form reads: the six we install hooks into first
+ * (they are the ones whose events actually reach this app), then the rest of
+ * herdr's catalogue. The order is the menu order, so it is pinned rather than
+ * incidental.
+ */
 const KNOWN_AGENT_KINDS: readonly string[] = [
   'codex',
   'claude',
+  'cursor',
+  'gemini',
+  'kimi',
+  'agy',
+  'opencode',
+  'kiro',
+  'pi',
   'copilot',
   'omp',
   'devin',
@@ -496,6 +510,19 @@ const KNOWN_AGENT_KINDS: readonly string[] = [
   'grok',
   'qwen'
 ]
+
+/**
+ * Kinds whose label is not the name of the binary that launches them.
+ *
+ * herdr names Cursor `cursor` and Kiro `kiro`, but the executables on PATH are
+ * `cursor-agent` and `kiro-cli`. Probing the label would report both as missing
+ * on a machine that has them, which is worse than not listing them: the create
+ * form would offer an agent this machine cannot start.
+ */
+export const KIND_BINARY: Readonly<Record<string, string>> = {
+  cursor: 'cursor-agent',
+  kiro: 'kiro-cli'
+}
 
 /**
  * Union of installed kinds and running kinds, deduped, in a stable order:
@@ -3000,7 +3027,9 @@ export class ProService implements CompanionApi {
           : []
         const installed = (
           await Promise.all(
-            KNOWN_AGENT_KINDS.map(async (kind) => ((await this.findBinaryFn(kind)) ? kind : ''))
+            KNOWN_AGENT_KINDS.map(async (kind) =>
+              (await this.findBinaryFn(KIND_BINARY[kind] ?? kind)) ? kind : ''
+            )
           )
         ).filter((kind) => kind !== '')
         const agents = unionAgentKinds(installed, instances)

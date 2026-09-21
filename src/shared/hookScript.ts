@@ -9,22 +9,119 @@ export interface RunnerPaths {
   cmd: string
   /** PowerShell implementation behind the .cmd stub. */
   ps1: string
-  /** Per-agent Windows stubs, so hook commands never need nested quoting. */
+  /**
+   * Windows stubs, keyed by `stubKey(agent, event)`, so a hook command never
+   * needs nested quoting and never has to carry a JSON literal through cmd.exe.
+   */
   cmdByAgent: Record<string, string>
 }
 
-export function runnerPaths(hooksDir: string, platform: Platform): RunnerPaths {
+/**
+ * What an agent expects on stdout for a given hook event, and why it matters.
+ *
+ * Codex and Claude Code read nothing from a hook's stdout, so their commands
+ * stay silent and byte-identical to what older installs wrote. Cursor and
+ * Antigravity are the opposite: they *fail closed* on empty stdout. Cursor's
+ * permission hooks deny the tool call when they cannot parse an answer, and
+ * Antigravity reads silence on `PreToolUse` as a deny. So for those two the
+ * answer is printed by the hook command itself, before the relay even runs -
+ * a deleted runner then costs us an event, never a blocked agent.
+ *
+ * ⛔ The answers are deliberately the most conservative ones each agent
+ * documents: `"ask"` defers to the user's own permission prompt. Never `allow`
+ * - CodeWaifu observes approvals, it does not grant them.
+ */
+const HOOK_RESPONSES: Record<string, Record<string, string>> = {
+  cursor: {
+    beforeSubmitPrompt: '{"continue":true}',
+    preToolUse: '{"permission":"ask"}',
+    beforeShellExecution: '{"permission":"ask"}',
+    beforeMCPExecution: '{"permission":"ask"}',
+    postToolUse: '{}',
+    postToolUseFailure: '{}',
+    stop: '{}',
+    afterAgentResponse: '{}'
+  },
+  antigravity: {
+    PreToolUse: '{"decision":"ask"}',
+    Stop: '{"decision":""}',
+    PreInvocation: '{}',
+    PostInvocation: '{}',
+    PostToolUse: '{}'
+  },
+  gemini: {
+    BeforeAgent: '{}',
+    AfterAgent: '{}',
+    BeforeTool: '{}',
+    AfterTool: '{}'
+  }
+}
+
+/** The neutral answer for an event of a response-reading agent we did not list. */
+const NEUTRAL_RESPONSE = '{}'
+
+/** Agents whose stdout is parsed as a decision, so silence would be a deny. */
+export const RESPONSE_AGENTS: readonly string[] = Object.keys(HOOK_RESPONSES)
+
+/**
+ * The stdout an agent expects for this hook, or `''` when the agent reads
+ * nothing from stdout and the command must stay silent.
+ */
+export function hookResponse(agent: string, event?: string): string {
+  const table = HOOK_RESPONSES[agent]
+  if (!table) return ''
+  if (!event) return NEUTRAL_RESPONSE
+  return table[event] ?? NEUTRAL_RESPONSE
+}
+
+/**
+ * Windows stub key. One stub per hook command, because the response differs per
+ * event for Cursor and Antigravity: `cursor:beforeSubmitPrompt`. Agents with no
+ * per-event answer keep a single stub (`gemini`, `codex`).
+ */
+export function stubKey(agent: string, event?: string): string {
+  const table = HOOK_RESPONSES[agent]
+  const perEvent = Boolean(table && event && event in table)
+  return perEvent ? `${agent}:${event}` : agent
+}
+
+/** Stub file name for an agent+event pair (`hook-cursor-preToolUse.cmd`). */
+export function stubFileName(agent: string, event?: string): string {
+  return `hook-${stubKey(agent, event).replace(':', '-')}.cmd`
+}
+
+/** Every stub this build knows how to write, keyed by `stubKey`. */
+export function stubSpecs(agents: readonly string[], eventsByAgent: Record<string, readonly string[]>): Array<{
+  key: string
+  agent: string
+  event?: string
+}> {
+  const specs: Array<{ key: string; agent: string; event?: string }> = []
+  for (const agent of agents) {
+    const events = eventsByAgent[agent] || []
+    const table = HOOK_RESPONSES[agent]
+    if (!table || events.length === 0) {
+      specs.push({ key: agent, agent })
+      continue
+    }
+    for (const event of events) specs.push({ key: stubKey(agent, event), agent, event })
+  }
+  return specs
+}
+
+export function runnerPaths(hooksDir: string, platform: Platform, stubs?: readonly string[]): RunnerPaths {
   const sep = platform === 'win32' ? '\\' : '/'
   const join = (...parts: string[]): string => parts.join(sep)
+  const cmdByAgent: Record<string, string> = {}
+  for (const key of stubs ?? ['codex', 'claude']) {
+    cmdByAgent[key] = join(hooksDir, stubFileName(key))
+  }
   return {
     dir: hooksDir,
     sh: join(hooksDir, 'run-hook.sh'),
     cmd: join(hooksDir, 'run-hook.cmd'),
     ps1: join(hooksDir, 'run-hook.ps1'),
-    cmdByAgent: {
-      codex: join(hooksDir, 'hook-codex.cmd'),
-      claude: join(hooksDir, 'hook-claude.cmd')
-    }
+    cmdByAgent
   }
 }
 
@@ -47,6 +144,10 @@ export function renderHookSh(): string {
     '# CodeWaifu hook relay. Generated file - do not edit; the app rewrites it.',
     '# Fail-open: whatever happens here, the agent must not be blocked.',
     'CODEWAIFU_AGENT="${1:-unknown}"',
+    '# The hook event, when the caller knows it. Antigravity names the event in',
+    '# the config rather than in the payload, so without this its events would all',
+    '# arrive unnamed and land in the "other" bucket.',
+    'CODEWAIFU_EVENT="${2:-}"',
     '# Drain stdin first so an early exit never leaves the agent with EPIPE.',
     'BODY=`cat 2>/dev/null`',
     '# ⛔ Not `${BODY:-{}}`: POSIX ends the expansion at the first `}`, so that',
@@ -77,15 +178,26 @@ export function renderHookSh(): string {
     '  -H "Content-Type: application/json" \\',
     '  -H "X-CodeWaifu-Token: ${CODEWAIFU_TOKEN:-}" \\',
     '  -H "X-CodeWaifu-Pane: ${HERDR_PANE_ID:-}" \\',
+    '  -H "X-CodeWaifu-Event: ${CODEWAIFU_EVENT}" \\',
     '  --data-binary "$BODY" 2>/dev/null || true',
     'exit 0',
     ''
   ].join('\n')
 }
 
-/** Windows stub: keeps the hook command free of nested quoting. */
-export function renderHookCmdStub(agent: string): string {
-  return ['@echo off', `call "%~dp0run-hook.cmd" ${agent}`, 'exit /b 0', ''].join('\r\n')
+/**
+ * Windows stub: keeps the hook command free of nested quoting, and prints the
+ * decision this agent+event expects before the relay runs (see HOOK_RESPONSES).
+ */
+export function renderHookCmdStub(agent: string, event?: string): string {
+  const response = hookResponse(agent, event)
+  const args = [agent, ...(event ? [event] : [])].join(' ')
+  const lines = ['@echo off']
+  // `echo` writes the literal, quotes included; the JSON answers carry no `%`,
+  // `&`, `|`, `<`, `>` or `^`, so no cmd.exe escaping is needed.
+  if (response) lines.push(`echo ${response}`)
+  lines.push(`call "%~dp0run-hook.cmd" ${args}`, 'exit /b 0', '')
+  return lines.join('\r\n')
 }
 
 export function renderHookCmd(): string {
@@ -95,7 +207,7 @@ export function renderHookCmd(): string {
     'setlocal',
     'where powershell >nul 2>&1',
     'if errorlevel 1 exit /b 0',
-    'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0run-hook.ps1" -Agent "%~1"',
+    'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0run-hook.ps1" -Agent "%~1" -Event "%~2"',
     'exit /b 0',
     ''
   ].join('\r\n')
@@ -104,7 +216,7 @@ export function renderHookCmd(): string {
 export function renderHookPs1(): string {
   return [
     '# CodeWaifu hook relay (Windows). Generated file - do not edit.',
-    'param([string]$Agent = "unknown")',
+    'param([string]$Agent = "unknown", [string]$Event = "")',
     '$ErrorActionPreference = "SilentlyContinue"',
     'try {',
     '  [Console]::InputEncoding = [System.Text.Encoding]::UTF8',
@@ -128,6 +240,9 @@ export function renderHookPs1(): string {
     '  # The same self-reported pane id the POSIX relay sends. An empty header',
     '  # value is a request some stacks refuse, so only set it when herdr did.',
     '  if ($env:HERDR_PANE_ID) { $headers["X-CodeWaifu-Pane"] = $env:HERDR_PANE_ID }',
+    '  # The hook event, for agents that name it in their config instead of in the',
+    '  # payload (Antigravity). Same rule: only send it when there is something.',
+    '  if ($Event) { $headers["X-CodeWaifu-Event"] = $Event }',
     '  $uri = "$url/hook/$Agent"',
     '  Invoke-RestMethod -Method Post -Uri $uri -ContentType "application/json; charset=utf-8" -Headers $headers -Body $bytes -TimeoutSec 2 | Out-Null',
     '} catch { }',
@@ -140,18 +255,30 @@ export function renderHookPs1(): string {
  * The exact command string written into the agent hook config. Absolute paths
  * are baked in (both agents run the command through a shell in the user's home,
  * not ours) and single-quoted so spaces in the username are safe.
+ *
+ * When the agent reads a decision off stdout, that decision is printed first and
+ * unconditionally: the relay is guarded by `[ -f ]`, so an install whose runner
+ * was deleted must still leave the agent unblocked.
  */
-export function hookCommand(paths: RunnerPaths, agent: string, platform: Platform): string {
+export function hookCommand(paths: RunnerPaths, agent: string, platform: Platform, event?: string): string {
+  const response = hookResponse(agent, event)
   if (platform === 'win32') {
-    const stub = paths.cmdByAgent[agent]
-    return stub ? `cmd /c "${stub}"` : `cmd /c "${paths.cmd}" ${agent}`
+    return hookCommandWindows(paths, agent, event, response)
   }
-  return `if [ -f '${paths.sh}' ]; then /bin/sh '${paths.sh}' ${agent}; fi`
+  const args = [agent, ...(event ? [event] : [])].join(' ')
+  const relay = `if [ -f '${paths.sh}' ]; then /bin/sh '${paths.sh}' ${args}; fi`
+  return response ? `printf '%s\\n' '${response}'; ${relay}` : relay
 }
 
-export function hookCommandWindows(paths: RunnerPaths, agent: string): string {
-  const stub = paths.cmdByAgent[agent]
-  return stub ? `cmd /c "${stub}"` : `cmd /c "${paths.cmd}" ${agent}`
+export function hookCommandWindows(paths: RunnerPaths, agent: string, event?: string, response?: string): string {
+  const answer = response ?? hookResponse(agent, event)
+  const stub = paths.cmdByAgent[stubKey(agent, event)]
+  if (stub) return `cmd /c "${stub}"`
+  const args = [agent, ...(event ? [event] : [])].join(' ')
+  const call = `cmd /c "${paths.cmd}" ${args}`
+  // No stub for this pair (a hand-built RunnerPaths, an old install): echo the
+  // decision here so a decision-reading agent still gets an answer.
+  return answer ? `echo ${answer} & ${call}` : call
 }
 
 /**

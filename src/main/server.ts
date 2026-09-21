@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { normalizeHook } from '../shared/hookEvent'
 import { detectLang, toSpeakable } from '../shared/lang'
 import type { AppConfig } from '../shared/config'
-import type { Agent, HookEvent, RuntimeState, SteerResult, ThreadInfo } from '../shared/protocol'
+import { asAgent, type Agent, type HookEvent, type RuntimeState, type SteerResult, type ThreadInfo } from '../shared/protocol'
 import type { MediaCommand, MediaState } from '../shared/media'
 import { emptyCounts, type BenchView } from '../shared/pro'
 import {
@@ -338,7 +338,11 @@ export class HookServer {
         sub || 'unknown',
         body,
         Date.now(),
-        firstHeader(req, 'x-codewaifu-pane')
+        firstHeader(req, 'x-codewaifu-pane'),
+        // Cursor, Gemini, Antigravity and Kimi name the event in their config,
+        // not in the payload. The relay forwards that name so the event still
+        // lands in the right bucket instead of "other".
+        firstHeader(req, 'x-codewaifu-event')
       )
       // Respond before doing any work: the agent is waiting on this request.
       sendJson(res, 200, { ok: true, id: event.id })
@@ -386,7 +390,7 @@ export class HookServer {
 
     if (route === 'steer' && method === 'POST') {
       const body = await readBody(req)
-      const agent: Agent = body.agent === 'codex' || body.agent === 'claude' ? body.agent : 'unknown'
+      const agent: Agent = asAgent(body.agent)
       const result = await this.deps.steer(agent, String(body.threadId || ''), String(body.message || ''))
       sendJson(res, result.ok ? 200 : 409, result)
       return

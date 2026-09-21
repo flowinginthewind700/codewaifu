@@ -48,6 +48,10 @@ const FILE_CACHE_MS = 5000
 export function transcriptFile(agent: Agent, threadId: string): string | null {
   const id = String(threadId || '').trim()
   if (!id || !/^[0-9a-fA-F-]{8,64}$/.test(id)) return null
+  // Only codex and claude write JSONL we know how to find. Without this guard a
+  // named agent such as `kimi` would fall through to the codex rollout walk and
+  // match some unrelated session file by id.
+  if (agent !== 'codex' && agent !== 'claude') return null
   const key = `${agent}:${id}`
   const hit = fileCache.get(key)
   if (hit && Date.now() - hit.at < FILE_CACHE_MS) return hit.file

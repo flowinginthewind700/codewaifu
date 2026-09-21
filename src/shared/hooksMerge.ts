@@ -11,6 +11,14 @@ export interface HookSpec {
   /** Codex-only: do not block the agent on this hook. */
   async?: boolean
   statusMessage?: string
+  /**
+   * Write `command`/`timeout` straight onto the definition object instead of
+   * nesting them under `hooks: [...]`. That is Cursor's schema, and
+   * Antigravity's for its non-tool events.
+   */
+  flat?: boolean
+  /** `type` written onto a flat definition when the agent wants one. */
+  flatType?: string
 }
 
 export interface MergeResult {
@@ -228,4 +236,150 @@ export function stripClaudeHooks(existing: unknown): MergeResult {
   else delete root.hooks
   const changed = stable(existing ?? {}) !== stable(root)
   return { json: root, changed, events: [], warnings: parsed.warnings }
+}
+
+// ---------------------------------------------------------------------------
+// Flat-definition schemas: Cursor and Antigravity.
+//
+// Claude and Codex put the command inside `{ hooks: [ ... ] }`. Cursor puts
+// `command` and `timeout` directly on the definition object, and Antigravity
+// mixes both shapes in one file (tool events nest, the rest do not). The
+// group-based merge above cannot see a flat command - `normalizeGroup` hands it
+// an empty `hooks` array, which is also how it recognizes someone else's shape,
+// so our own entries would survive every strip and duplicate on every install.
+// These two functions understand both shapes at once.
+// ---------------------------------------------------------------------------
+
+interface FlatDefinition {
+  command?: string
+  hooks?: Array<{ command?: string; [key: string]: unknown }>
+  [key: string]: unknown
+}
+
+/** True when either shape of this definition points into our hooks dir. */
+function definitionIsOurs(raw: unknown): boolean {
+  if (!isRecord(raw)) return false
+  const def = raw as FlatDefinition
+  if (isOurHookCommand(def.command)) return true
+  return Array.isArray(def.hooks) && def.hooks.some((h) => isOurHookCommand(h?.command))
+}
+
+function definitionFor(spec: HookSpec): FlatDefinition {
+  if (spec.flat) {
+    const def: FlatDefinition = { command: spec.command }
+    if (spec.flatType) def.type = spec.flatType
+    if (typeof spec.timeout === 'number') def.timeout = spec.timeout
+    return def
+  }
+  const entry: Record<string, unknown> = { type: 'command', command: spec.command }
+  if (typeof spec.timeout === 'number') entry.timeout = spec.timeout
+  const group: FlatDefinition = { hooks: [entry] }
+  if (typeof spec.matcher === 'string' && spec.matcher) group.matcher = spec.matcher
+  return group
+}
+
+interface FlatRebuild {
+  events: Record<string, unknown>
+  installed: string[]
+  warnings: string[]
+}
+
+/**
+ * Remove every definition of ours from every event, then write the specs back.
+ * Sweeping events we no longer subscribe to matters: without it a user who
+ * upgrades keeps firing hooks for events this build dropped.
+ */
+function rebuildFlat(raw: unknown, specs: HookSpec[]): FlatRebuild {
+  const warnings: string[] = []
+  const events: Record<string, unknown> = {}
+  const opaque = new Set<string>()
+  if (isRecord(raw)) {
+    for (const [name, defs] of Object.entries(raw)) {
+      if (!Array.isArray(defs)) {
+        events[name] = defs
+        opaque.add(name)
+        warnings.push(`${name} is not an array; left untouched`)
+        continue
+      }
+      events[name] = defs.filter((def) => !definitionIsOurs(def))
+    }
+  }
+  for (const spec of specs) {
+    if (opaque.has(spec.event)) {
+      warnings.push(`${spec.event} is not an array; CodeWaifu did not install into it`)
+      continue
+    }
+    const list = Array.isArray(events[spec.event]) ? [...(events[spec.event] as unknown[])] : []
+    list.push(definitionFor(spec))
+    events[spec.event] = list
+  }
+  for (const [name, defs] of Object.entries(events)) {
+    if (Array.isArray(defs) && defs.length === 0) delete events[name]
+  }
+  return { events, installed: eventsWithFlatOurs(events), warnings }
+}
+
+function eventsWithFlatOurs(events: Record<string, unknown>): string[] {
+  return Object.entries(events)
+    .filter(([, defs]) => Array.isArray(defs) && defs.some(definitionIsOurs))
+    .map(([name]) => name)
+    .sort()
+}
+
+/**
+ * Cursor `~/.cursor/hooks.json`. Same `hooks.<Event>` layout, flat definitions,
+ * and a required `version: 1` at the top - a file without it is rejected, so we
+ * add it when absent and never touch a value the user pinned.
+ */
+export function mergeCursorHooks(existing: unknown, specs: HookSpec[]): MergeResult {
+  const before = isRecord(existing) ? existing : {}
+  const root: Record<string, unknown> = { ...before }
+  const rebuilt = rebuildFlat(root.hooks, specs)
+  root.hooks = rebuilt.events
+  if (root.version === undefined) root.version = 1
+  const changed = stable(before) !== stable(root)
+  return { json: root, changed, events: rebuilt.installed, warnings: rebuilt.warnings }
+}
+
+export function stripCursorHooks(existing: unknown): MergeResult {
+  const root = isRecord(existing) ? { ...existing } : {}
+  const rebuilt = rebuildFlat(root.hooks, [])
+  if (Object.keys(rebuilt.events).length > 0) root.hooks = rebuilt.events
+  else delete root.hooks
+  const changed = stable(existing ?? {}) !== stable(root)
+  return { json: root, changed, events: [], warnings: rebuilt.warnings }
+}
+
+/**
+ * Antigravity `~/.gemini/config/hooks.json`. Global hooks live under a *named
+ * bundle* so several tools can share the file: everything outside our key is
+ * carried through untouched, and uninstalling removes our key outright once the
+ * bundle is empty.
+ */
+export const ANTIGRAVITY_BUNDLE = 'codewaifu'
+
+export function mergeAntigravityHooks(existing: unknown, specs: HookSpec[]): MergeResult {
+  const before = isRecord(existing) ? existing : {}
+  const root: Record<string, unknown> = { ...before }
+  const rebuilt = rebuildFlat(root[ANTIGRAVITY_BUNDLE], specs)
+  if (Object.keys(rebuilt.events).length > 0) root[ANTIGRAVITY_BUNDLE] = rebuilt.events
+  else delete root[ANTIGRAVITY_BUNDLE]
+  const changed = stable(before) !== stable(root)
+  return { json: root, changed, events: rebuilt.installed, warnings: rebuilt.warnings }
+}
+
+export function stripAntigravityHooks(existing: unknown): MergeResult {
+  const root = isRecord(existing) ? { ...existing } : {}
+  const rebuilt = rebuildFlat(root[ANTIGRAVITY_BUNDLE], [])
+  if (Object.keys(rebuilt.events).length > 0) root[ANTIGRAVITY_BUNDLE] = rebuilt.events
+  else delete root[ANTIGRAVITY_BUNDLE]
+  const changed = stable(existing ?? {}) !== stable(root)
+  return { json: root, changed, events: [], warnings: rebuilt.warnings }
+}
+
+/** Event names in a flat-schema file that currently carry a hook of ours. */
+export function scanFlatEvents(value: unknown, key?: string): string[] {
+  const root = isRecord(value) ? value : {}
+  const source = key ? root[key] : root.hooks
+  return eventsWithFlatOurs(isRecord(source) ? source : {})
 }

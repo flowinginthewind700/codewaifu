@@ -166,6 +166,14 @@ export const PHRASES: Record<PhraseKey, Pool> = {
 const AGENT_LABEL: Record<string, Record<Lang, string>> = {
   codex: { zh: 'Codex', en: 'Codex' },
   claude: { zh: 'Claude Code', en: 'Claude Code' },
+  cursor: { zh: 'Cursor Agent', en: 'Cursor Agent' },
+  gemini: { zh: 'Gemini CLI', en: 'Gemini CLI' },
+  antigravity: { zh: 'Antigravity', en: 'Antigravity' },
+  kimi: { zh: 'Kimi CLI', en: 'Kimi CLI' },
+  opencode: { zh: 'OpenCode', en: 'OpenCode' },
+  kiro: { zh: 'Kiro', en: 'Kiro' },
+  pi: { zh: 'Pi', en: 'Pi' },
+  trae: { zh: 'Trae', en: 'Trae' },
   unknown: { zh: 'agent', en: 'the agent' }
 }
 

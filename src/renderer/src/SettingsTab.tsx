@@ -4,7 +4,15 @@ import type { ConfigPatch } from '@shared/config'
 import { clampZoom, ZOOM_MAX, ZOOM_MIN } from '@shared/zoom'
 import { acceleratorFromCombo, formatAccelerator } from '@shared/hotkey'
 import { normalizeRequestedPort } from '@shared/portPolicy'
-import type { NeuralPhase, NeuralStatus, RedactedConfig, RuntimeState, VoiceEngine } from '@shared/protocol'
+import {
+  HOOK_AGENTS,
+  type AgentHookStatus,
+  type NeuralPhase,
+  type NeuralStatus,
+  type RedactedConfig,
+  type RuntimeState,
+  type VoiceEngine
+} from '@shared/protocol'
 import { LIVE2D_CATALOG } from '@shared/live2dCatalog'
 import type { Translate } from './i18n'
 import { assetUrl } from './live2d/assets'
@@ -335,8 +343,15 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
           checked={config.autoInstallHooks}
           onChange={(v) => onChange({ autoInstallHooks: v })}
         />
-        <HookRow name={t('hooksCodex')} report={runtime.hooks.codex} detected={runtime.agents.codex} t={t} />
-        <HookRow name={t('hooksClaude')} report={runtime.hooks.claude} detected={runtime.agents.claude} t={t} />
+        {HOOK_ROWS.map((row) => (
+          <HookRow
+            key={row.agent}
+            name={t(row.label)}
+            report={runtime.hooks.agents[row.agent] ?? EMPTY_HOOK_STATUS}
+            detected={Boolean(runtime.agents[row.agent])}
+            t={t}
+          />
+        ))}
         {runtime.hooks.codexTrustNeeded ? <div className="hint warn">{t('trustNeeded')}</div> : null}
         <div className="row">
           <div className="row-label" />
@@ -378,6 +393,28 @@ const EVENT_ROWS: Array<{ key: keyof RedactedConfig['events']; label: Parameters
   { key: 'tool', label: 'evTool' },
   { key: 'prompt', label: 'evPrompt' }
 ]
+
+/**
+ * The hooks section lists every flavor we can install into, in one order.
+ * Derived from `HOOK_AGENTS` rather than typed out here: adding an agent to the
+ * shared list must add its row, or settings silently stops telling the truth
+ * about what is installed.
+ */
+const HOOK_LABELS: Record<string, Parameters<Translate>[0]> = {
+  codex: 'hooksCodex',
+  claude: 'hooksClaude',
+  cursor: 'hooksCursor',
+  gemini: 'hooksGemini',
+  antigravity: 'hooksAntigravity',
+  kimi: 'hooksKimi'
+}
+
+const HOOK_ROWS: Array<{ agent: (typeof HOOK_AGENTS)[number]; label: Parameters<Translate>[0] }> = HOOK_AGENTS.map(
+  (agent) => ({ agent, label: HOOK_LABELS[agent] ?? 'hooksAgent' })
+)
+
+/** An agent main never reported: shown as "not detected", never as installed. */
+const EMPTY_HOOK_STATUS: AgentHookStatus = { path: '', installed: false, events: [] }
 
 /**
  * The port field keeps a local draft so typing "80" on the way to "8080" does

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import { readClipboardPayload, savePastedImage, sweepDue } from './attach'
 import type { Core } from './core'
 import { log } from './log'
-import type { Agent } from '../shared/protocol'
+import { asAgent, type Agent } from '../shared/protocol'
 import type { MediaCommand } from '../shared/media'
 import type { AppConfig } from '../shared/config'
 import { IPC } from '../shared/ipcChannels'
@@ -84,7 +84,9 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
 
   handle(IPC.transcript, (payload) => {
     const body = (payload || {}) as { agent?: Agent; threadId?: string; limit?: number; fresh?: boolean }
-    const agent: Agent = body.agent === 'codex' || body.agent === 'claude' ? body.agent : 'unknown'
+    // `asAgent` accepts every agent we can name; the transcript reader itself
+    // only has readers for codex and claude, so it returns null for the rest.
+    const agent: Agent = asAgent(body.agent)
     if (agent === 'unknown') return { ok: false, transcript: null, error: 'unknown agent' }
     const limit = Number(body.limit) || undefined
     const transcript = core.transcript(agent, String(body.threadId || ''), { limit, fresh: Boolean(body.fresh) })
@@ -103,7 +105,7 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
 
   handle(IPC.steer, async (payload) => {
     const body = (payload || {}) as { agent?: Agent; threadId?: string; message?: string }
-    const agent: Agent = body.agent === 'codex' || body.agent === 'claude' ? body.agent : 'unknown'
+    const agent: Agent = asAgent(body.agent)
     return core.steer(agent, String(body.threadId || ''), String(body.message || ''))
   })
 

@@ -22,7 +22,8 @@ import {
 } from 'lucide-react'
 import { DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT, splitBlocks, type ChatMessage, type ChatTranscript } from '@shared/chat'
 import { isImeKey } from '@shared/ime'
-import type { SteerResult, ThreadInfo } from '@shared/protocol'
+import type { Lang, SteerResult, ThreadInfo } from '@shared/protocol'
+import { agentLabel } from '@shared/phrases'
 import { api, platform } from './api'
 import { codeSpans, commandSpans, outputSpans } from './highlight'
 import { useAttachField } from './useAttach'
@@ -33,7 +34,8 @@ import { Tip } from './Tip'
 /**
  * The conversation of one agent thread, read straight off the agent's own
  * transcript file, with a composer that steers it (Codex via `codex queue`,
- * Claude via the clipboard — it has no injection API and we say so).
+ * every other flavor via the clipboard — none of them has an injection API and
+ * we say so).
  *
  * Everything here is read-only against the transcript: we never write to the
  * agents' files, and the poll is an incremental byte-range read on the main
@@ -60,18 +62,33 @@ const STEER_NOTICE: Partial<Record<NonNullable<SteerResult['reason']>, StringKey
   undelivered: 'steerUndelivered',
   'no-cli': 'steerNoCli',
   failed: 'steerFailed',
-  clipboard: 'steerClaudeClipboard'
+  clipboard: 'steerClipboard'
 }
 
-function steerNotice(result: SteerResult, threadId: string, t: Translate): string {
+/**
+ * One line of copy telling the user what actually happened to their text.
+ *
+ * `agentName` is interpolated rather than baked into the string because the
+ * clipboard fallback now covers every flavor that has no injection API, not
+ * just Claude: naming the wrong program in the notice sends the user looking
+ * for a terminal they never opened.
+ */
+function steerNotice(
+  result: SteerResult,
+  threadId: string,
+  t: Translate,
+  agentName: string
+): string {
   const key = result.reason ? STEER_NOTICE[result.reason] : undefined
   if (!key) return result.message || (result.ok ? t('steerSend') : t('steerFailed'))
-  return t(key).replace('{id}', threadId.slice(0, 8))
+  return t(key).replace('{id}', threadId.slice(0, 8)).replace('{agent}', agentName)
 }
 
 interface ChatViewProps {
   thread: ThreadInfo
   t: Translate
+  /** Resolved UI language; the agent names are bilingual in the table. */
+  lang: Lang
   onBack: () => void
   onSteer: (agent: ThreadInfo['agent'], threadId: string, message: string) => Promise<SteerResult>
   onNotice: (text: string) => void
@@ -79,7 +96,16 @@ interface ChatViewProps {
   onOpenPath: (path: string) => void
 }
 
-export function ChatView({ thread, t, onBack, onSteer, onNotice, onSay, onOpenPath }: ChatViewProps): ReactElement {
+export function ChatView({
+  thread,
+  t,
+  lang,
+  onBack,
+  onSteer,
+  onNotice,
+  onSay,
+  onOpenPath
+}: ChatViewProps): ReactElement {
   const [transcript, setTranscript] = useState<ChatTranscript | null>(null)
   const [limit, setLimit] = useState(DEFAULT_MESSAGE_LIMIT)
   const [loading, setLoading] = useState(true)
@@ -223,13 +249,13 @@ export function ChatView({ thread, t, onBack, onSteer, onNotice, onSay, onOpenPa
       // Keep the draft when the agent never received it — the text is on the
       // clipboard now and the user still wants to paste it into the terminal.
       if (result.ok && result.method === 'queue') setDraft('')
-      onNotice(steerNotice(result, thread.id, t))
+      onNotice(steerNotice(result, thread.id, t, agentLabel(thread.agent, lang)))
       // A queued steer shows up in the transcript a moment later; nudge it.
       window.setTimeout(() => void load(limit, false), 900)
     } finally {
       setBusy(false)
     }
-  }, [busy, draft, limit, load, onNotice, onSteer, t, thread.agent, thread.id])
+  }, [busy, draft, lang, limit, load, onNotice, onSteer, t, thread.agent, thread.id])
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {

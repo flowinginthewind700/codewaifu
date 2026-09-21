@@ -745,6 +745,29 @@ textarea {
   background: rgba(var(--coral-rgb), 0.13);
 }
 
+/* The rest of the agents we integrate, one hue each from tokens.css. The fill
+   is the same 13% the two above use, so a row holding four agents reads as four
+   tags of equal weight rather than one loud tag and three faint ones. */
+.tag.cursor {
+  color: var(--agent-cursor);
+  background: rgba(var(--agent-cursor-rgb), 0.13);
+}
+
+.tag.gemini {
+  color: var(--agent-gemini);
+  background: rgba(var(--agent-gemini-rgb), 0.13);
+}
+
+.tag.antigravity {
+  color: var(--agent-antigravity);
+  background: rgba(var(--agent-antigravity-rgb), 0.13);
+}
+
+.tag.kimi {
+  color: var(--agent-kimi);
+  background: rgba(var(--agent-kimi-rgb), 0.13);
+}
+
 .field {
   display: flex;
   flex-direction: column;

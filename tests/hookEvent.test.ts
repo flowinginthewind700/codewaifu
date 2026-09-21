@@ -30,6 +30,35 @@ describe('kindForEvent', () => {
     expect(kindForEvent(raw)).toBe(kind)
   })
 
+  // Cursor names the same moments differently, and Gemini/Antigravity use their
+  // own verbs again. All of them fold into kinds the UI already knows, so a
+  // Cursor prompt still drives the prompt toggle and a Gemini tool call still
+  // reads as a tool call rather than landing in "other".
+  it.each([
+    ['beforeSubmitPrompt', 'prompt'],
+    ['afterAgentResponse', 'stop'],
+    ['stop', 'stop'],
+    ['postToolUse', 'tool'],
+    ['postToolUseFailure', 'tool'],
+    ['beforeShellExecution', 'tool'],
+    ['beforeMCPExecution', 'tool'],
+    ['preToolUse', 'tool'],
+    ['BeforeTool', 'tool'],
+    ['AfterTool', 'tool'],
+    // Gemini brackets a *turn* with these two, not a session: BeforeAgent fires
+    // once the user submits a prompt, AfterAgent once per turn when the model has
+    // its final response. Gemini has real SessionStart/SessionEnd for the session
+    // boundaries, so a turn event landing in a session kind is a bug, not a
+    // synonym.
+    ['BeforeAgent', 'prompt'],
+    ['AfterAgent', 'stop'],
+    ['PreCompress', 'compact'],
+    ['PreInvocation', 'session_start'],
+    ['PostInvocation', 'session_end']
+  ])('maps the %s spelling to %s', (raw, kind) => {
+    expect(kindForEvent(raw)).toBe(kind)
+  })
+
   it('degrades to "other" for an event name it has never seen', () => {
     expect(kindForEvent('BrandNewAgentEvent')).toBe('other')
     expect(kindForEvent('')).toBe('other')
@@ -113,6 +142,83 @@ describe('normalizeHook', () => {
   it('hands out unique ids', () => {
     const ids = new Set(Array.from({ length: 500 }, () => normalizeHook('codex', { hook_event_name: 'Stop' }).id))
     expect(ids.size).toBe(500)
+  })
+
+  it('uses the event the installer named when the payload says nothing', () => {
+    // Cursor, Gemini, Antigravity and Kimi do not repeat the event in the body;
+    // the config-side name the relay sends in a header is what says what fired.
+    const event = normalizeHook('cursor', { cwd: '/tmp/x' }, 5, 'w1:p2', 'beforeShellExecution')
+    expect(event).toMatchObject({ agent: 'cursor', rawEvent: 'beforeShellExecution', kind: 'tool' })
+    expect(event.title).toBe('Tool call')
+  })
+
+  it('still lets the agent\'s own payload win over the fallback', () => {
+    // The fallback is a guess from the config; the body is the agent's account.
+    const event = normalizeHook('claude', { hook_event_name: 'Stop' }, 5, '', 'PreToolUse')
+    expect(event.rawEvent).toBe('Stop')
+    expect(event.kind).toBe('stop')
+  })
+
+  it('falls back to "other" when neither the payload nor the config names an event', () => {
+    const event = normalizeHook('gemini', {}, 5, '', '')
+    expect(event.rawEvent).toBe('')
+    expect(event.kind).toBe('other')
+    expect(event.title).toBe('Event')
+  })
+
+  it('narrows an agent name it has never seen to unknown', () => {
+    expect(normalizeHook('cursor', {}, 5, '', 'preToolUse').agent).toBe('cursor')
+    expect(normalizeHook('antigravity', {}, 5, '', 'Stop').agent).toBe('antigravity')
+    expect(normalizeHook('kimi', {}, 5, '', 'Stop').agent).toBe('kimi')
+    expect(normalizeHook('herdr-agent-17', {}, 5, '', 'Stop').agent).toBe('unknown')
+    expect(normalizeHook('', {}, 5, '', 'Stop').agent).toBe('unknown')
+  })
+
+  it('plans the new agents\' events exactly like the codex events they stand for', () => {
+    const toolsOn = config({ events: { ...config().events, tool: true } })
+    // Each new spelling next to the codex/claude spelling it means, so a mapping
+    // change on one side cannot pass silently while the other keeps its old plan.
+    const pairs: Array<[string, string, string, string]> = [
+      ['cursor', 'beforeSubmitPrompt', 'codex', 'UserPromptSubmit'],
+      ['cursor', 'afterAgentResponse', 'claude', 'Stop'],
+      ['cursor', 'beforeShellExecution', 'codex', 'PostToolUse'],
+      ['gemini', 'BeforeTool', 'codex', 'PostToolUse'],
+      ['gemini', 'BeforeAgent', 'codex', 'UserPromptSubmit'],
+      ['gemini', 'AfterAgent', 'codex', 'Stop'],
+      ['gemini', 'PreCompress', 'claude', 'PreCompact'],
+      ['antigravity', 'PreInvocation', 'codex', 'SessionStart'],
+      ['antigravity', 'PostInvocation', 'codex', 'SessionEnd'],
+      ['kimi', 'Stop', 'claude', 'Stop']
+    ]
+    for (const [agent, event, peer, peerEvent] of pairs) {
+      const ours = planEvent(toolsOn, normalizeHook(agent, {}, 5, '', event), { rng })
+      const theirs = planEvent(toolsOn, normalizeHook(peer, {}, 5, '', peerEvent), { rng })
+      expect([ours.speak, ours.lang, ours.popWindow], `${agent}:${event}`).toEqual([
+        theirs.speak,
+        theirs.lang,
+        theirs.popWindow
+      ])
+    }
+
+    // Two of them spelled out, so the loop above is not comparing silence to
+    // silence: a Cursor tool call is announced, an Antigravity session start
+    // still pops the window forward.
+    const shell = normalizeHook('cursor', { tool_name: 'shell' }, 5, '', 'beforeShellExecution')
+    expect(planEvent(toolsOn, shell, { rng }).speak).toBe(true)
+    expect(planEvent(config(), normalizeHook('antigravity', {}, 5, '', 'PreInvocation'), { rng }).popWindow).toBe(true)
+
+    // The regression this parity loop exists for: a Gemini turn finishing is a
+    // `stop`, so it is announced under the stop toggle rather than being filed
+    // under a session kind that no toggle owns (which is always silent).
+    const geminiDone = normalizeHook('gemini', { prompt_response: 'All done.' }, 5, '', 'AfterAgent')
+    expect(geminiDone.kind).toBe('stop')
+    expect(planEvent(config(), geminiDone, { rng }).speak).toBe(true)
+    expect(planEvent(config(), geminiDone, { rng }).popWindow).toBe(false)
+    // And a Gemini prompt does not drag the window forward the way a greeting
+    // does: `BeforeAgent` fires on every turn, so popping would be a nuisance.
+    const geminiPrompt = normalizeHook('gemini', { prompt: 'hi' }, 5, '', 'BeforeAgent')
+    expect(geminiPrompt.kind).toBe('prompt')
+    expect(planEvent(config(), geminiPrompt, { rng }).popWindow).toBe(false)
   })
 })
 

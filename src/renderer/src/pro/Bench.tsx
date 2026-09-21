@@ -1085,7 +1085,7 @@ export function Bench(): ReactElement {
                 // pane grid's honest answer here is "no panes", which tells the
                 // human nothing about work that is still running in their own
                 // terminal, so the transcript takes the center instead.
-                <ConversationPanel task={conversationTask} t={t} onNotify={push} />
+                <ConversationPanel task={conversationTask} t={t} lang={lang} onNotify={push} />
               ) : (
                 <>
                   <PaneGrid
@@ -1096,7 +1096,7 @@ export function Bench(): ReactElement {
                     onNotify={push}
                   />
                   {switchable ? (
-                    <ConversationPanel task={selectedTask!} t={t} onNotify={push} />
+                    <ConversationPanel task={selectedTask!} t={t} lang={lang} onNotify={push} />
                   ) : null}
                 </>
               )}

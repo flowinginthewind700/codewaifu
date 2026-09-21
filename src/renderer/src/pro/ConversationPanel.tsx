@@ -11,9 +11,9 @@
  * agent said.
  *
  * Answering goes through `steer` rather than through a PTY, for the same reason
- * and with the same honesty: Codex takes a queue write, Claude has no injection
- * API and gets the clipboard, and the panel reports which of those happened
- * instead of implying a delivery it cannot prove.
+ * and with the same honesty: Codex takes a queue write, every other flavor has
+ * no injection API and gets the clipboard, and the panel reports which of those
+ * happened instead of implying a delivery it cannot prove.
  *
  * Read-only against the transcript, always. Nothing here writes to an agent's
  * files, and the poll is an incremental byte-range read on the main side.
@@ -27,12 +27,14 @@ import {
   type ChatMessage,
   type ChatTranscript
 } from '@shared/chat'
-import type { SteerResult } from '@shared/protocol'
+import type { Lang, SteerResult } from '@shared/protocol'
+import { agentLabel } from '@shared/phrases'
 import type { TaskView } from '@shared/pro'
 import { codeSpans, commandSpans, outputSpans } from '../highlight'
 import { useImeEnter } from '../useIme'
 import { useAttachField } from '../useAttach'
 import { platform, proApi } from './api'
+import { agentClass } from './agentTag'
 import { fill, type StringKey, type Translate } from './i18n'
 import type { Tone } from './toast'
 
@@ -50,13 +52,33 @@ const STEER_NOTICE: Partial<Record<NonNullable<SteerResult['reason']>, StringKey
   undelivered: 'steerUndelivered',
   'no-cli': 'steerNoCli',
   failed: 'steerFailed',
-  clipboard: 'steerClaudeClipboard'
+  clipboard: 'steerClipboard'
 }
 
-function steerNotice(result: SteerResult, sessionId: string, t: Translate): string {
+/**
+ * A human-facing name for the task's agent flavor.
+ *
+ * `agentKind` is whatever herdr reported - a bare `codex`, a suffixed binary
+ * like `cursor-agent`, herdr's own `agy` for Antigravity, or a custom manifest
+ * this build has never seen. `agentClass` already collapses that spread into
+ * one family per agent for the colour tag, and the label table is keyed by
+ * family, so reusing it keeps the notice and the tag saying the same thing. An
+ * unrecognized family falls through to the label table's own honest answer
+ * ("the agent") rather than to a guess.
+ */
+function agentName(agentKind: string, lang: Lang): string {
+  const family = agentClass(agentKind) || String(agentKind || '').trim().toLowerCase()
+  if (!family) return agentLabel('unknown', lang)
+  const label = agentLabel(family, lang)
+  // A family the label table has never been taught resolves to "the agent",
+  // which is less useful than the kind itself sitting on screen.
+  return label === agentLabel('unknown', lang) ? family : label
+}
+
+function steerNotice(result: SteerResult, sessionId: string, t: Translate, name: string): string {
   const key = result.reason ? STEER_NOTICE[result.reason] : undefined
   if (!key) return result.message || (result.ok ? t('convoSend') : t('steerFailed'))
-  return fill(t, key, { id: sessionId.slice(0, 8) })
+  return fill(t, key, { id: sessionId.slice(0, 8), agent: name })
 }
 
 /** What the transcript reader could not do, in words that name the fix. */
@@ -142,10 +164,12 @@ function Message({ message, t }: { message: ChatMessage; t: Translate }): ReactE
 export interface ConversationPanelProps {
   task: TaskView
   t: Translate
+  /** Resolved UI language; the agent names are bilingual in the table. */
+  lang: Lang
   onNotify: (text: string, tone?: Tone) => void
 }
 
-export function ConversationPanel({ task, t, onNotify }: ConversationPanelProps): ReactElement {
+export function ConversationPanel({ task, t, lang, onNotify }: ConversationPanelProps): ReactElement {
   const [transcript, setTranscript] = useState<ChatTranscript | null>(null)
   const [limit, setLimit] = useState(DEFAULT_MESSAGE_LIMIT)
   const [loading, setLoading] = useState(true)
@@ -254,13 +278,16 @@ export function ConversationPanel({ task, t, onNotify }: ConversationPanelProps)
       return
     }
     const delivered = result.data
-    onNotify(steerNotice(delivered, task.agentSessionId || taskId, t), delivered.ok ? 'info' : 'warn')
+    onNotify(
+      steerNotice(delivered, task.agentSessionId || taskId, t, agentName(task.agentKind, lang)),
+      delivered.ok ? 'info' : 'warn'
+    )
     if (delivered.ok) {
       setDraft('')
       setPinned(true)
       void read(true, limit)
     }
-  }, [busy, draft, limit, onNotify, read, t, taskId, task.agentSessionId])
+  }, [busy, draft, lang, limit, onNotify, read, t, taskId, task.agentKind, task.agentSessionId])
 
   const messages = transcript?.messages ?? []
   const following = transcript ? Date.now() - transcript.mtimeMs < LIVE_WINDOW_MS : false

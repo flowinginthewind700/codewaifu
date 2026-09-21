@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { isOurHookCommand } from '../src/shared/hookScript'
 import {
+  ANTIGRAVITY_BUNDLE,
   mergeClaudeHooks,
   mergeCodexHooks,
+  mergeAntigravityHooks,
+  mergeCursorHooks,
+  scanFlatEvents,
   stripClaudeHooks,
   stripCodexHooks,
+  stripAntigravityHooks,
+  stripCursorHooks,
   type HookSpec
 } from '../src/shared/hooksMerge'
 
@@ -185,5 +191,237 @@ describe('isOurHookCommand', () => {
     expect(isOurHookCommand(42)).toBe(false)
     // A lookalike path must not be claimed, or uninstall would eat it.
     expect(isOurHookCommand("/bin/sh '/Users/dev/.codewaifu-ish/hooks/run.sh'")).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Flat-definition schemas. Cursor puts `command` straight on the definition and
+// Antigravity does the same for its non-tool events, so the group-based merge
+// above cannot see our entries there: `normalizeGroup` hands it an empty `hooks`
+// array, which is also how it recognizes someone else's shape. Without these,
+// our own entries would survive every strip and duplicate on every install.
+// ---------------------------------------------------------------------------
+
+function cursorCommand(event: string): string {
+  return `if [ -f '${SH}' ]; then /bin/sh '${SH}' cursor ${event}; fi`
+}
+
+/** Cursor specs, as `buildSpecs` emits them: flat, no matcher, one event each. */
+function cursorSpecs(): HookSpec[] {
+  return [
+    { event: 'beforeSubmitPrompt', command: cursorCommand('beforeSubmitPrompt'), timeout: 5, flat: true },
+    { event: 'preToolUse', command: cursorCommand('preToolUse'), timeout: 5, flat: true },
+    { event: 'stop', command: cursorCommand('stop'), timeout: 5, flat: true }
+  ]
+}
+
+type DefJson = Record<string, unknown>
+type FlatJson = { version?: unknown; hooks?: Record<string, DefJson[]> }
+
+function flatCommands(json: unknown, event: string): string[] {
+  const hooks = (json as FlatJson).hooks
+  return (hooks?.[event] || []).map((def) => String(def.command ?? ''))
+}
+
+describe('mergeCursorHooks', () => {
+  it('writes the command onto the definition, not under a hooks array', () => {
+    const result = mergeCursorHooks(null, cursorSpecs())
+    const json = result.json as FlatJson
+    expect(json.hooks?.preToolUse).toEqual([{ command: cursorCommand('preToolUse'), timeout: 5 }])
+    expect(result.events).toEqual(['beforeSubmitPrompt', 'preToolUse', 'stop'])
+    // The nested shape is what Cursor rejects, so assert it is really absent
+    // rather than merely unexercised by the equality check above.
+    expect(JSON.stringify(json)).not.toContain('"hooks":[{')
+  })
+
+  it('adds the required version only when it is absent', () => {
+    // A hooks.json without `version` is rejected outright by Cursor.
+    expect((mergeCursorHooks(null, cursorSpecs()).json as FlatJson).version).toBe(1)
+    expect((mergeCursorHooks({ hooks: {} }, cursorSpecs()).json as FlatJson).version).toBe(1)
+    const pinned = mergeCursorHooks({ version: 2 }, cursorSpecs())
+    expect((pinned.json as FlatJson).version).toBe(2)
+  })
+
+  it('keeps another tool\'s flat definitions beside ours', () => {
+    const other = { command: ORCA, timeout: 10 }
+    const before = { version: 1, hooks: { stop: [other], preToolUse: [other] } }
+    const json = mergeCursorHooks(before, cursorSpecs()).json as FlatJson
+    expect(flatCommands(json, 'stop')).toEqual([ORCA, cursorCommand('stop')])
+    expect(flatCommands(json, 'preToolUse')).toEqual([ORCA, cursorCommand('preToolUse')])
+    expect(flatCommands(json, 'beforeSubmitPrompt')).toEqual([cursorCommand('beforeSubmitPrompt')])
+  })
+
+  it('is idempotent and never stacks a second definition', () => {
+    const once = mergeCursorHooks(null, cursorSpecs())
+    expect(once.changed).toBe(true)
+    const twice = mergeCursorHooks(once.json, cursorSpecs())
+    expect(twice.changed).toBe(false)
+    expect(JSON.stringify(twice.json)).toBe(JSON.stringify(once.json))
+    expect(flatCommands(twice.json, 'stop')).toHaveLength(1)
+  })
+
+  it('sweeps an event this build stopped subscribing to', () => {
+    const once = mergeCursorHooks(null, cursorSpecs())
+    const fewer = mergeCursorHooks(once.json, cursorSpecs().slice(0, 1))
+    expect(fewer.changed).toBe(true)
+    expect(Object.keys((fewer.json as FlatJson).hooks || {})).toEqual(['beforeSubmitPrompt'])
+    expect(fewer.events).toEqual(['beforeSubmitPrompt'])
+  })
+
+  it('replaces a stale command when the hooks dir moved', () => {
+    const once = mergeCursorHooks(null, cursorSpecs())
+    const moved = cursorSpecs().map((spec) => ({
+      ...spec,
+      command: spec.command.split('/Users/dev').join('/Users/other')
+    }))
+    const again = mergeCursorHooks(once.json, moved)
+    const ours = flatCommands(again.json, 'stop').filter(isOurHookCommand)
+    expect(ours).toHaveLength(1)
+    expect(ours[0]).toContain('/Users/other')
+  })
+
+  it('leaves a non-array event alone and warns', () => {
+    const result = mergeCursorHooks({ version: 1, hooks: { stop: 'nope' } }, cursorSpecs())
+    expect((result.json as FlatJson).hooks?.stop).toBe('nope')
+    expect(result.warnings.join(' ')).toContain('stop')
+    expect(flatCommands(result.json, 'preToolUse')).toEqual([cursorCommand('preToolUse')])
+  })
+
+  it('strips back to the user file and deletes the empty hooks key', () => {
+    const other = { command: ORCA, timeout: 10 }
+    const before = { version: 1, hooks: { stop: [other] } }
+    const installed = mergeCursorHooks(before, cursorSpecs()).json
+    const stripped = stripCursorHooks(installed)
+    expect(stripped.changed).toBe(true)
+    expect(stripped.events).toEqual([])
+    expect(flatCommands(stripped.json, 'stop')).toEqual([ORCA])
+    expect(JSON.stringify(stripped.json)).not.toContain('.codewaifu')
+
+    const only = stripCursorHooks(mergeCursorHooks(null, cursorSpecs()).json)
+    expect((only.json as FlatJson).hooks).toBeUndefined()
+    // `version` is the user's key; removing our hooks does not remove it.
+    expect((only.json as FlatJson).version).toBe(1)
+  })
+
+  it('round-trips and scans', () => {
+    const before = { version: 1, hooks: { stop: [{ command: ORCA, timeout: 10 }] } }
+    const installed = mergeCursorHooks(before, cursorSpecs()).json
+    expect(scanFlatEvents(installed)).toEqual(['beforeSubmitPrompt', 'preToolUse', 'stop'])
+    expect(stripCursorHooks(installed).json).toEqual(before)
+  })
+
+  it('survives junk in place of a config', () => {
+    for (const junk of [null, undefined, 42, 'text', []]) {
+      const result = mergeCursorHooks(junk, cursorSpecs())
+      expect(flatCommands(result.json, 'stop')).toEqual([cursorCommand('stop')])
+      expect(() => stripCursorHooks(junk)).not.toThrow()
+    }
+  })
+})
+
+/** Antigravity mixes both shapes: tool events nest, the rest do not. */
+function antigravitySpecs(): HookSpec[] {
+  return [
+    { event: 'PreInvocation', command: cursorCommand('PreInvocation'), timeout: 5, flat: true, flatType: 'command' },
+    { event: 'PreToolUse', matcher: '*', command: cursorCommand('PreToolUse'), timeout: 5 },
+    { event: 'Stop', command: cursorCommand('Stop'), timeout: 5, flat: true, flatType: 'command' }
+  ]
+}
+
+type BundleJson = Record<string, Record<string, DefJson[]>>
+
+function bundleDefs(json: unknown, event: string): DefJson[] {
+  return ((json as BundleJson)[ANTIGRAVITY_BUNDLE]?.[event] || []) as DefJson[]
+}
+
+describe('mergeAntigravityHooks', () => {
+  it('lives entirely under the named bundle key', () => {
+    const result = mergeAntigravityHooks(null, antigravitySpecs())
+    const json = result.json as BundleJson
+    expect(Object.keys(json)).toEqual([ANTIGRAVITY_BUNDLE])
+    expect(json[ANTIGRAVITY_BUNDLE].PreInvocation).toEqual([
+      { command: cursorCommand('PreInvocation'), type: 'command', timeout: 5 }
+    ])
+    expect(json[ANTIGRAVITY_BUNDLE].PreToolUse).toEqual([
+      { matcher: '*', hooks: [{ type: 'command', command: cursorCommand('PreToolUse'), timeout: 5 }] }
+    ])
+    expect(result.events).toEqual(['PreInvocation', 'PreToolUse', 'Stop'])
+  })
+
+  it('leaves other top-level keys and other bundles untouched', () => {
+    const before = {
+      projectHooks: { Stop: [{ command: ORCA }] },
+      superpowers: { Stop: [{ command: '/x/.superpowers/hooks/s.sh' }] }
+    }
+    const installed = mergeAntigravityHooks(before, antigravitySpecs())
+    const json = installed.json as BundleJson
+    expect(json.projectHooks).toEqual(before.projectHooks)
+    expect(json.superpowers).toEqual(before.superpowers)
+    expect(installed.events).toEqual(['PreInvocation', 'PreToolUse', 'Stop'])
+  })
+
+  it('keeps another tool inside our bundle key, and is idempotent', () => {
+    const before = { [ANTIGRAVITY_BUNDLE]: { Stop: [{ command: ORCA, timeout: 10 }] } }
+    const once = mergeAntigravityHooks(before, antigravitySpecs())
+    expect(bundleDefs(once.json, 'Stop').map((def) => def.command)).toEqual([ORCA, cursorCommand('Stop')])
+    const twice = mergeAntigravityHooks(once.json, antigravitySpecs())
+    expect(twice.changed).toBe(false)
+    expect(JSON.stringify(twice.json)).toBe(JSON.stringify(once.json))
+  })
+
+  it('deletes the bundle key outright once strip empties it', () => {
+    const installed = mergeAntigravityHooks(null, antigravitySpecs()).json
+    const stripped = stripAntigravityHooks(installed)
+    expect(stripped.changed).toBe(true)
+    expect(stripped.events).toEqual([])
+    expect((stripped.json as BundleJson)[ANTIGRAVITY_BUNDLE]).toBeUndefined()
+    expect(JSON.stringify(stripped.json)).not.toContain('.codewaifu')
+  })
+
+  it('keeps the bundle key when another tool still lives in it', () => {
+    const before = { [ANTIGRAVITY_BUNDLE]: { Stop: [{ command: ORCA }] } }
+    const stripped = stripAntigravityHooks(mergeAntigravityHooks(before, antigravitySpecs()).json)
+    expect((stripped.json as BundleJson)[ANTIGRAVITY_BUNDLE].Stop).toEqual([{ command: ORCA }])
+  })
+
+  it('scans through the bundle key only', () => {
+    const json = mergeAntigravityHooks(null, antigravitySpecs()).json
+    expect(scanFlatEvents(json, ANTIGRAVITY_BUNDLE)).toEqual(['PreInvocation', 'PreToolUse', 'Stop'])
+    // Without the key it reads `hooks`, which this schema does not have.
+    expect(scanFlatEvents(json)).toEqual([])
+    expect(scanFlatEvents(null, ANTIGRAVITY_BUNDLE)).toEqual([])
+  })
+})
+
+describe('mergeClaudeHooks for Gemini', () => {
+  // Gemini reads Claude's nested shape out of `~/.gemini/settings.json`, with
+  // one difference that bites: its `timeout` is milliseconds, not seconds.
+  const geminiSpecs: HookSpec[] = [
+    { event: 'BeforeAgent', matcher: 'startup', command: cursorCommand('BeforeAgent'), timeout: 5000 },
+    { event: 'AfterTool', command: cursorCommand('AfterTool'), timeout: 5000 }
+  ]
+
+  it('passes the millisecond timeout through untouched', () => {
+    const json = mergeClaudeHooks(null, geminiSpecs).json as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<Record<string, unknown>> }>>
+    }
+    expect(json.hooks.BeforeAgent[0]).toMatchObject({ matcher: 'startup' })
+    expect(json.hooks.BeforeAgent[0].hooks[0]).toMatchObject({
+      type: 'command',
+      command: cursorCommand('BeforeAgent'),
+      timeout: 5000
+    })
+    expect(json.hooks.AfterTool[0].matcher).toBeUndefined()
+    expect(json.hooks.AfterTool[0].hooks[0].timeout).toBe(5000)
+  })
+
+  it('keeps Gemini user keys, is idempotent and strips cleanly', () => {
+    const before = { theme: 'ansi', selectedAuthType: 'oauth-personal' }
+    const once = mergeClaudeHooks(before, geminiSpecs)
+    const json = once.json as Record<string, unknown>
+    expect(json.theme).toBe('ansi')
+    expect(json.selectedAuthType).toBe('oauth-personal')
+    expect(mergeClaudeHooks(once.json, geminiSpecs).changed).toBe(false)
+    expect(stripClaudeHooks(once.json).json).toEqual(before)
   })
 })

@@ -2,7 +2,49 @@ import type { AppConfig } from './config'
 import type { MediaState } from './media'
 import type { RelayConflict } from './portPolicy'
 
-export type Agent = 'codex' | 'claude' | 'unknown'
+/**
+ * Every agent flavor we can name. `codex` and `claude` are the ones we can read
+ * a transcript for and steer; the rest are hook reporters - their events still
+ * drive speech, bubbles, the ledger and the bench tree, but a transcript we
+ * cannot parse is one we do not pretend to open.
+ */
+export type Agent =
+  | 'codex'
+  | 'claude'
+  | 'cursor'
+  | 'gemini'
+  | 'antigravity'
+  | 'kimi'
+  | 'opencode'
+  | 'kiro'
+  | 'pi'
+  | 'trae'
+  | 'unknown'
+
+export const KNOWN_AGENTS: readonly Agent[] = [
+  'codex',
+  'claude',
+  'cursor',
+  'gemini',
+  'antigravity',
+  'kimi',
+  'opencode',
+  'kiro',
+  'pi',
+  'trae'
+]
+
+/** Agents we can install hooks into. The rest are detection-only in the bench. */
+export const HOOK_AGENTS: readonly Agent[] = ['codex', 'claude', 'cursor', 'gemini', 'antigravity', 'kimi']
+
+export function isKnownAgent(value: unknown): value is Agent {
+  return typeof value === 'string' && (KNOWN_AGENTS as readonly string[]).includes(value)
+}
+
+/** Narrow an arbitrary string to an Agent, answering `unknown` when it is not one. */
+export function asAgent(value: unknown): Agent {
+  return isKnownAgent(value) ? value : 'unknown'
+}
 
 export type EventKind =
   | 'session_start'
@@ -140,7 +182,12 @@ export interface RuntimeState {
   speaking: boolean
   queueLength: number
   hooks: HooksReport
-  agents: { codex: boolean; claude: boolean }
+  /**
+   * Which agents are present on this machine, keyed by agent name. `codex` and
+   * `claude` are always answered (older renderers read those two keys directly);
+   * the rest are there whenever we looked for them.
+   */
+  agents: Partial<Record<Agent, boolean>> & { codex: boolean; claude: boolean }
   voices: VoiceInfo[]
   neural: NeuralStatus
   /**
@@ -186,9 +233,23 @@ export interface UiSnapshot {
   media: MediaState
 }
 
+export interface AgentHookStatus {
+  path: string
+  installed: boolean
+  events: string[]
+  error?: string
+}
+
 export interface HooksReport {
-  codex: { path: string; installed: boolean; events: string[]; error?: string }
-  claude: { path: string; installed: boolean; events: string[]; error?: string }
+  /**
+   * One entry per agent flavor we can install into, in menu order. `codex` and
+   * `claude` are also mirrored as top-level keys below because the CLI and older
+   * renderers read those two directly; both views come from the same object, so
+   * they cannot disagree.
+   */
+  agents: Record<string, AgentHookStatus>
+  codex: AgentHookStatus
+  claude: AgentHookStatus
   runnerInstalled: boolean
   codexTrustNeeded: boolean
 }
