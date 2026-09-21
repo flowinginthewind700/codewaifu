@@ -112,7 +112,16 @@ export function StageTools({
               aria-label={benchOpen ? t('closeBench') : t('openBench')}
               aria-pressed={benchOpen}
               data-on={benchOpen ? '1' : undefined}
-              onClick={onBench}
+              onClick={(event) => {
+                onBench()
+                // Drop focus right after the click. A focused button answers
+                // Space and Enter from the browser's own default action, and
+                // this one keeps focus while the stage re-renders under it, so
+                // the next Space the human types anywhere on the stage flipped
+                // the bench open or shut. A door that opens on keystrokes meant
+                // for something else is worse than no door.
+                event.currentTarget.blur()
+              }}
             >
               <PanelsTopLeft size={14} strokeWidth={2.2} />
             </button>

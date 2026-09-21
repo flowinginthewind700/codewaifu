@@ -236,6 +236,15 @@ textarea {
   gap: 10px;
   color: var(--muted);
   font-size: var(--fs-body);
+  /* Draggable whether the frame is on or not. The boot screen renders
+     instead of `.bench`, so it cannot carry `data-frame` and cannot read the
+     setting either - that arrives with the same bootstrap it is waiting on. A
+     frameless window whose only content is a spinner still has to be movable,
+     or a slow herdr traps the human in a window they cannot drag, minimise or
+     close. Nothing here is interactive, so in framed mode the rule costs
+     nothing but a cursor. */
+  -webkit-app-region: drag;
+  app-region: drag;
 }
 
 /* ==========================================================================
@@ -251,6 +260,60 @@ textarea {
   min-width: 0;
   background: var(--bench-panel);
   border-bottom: 1px solid var(--bench-line);
+}
+
+/* --------------------------------------------------------------------------
+   Frameless bench: the topbar is the title bar
+
+   `pro.benchFrame` off means no WM frame, so the two things the frame used to
+   give the human have to come from here: somewhere to grab (the bar itself,
+   via `app-region: drag`, which is a native gesture - the window manager does
+   the moving and the double-click-to-maximise) and the minimise/close verbs
+   (the buttons at the right end). Resizing stays native too: Electron's
+   frameless window keeps its eight edge cursors on Linux, so nothing here
+   draws a handle.
+
+   Every interactive descendant has to opt back out of the drag region, and
+   this file does not inherit the widget's blanket rule - styles.css is not
+   loaded in the bench - so the opt-out is spelled out here. Anything missed
+   is a control that cannot be clicked, which is why the list is long rather
+   than targeted.
+   -------------------------------------------------------------------------- */
+.bench[data-frame='0'] .bench-topbar {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.bench[data-frame='0'] .bench-topbar button,
+.bench[data-frame='0'] .bench-topbar input,
+.bench[data-frame='0'] .bench-topbar select,
+.bench[data-frame='0'] .bench-topbar textarea,
+.bench[data-frame='0'] .bench-topbar a,
+.bench[data-frame='0'] .bench-topbar label {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.win-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  /* A hair off the bar's right edge, so the pair reads as window chrome
+     rather than as two more tools in the row above it. */
+  margin-right: -4px;
+}
+
+.win-btn {
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+}
+
+/* The one destructive-looking verb on the bar: hover says so in the same red
+   the rest of the app uses for "this closes something". */
+.win-close:hover:not(:disabled) {
+  background: rgba(var(--danger-rgb), 0.18);
+  color: var(--danger);
 }
 
 .brand {

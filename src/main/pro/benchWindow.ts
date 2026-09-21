@@ -31,6 +31,12 @@ export interface BenchGeometry {
 
 export interface BenchWindowDeps {
   geometry: () => BenchGeometry
+  /**
+   * Whether the window carries the system frame. Read at creation; when the
+   * setting flips, main recreates the window rather than trying to re-frame a
+   * live one, because Electron cannot change `frame` after the fact.
+   */
+  framed: () => boolean
   /** Persist a moved or resized frame. Called once per settle, not per pixel. */
   saveGeometry: (geometry: BenchGeometry) => void
   /**
@@ -128,9 +134,12 @@ export function createBenchWindow(deps: BenchWindowDeps): BenchHandle {
     // mode it happens to be showing. A second product name in the title bar is
     // how a mode starts feeling like a separate install.
     title: 'CodeWaifu',
-    // A framed window: the human has to be able to move it, resize it, minimise
-    // it and Alt-Tab to it without learning a new set of gestures.
-    frame: true,
+    // Framed only when asked: the bench paints its own topbar, and a system bar
+    // above it that carries nothing but the window name is dead chrome. The
+    // frameless bench owns its chrome instead - topbar drags, its right end
+    // minimises and closes, eight edge handles resize - so losing the WM frame
+    // costs no gesture.
+    frame: deps.framed(),
     transparent: false,
     resizable: true,
     movable: true,

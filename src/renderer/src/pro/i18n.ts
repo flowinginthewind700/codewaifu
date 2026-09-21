@@ -127,6 +127,16 @@ const STRINGS = {
   adopt: { zh: '接管现有工作区', en: 'Adopt workspaces' },
   snoozeAll: { zh: '全部稍后', en: 'Snooze all' },
   refresh: { zh: '重新发现 herdr', en: 'Re-discover herdr' },
+  /**
+   * The window controls the frameless bench paints itself.
+   *
+   * Named like the OS verbs they replace, because that is what the human is
+   * looking for at the right end of a bar: minimise, close. Close is hide
+   * here - the bench keeps running and her scrollback survives - but a
+   * tooltip that explains that is a tooltip longer than the bar.
+   */
+  winMinimize: { zh: '最小化', en: 'Minimise' },
+  winClose: { zh: '收起工作台', en: 'Close the bench' },
 
   /* --------------------------------------------------------- import */
   importTitle: { zh: '导入会话', en: 'Import sessions' },

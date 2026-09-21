@@ -110,6 +110,11 @@ const STRINGS = {
     zh: '需要至少一个修饰键 + 字母 / 数字 / F 键',
     en: 'Needs a modifier plus a letter, digit or F-key'
   },
+  benchFrame: { zh: '工作台显示系统标题栏', en: 'System title bar on the Bench' },
+  benchFrameHint: {
+    zh: '关闭时工作台用自己的顶栏拖动、缩放和最小化/关闭,不留系统那条只写窗口名的边框;打开则交给桌面环境装饰。切换会重开工作台窗口。',
+    en: 'Off, the Bench owns its chrome: drag and resize from its own topbar, minimise and close at its right end, no system bar carrying only the window name. On, your window manager decorates it. Switching reopens the Bench window.'
+  },
   secRelay: { zh: '本地中继', en: 'Local relay' },
   secHooks: { zh: 'Agent 接入', en: 'Agent hooks' },
   secAbout: { zh: '关于', en: 'About' },

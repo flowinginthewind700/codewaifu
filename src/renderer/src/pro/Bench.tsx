@@ -73,7 +73,7 @@ import { PaneGrid } from './PaneGrid'
 import { RecoveryPanel } from './RecoveryPanel'
 import { TaskCard } from './TaskCard'
 import { Tip } from '../Tip'
-import { BenchBrand, TopBar } from './TopBar'
+import { BenchBrand, TopBar, WindowControls } from './TopBar'
 import { TreeRail } from './TreeRail'
 import { fill, makeTranslator, type Translate } from './i18n'
 import { focusPane, routeBridge, routeFrames } from './paneBus'
@@ -271,6 +271,12 @@ export function Bench(): ReactElement {
 
   const pro = config?.pro ?? null
   const proEnabled = pro?.enabled ?? false
+  /**
+   * Frameless unless the setting says otherwise, including before main's
+   * snapshot lands: the window is born frameless by default, so guessing the
+   * other way paints a bar of controls the window does not need for one frame.
+   */
+  const frameless = !(pro?.benchFrame ?? false)
   const herdrOnline = view?.herdr.online ?? false
   const attention = view?.attention ?? NO_ITEMS
   const allGroups = view?.groups ?? NO_GROUPS
@@ -627,6 +633,21 @@ export function Bench(): ReactElement {
   }, [report])
 
   /**
+   * The frameless bench's own window verbs.
+   *
+   * Wired into the full topbar and into the pro-off fallback header alike:
+   * chrome that only works while herdr is online is chrome that traps you in
+   * a window precisely when something is already wrong.
+   */
+  const minimizeBench = useCallback((): void => {
+    void proApi.benchControl('minimize').then((result) => report(result))
+  }, [report])
+
+  const closeBench = useCallback((): void => {
+    void proApi.benchControl('close').then((result) => report(result))
+  }, [report])
+
+  /**
    * Import landed. Main pushes a fresh projection on its own, so this only
    * closes the picker, re-reads the ledger and says what happened - including
    * the rows that did not make it, because a silently smaller import reads as a
@@ -944,6 +965,7 @@ export function Bench(): ReactElement {
     <div
       className="bench"
       ref={shellRef}
+      data-frame={frameless ? '0' : '1'}
       data-rail={railOpen ? 'open' : 'closed'}
       data-right={rightOpen ? 'open' : 'closed'}
     >
@@ -968,12 +990,22 @@ export function Bench(): ReactElement {
           onRediscover={rediscover}
           onToggleRail={() => setRailOpen((value) => !value)}
           onToggleRight={() => setRightOpen((value) => !value)}
+          frameless={frameless}
+          onMinimize={minimizeBench}
+          onClose={closeBench}
         />
       ) : (
         // Pro switched off: no projection, so no stage bar - but the chrome stays
         // mounted, because a cockpit that blanks itself cannot be switched back on.
         <header className="bench-topbar">
           <BenchBrand t={t} onStage={toStage} />
+          <span className="spacer" />
+          <WindowControls
+            frameless={frameless}
+            t={t}
+            onMinimize={minimizeBench}
+            onClose={closeBench}
+          />
         </header>
       )}
 

@@ -33,6 +33,20 @@ export const IPC = {
   /** Renderer reports whether a non-empty input is focused (hotkey guard). */
   inputActive: 'cw:input-active',
   /**
+   * Window chrome for the frameless Bench: minimise and close.
+   *
+   * Only needed when `pro.benchFrame` is off, because then the system frame
+   * that used to carry these two verbs is gone and the bench's own topbar has
+   * to provide them. Dragging and resizing are not here: both are native on
+   * every platform we ship, via `-webkit-app-region: drag` on the topbar and
+   * the frame's own edge cursors, so nothing has to be driven from JS.
+   *
+   * Close means hide, matching the bench's whole lifecycle: a cockpit that
+   * re-spawns on every open loses the terminal scrollback being read, so only
+   * quitting destroys the window.
+   */
+  benchControl: 'cw:bench-control',
+  /**
    * Drag the frame by a screen-space delta. The Live2D canvas has to keep
    * receiving pointer events (tapping her triggers motions), so CSS
    * `app-region: drag` cannot cover it; the renderer drags with JS instead.
@@ -149,6 +163,7 @@ export const INVOKE_CHANNELS: readonly IpcChannel[] = [
   IPC.openPath,
   IPC.chatMode,
   IPC.inputActive,
+  IPC.benchControl,
   IPC.moveWindow,
   IPC.neuralRetry,
   IPC.fitHeight,

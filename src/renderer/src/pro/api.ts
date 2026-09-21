@@ -355,6 +355,14 @@ export const proApi = {
   setConfig: (patch: Partial<ProConfig>): Promise<ProResult<{ pro: ProConfig }>> =>
     call<{ pro: ProConfig }>(CH.proConfig, patch),
 
+  /**
+   * Window chrome for the frameless bench. Only two verbs reach main: the
+   * drag and the resize are native gestures the window manager already
+   * honours, so there is nothing for JS to drive and nothing to keep in step.
+   */
+  benchControl: (op: 'minimize' | 'close'): Promise<ProResult> =>
+    call(CH.benchControl, { op }),
+
   /** Push subscriptions; each returns its unsubscribe function. */
   onState: (listener: (view: BenchView) => void): (() => void) =>
     bridge.on(CH.pushProState, (payload) => {

@@ -606,15 +606,24 @@ export function Pane({
     // not collide with the agent's, and plain Ctrl+C is SIGINT. The decision
     // table is shared pure code (`@shared/termKeys`) precisely so that rule is
     // pinned by a test rather than by this component behaving well today.
-    // Returning false is what tells xterm we consumed the key; true leaves it
-    // on its way to the PTY.
+    // Returning false is what tells xterm we consumed the key; true leaves it on
+    // its way to the PTY. That alone is not enough. False only stops xterm's own
+    // reading of the keydown; the browser's default action still runs, so an
+    // unconsumed Ctrl+Shift+V also fires a real `paste` event on xterm's hidden
+    // textarea, whose listener types the clipboard a second time - the doubled
+    // paste on Linux. Every branch that claims a chord therefore cancels the
+    // default too, and the two always travel together.
+    const consume = (event: KeyboardEvent): false => {
+      event.preventDefault()
+      return false
+    }
     term.attachCustomKeyEventHandler((event) => {
       // Checked before the clipboard table. On macOS this is Cmd+F, which no
       // terminal program is waiting for; elsewhere it is Ctrl+Shift+F, because
       // plain Ctrl+F is readline forward-char and has to keep reaching the PTY.
       if (searchAction(platform, event) === 'open') {
         openSearch()
-        return false
+        return consume(event)
       }
       // Checked before the clipboard table for the same reason: Shift+PageUp is
       // not a clipboard chord anywhere, but it *is* how every terminal user
@@ -623,7 +632,7 @@ export function Pane({
       const page = pageScroll(event, term.rows || 24)
       if (page) {
         sendScroll(page.direction, page.lines, page.source)
-        return false
+        return consume(event)
       }
       const action = clipboardAction(platform, event, term.hasSelection())
       if (action === 'ignore') return true
@@ -631,10 +640,10 @@ export function Pane({
         void copySelection(term).then((done) => {
           if (!done) onNotify(t('paneCopyFailed'), 'warn')
         })
-        return false
+        return consume(event)
       }
       void pasteInto(term)
-      return false
+      return consume(event)
     })
 
     /**

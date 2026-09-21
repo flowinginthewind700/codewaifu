@@ -27,6 +27,7 @@ import {
   Import,
   LayoutGrid,
   MessageCircle,
+  Minus,
   PanelLeft,
   PersonStanding,
   Plug,
@@ -35,7 +36,8 @@ import {
   RefreshCw,
   Sparkles,
   TerminalSquare,
-  Volume2
+  Volume2,
+  X
 } from 'lucide-react'
 import type { ProConfig } from '@shared/config'
 import type { BenchView } from '@shared/pro'
@@ -65,6 +67,14 @@ export interface TopBarProps {
   onRediscover: () => void
   onToggleRail: () => void
   onToggleRight: () => void
+  /**
+   * Frameless window: the bench paints the minimise and close the system bar
+   * no longer provides. Off when `pro.benchFrame` is on, so a framed window
+   * does not end up with two sets of controls saying the same thing.
+   */
+  frameless?: boolean
+  onMinimize?: () => void
+  onClose?: () => void
 }
 
 const SUMMON_KEYS = {
@@ -129,7 +139,10 @@ export function TopBar({
   onTerminal,
   onRediscover,
   onToggleRail,
-  onToggleRight
+  onToggleRight,
+  frameless,
+  onMinimize,
+  onClose
 }: TopBarProps): ReactElement {
   const { counts } = view
   const attentionCount = view.attention.length
@@ -303,7 +316,59 @@ export function TopBar({
           </button>
         </Tip>
       </div>
+      <WindowControls frameless={frameless} t={t} onMinimize={onMinimize} onClose={onClose} />
     </header>
+  )
+}
+
+/**
+ * The two verbs a system frame used to carry: minimise and close.
+ *
+ * Exported because the pro-off fallback header needs the same pair - without
+ * them a frameless bench cannot be dismissed with the mouse at all, and
+ * "herdr is down" is the wrong moment to be trapped in a window. Dragging and
+ * resizing are not here: both are native, via `-webkit-app-region: drag` on
+ * the bar and the window's own edge cursors.
+ *
+ * Rendered as nothing rather than as disabled buttons when the frame is on,
+ * because a framed window already has these two and a second pair doing the
+ * same job is a second thing to wonder about.
+ */
+export function WindowControls({
+  frameless,
+  t,
+  onMinimize,
+  onClose
+}: {
+  frameless?: boolean
+  t: Translate
+  onMinimize?: () => void
+  onClose?: () => void
+}): ReactElement | null {
+  if (!frameless) return null
+  return (
+    <div className="win-controls">
+      <Tip label={t('winMinimize')}>
+        <button
+          type="button"
+          className="btn ghost icon win-btn"
+          aria-label={t('winMinimize')}
+          onClick={onMinimize}
+        >
+          <Minus />
+        </button>
+      </Tip>
+      <Tip label={t('winClose')}>
+        <button
+          type="button"
+          className="btn ghost icon win-btn win-close"
+          aria-label={t('winClose')}
+          onClick={onClose}
+        >
+          <X />
+        </button>
+      </Tip>
+    </div>
   )
 }
 

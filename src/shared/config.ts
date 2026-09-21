@@ -145,6 +145,17 @@ export interface ProConfig {
   /** Open the Bench window on launch instead of waiting to be summoned. */
   openBenchOnLaunch: boolean
   /**
+   * Give the Bench window the system title bar and frame.
+   *
+   * Off by default: the bench paints its own topbar, and a second bar above it
+   * that only carries the window name is dead chrome on a cockpit. Frameless
+   * means the bench owns its own chrome - the topbar drags the window, its
+   * right end carries minimise and close, and eight edge handles resize - so
+   * the window stays movable and resizable without the WM frame. On for the
+   * human who wants the frame their window manager decorates.
+   */
+  benchFrame: boolean
+  /**
    * Start the herdr server ourselves when the binary is installed and no socket
    * is listening. This is the reboot half of durability: herdr keeps panes
    * alive across its own restarts, but nothing on the box starts it after one,
@@ -186,6 +197,7 @@ export const DEFAULT_PRO: ProConfig = {
   keys: {},
   bench: { width: 1180, height: 760, x: -1, y: -1, railW: RAIL_DEFAULT, rightW: RIGHT_DEFAULT },
   openBenchOnLaunch: false,
+  benchFrame: false,
   autoStartHerdr: true,
   autoResumeOnBoot: true
 }
@@ -405,6 +417,7 @@ function parsePro(rawPro: Record<string, unknown>, rawBench: Record<string, unkn
       rightW: clampColumnWidth('right', num(rawBench.rightW, d.bench.rightW, 0, 100000))
     },
     openBenchOnLaunch: bool(rawPro.openBenchOnLaunch, d.openBenchOnLaunch),
+    benchFrame: bool(rawPro.benchFrame, d.benchFrame),
     autoStartHerdr: bool(rawPro.autoStartHerdr, d.autoStartHerdr),
     autoResumeOnBoot: bool(rawPro.autoResumeOnBoot, d.autoResumeOnBoot)
   }

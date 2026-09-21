@@ -282,6 +282,15 @@ export function SettingsTab(props: SettingsTabProps): ReactElement {
       <section className="section">
         <h3 className="section-title">{t('secWindow')}</h3>
         <HotkeyRow t={t} value={config.hotkey} onChange={(hotkey) => onChange({ hotkey })} />
+        {/* `pro` is replaced wholesale by `parseConfig`, never merged key by
+            key, so the spread is the write: dropping it would erase every
+            other bench setting on this one click. */}
+        <Toggle
+          label={t('benchFrame')}
+          checked={config.pro.benchFrame}
+          onChange={(value) => onChange({ pro: { ...config.pro, benchFrame: value } })}
+        />
+        <div className="hint">{t('benchFrameHint')}</div>
       </section>
 
       {/* ---- relay / port --------------------------------------------- */}

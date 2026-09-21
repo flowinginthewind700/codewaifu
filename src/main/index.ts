@@ -1,4 +1,4 @@
-import { app, dialog, globalShortcut, Notification, shell } from 'electron'
+import { app, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron'
 import type { WebContents } from 'electron'
 import crypto from 'node:crypto'
 import os from 'node:os'
@@ -18,6 +18,7 @@ import { getMediaState, platformSupportsMedia } from './media'
 import * as neuralTts from './neuralTts'
 import { createBenchWindow, type BenchHandle } from './pro/benchWindow'
 import type { FlightPoint } from '../shared/benchFlight'
+import { failResult, okResult } from '../shared/proIpc'
 import { narrowLogLevel, proAudience } from './pro/host'
 import { registerProIpc } from './pro/ipc'
 import { ProService, type ProHost } from './pro/service'
@@ -214,6 +215,47 @@ function benchAlive(): BenchHandle | null {
 }
 
 /**
+ * The frame setting the live Bench was created with.
+ *
+ * Electron reads `frame` at construction and there is no way to change it
+ * afterwards, so flipping the setting on a Bench that is already open means
+ * building a second window with the new frame and handing over whatever the
+ * first one was doing. Tracked here rather than asked of the window because
+ * the window cannot answer: `win.frame` is not a thing.
+ */
+let benchFramed = false
+
+/**
+ * Rebuild the Bench when the frame setting flips under it.
+ *
+ * Only worth doing while a window exists; a Bench nobody has opened picks the
+ * setting up on creation. Visibility carries over, focus only when the window
+ * was already the one the human was looking at - a settings toggle made from
+ * the Bench itself would otherwise yank focus back from wherever it came from.
+ */
+function reframeBench(): void {
+  const framed = core?.config.pro.benchFrame ?? false
+  if (framed === benchFramed) return
+  const existing = benchAlive()
+  if (!existing) {
+    benchFramed = framed
+    return
+  }
+  const wasVisible = existing.isVisible()
+  const wasFocused = existing.isFocused()
+  const wasMinimized = existing.win.isMinimized()
+  existing.destroy()
+  bench = null
+  benchFramed = framed
+  const rebuilt = ensureBench()
+  if (!rebuilt) return
+  if (wasVisible) {
+    rebuilt.show(wasFocused)
+    if (wasMinimized) rebuilt.win.minimize()
+  }
+}
+
+/**
  * Interface zoom, owned here.
  *
  * `core.config.uiZoom` is the persisted rung; this closure is the only thing
@@ -321,6 +363,7 @@ function ensureBench(): BenchHandle | null {
   try {
     bench = createBenchWindow({
       geometry: () => instance.config.pro.bench,
+      framed: () => instance.config.pro.benchFrame,
       // Straight to the config file rather than through `updateConfig`: a
       // resize must not re-merge the agents' hook files or wake Pro's diff.
       saveGeometry: (geometry) => instance.setBenchGeometry(geometry),
@@ -343,6 +386,9 @@ function ensureBench(): BenchHandle | null {
     return null
   }
   attachZoomTo(bench.win.webContents)
+  // Whatever frame it was born with is now the frame we remember, so a later
+  // settings flip compares against the truth rather than against a guess.
+  benchFramed = instance.config.pro.benchFrame
   return bench
 }
 
@@ -558,6 +604,9 @@ async function boot(): Promise<void> {
       zoomRung = rung
       benchAlive()?.setZoom()
     }
+    // Last, because it can replace the window the two lines above just talked
+    // to: `frame` is fixed at construction, so flipping it rebuilds the Bench.
+    reframeBench()
   })
 
   registerAssetProtocol()
@@ -634,6 +683,35 @@ async function boot(): Promise<void> {
     setInputActive: (active) => handle?.setInputActive(active),
     hide: () => handle?.hide(),
     quit: () => app.quit()
+  })
+
+  // The Bench's own window chrome. Registered here rather than in `ipc.ts`
+  // because `bench` lives in this module: the handler is two lines away from
+  // the window it moves, and moving it would mean exporting the variable that
+  // owns the Bench's whole lifecycle for the sake of a minimiser.
+  //
+  // Close is hide, matching the animated dismiss everywhere else - a cockpit
+  // that is destroyed on close loses the scrollback the human was reading, and
+  // re-spawning it costs another herdr attach. Quitting is what destroys it.
+  ipcMain.removeHandler(IPC.benchControl)
+  ipcMain.handle(IPC.benchControl, (_event, payload) => {
+    try {
+      const alive = benchAlive()
+      if (!alive) return failResult('internal', 'the bench window is not open')
+      const op = (payload as { op?: string } | undefined)?.op
+      if (op === 'minimize') {
+        alive.win.minimize()
+        return okResult(null)
+      }
+      if (op === 'close') {
+        void alive.hideAnimated()
+        return okResult(null)
+      }
+      return failResult('internal', `unknown bench control: ${String(op)}`)
+    } catch (error) {
+      log('error', 'bench control failed', String(error))
+      return failResult('internal', String(error))
+    }
   })
 
   // The widget owns the audible path: its Web Audio graph is the only place an
