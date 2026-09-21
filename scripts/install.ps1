@@ -157,7 +157,7 @@ if (-not $HooksOnly) {
 $app = Find-App
 if (-not $app) { Fail "CodeWaifu.exe not found under $InstallRoot" }
 
-Say 'registering agent hooks (Codex + Claude Code)'
+Say 'registering agent hooks (every detected agent)'
 $env:CODEWAIFU_APP = $app
 & $app --cli install
 # $LASTEXITCODE only means something after a native command, so treat null as
@@ -170,7 +170,8 @@ Next steps
   1. launch CodeWaifu from the Start menu or desktop shortcut; it greets you
      out loud and parks itself in the tray.
   2. Codex gates third-party hooks behind a one-time trust prompt: open Codex,
-     run /hooks, and trust the CodeWaifu entries. Claude Code needs nothing.
+     run /hooks, and trust the CodeWaifu entries. Every other agent needs
+     nothing.
   3. check any time:  codewaifu status
 
 Uninstall:  iex "& { $(irm https://raw.githubusercontent.com/flowinginthewind700/codewaifu/main/scripts/install.ps1) } -Uninstall"

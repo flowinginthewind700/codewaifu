@@ -687,7 +687,9 @@ find_installed_app || die "app installed but the binary is not executable: ${BIN
 # a foreign writer's entries. Ours goes last, so both sets survive.
 install_herdr
 
-say "registering agent hooks (Codex + Claude Code)"
+# The set of agents changes over time and this line is read at install time, so
+# it names the family rather than an enumeration that goes stale.
+say "registering agent hooks (every detected agent)"
 run_cli install
 
 if [ "$OS" = "Darwin" ]; then
@@ -698,7 +700,7 @@ Next steps
      it greets you out loud and parks itself in the menu bar / tray.
   2. Codex gates third-party hooks behind a one-time trust prompt:
      open Codex, run /hooks, and trust the CodeWaifu entries.
-     Claude Code needs nothing extra.
+     Every other agent needs nothing extra.
   3. check any time:       codewaifu status   (or: CodeWaifu --cli status)
   4. the Bench (menu bar) is a cockpit over herdr; the herdr line above says
      whether this machine has it, and `bash install.sh --herdr-only` gets it.
@@ -713,7 +715,7 @@ Next steps
      it greets you out loud and parks itself in the tray.
   2. Codex gates third-party hooks behind a one-time trust prompt:
      open Codex, run /hooks, and trust the CodeWaifu entries.
-     Claude Code needs nothing extra.
+     Every other agent needs nothing extra.
   3. check any time:       codewaifu status
   4. the Bench (tray menu) is a cockpit over herdr; the herdr line above says
      whether this machine has it, and \`bash install.sh --herdr-only\` gets it.
