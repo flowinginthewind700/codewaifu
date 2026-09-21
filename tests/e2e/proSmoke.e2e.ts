@@ -59,12 +59,52 @@ const consoleErrors: string[] = []
 const stderrTail: string[] = []
 let bootError = ''
 
+/**
+ * The real agents' config files, fingerprinted before launch.
+ *
+ * This exists because a smoke run used to merge our hooks into them: Cursor and
+ * Gemini have no home override of their own, so an environment that redirected
+ * `CODEWAIFU_HOME`, `CODEX_HOME` and `CLAUDE_CONFIG_DIR` but not `HOME` still
+ * resolved `cursorHome` to the developer's real `~/.cursor`. Every run - here
+ * and on all three CI platforms - appended entries to a config nobody asked it
+ * to touch. The case below compares against this snapshot, so the same omission
+ * fails the suite instead of quietly editing the machine it ran on.
+ */
+const realAgentConfigs = new Map<string, string | null>()
+
+/** Contents, or null for "absent"; both are things a write would change. */
+function fingerprint(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/** Every agent config a launch can reach, real home included. */
+function agentConfigFiles(realHome: string): string[] {
+  return [
+    path.join(realHome, '.cursor', 'hooks.json'),
+    path.join(realHome, '.gemini', 'settings.json'),
+    path.join(realHome, '.gemini', 'config', 'hooks.json'),
+    path.join(realHome, '.codex', 'hooks.json'),
+    path.join(realHome, '.claude', 'settings.json'),
+    path.join(realHome, '.kimi-code', 'config.toml')
+  ]
+}
+
 beforeAll(async () => {
   if (!fs.existsSync(mainEntry)) {
     throw new Error(
       `${mainEntry} is missing. The smoke test drives the built bundle, so run ` +
         '`npx electron-vite build` (or `npm run test:e2e`, which builds first).'
     )
+  }
+
+  // Before anything launches: the snapshot is only worth comparing against if
+  // nothing in this file has already been given a chance to write.
+  for (const file of agentConfigFiles(os.homedir())) {
+    realAgentConfigs.set(file, fingerprint(file))
   }
 
   herdr = await startFakeHerdr()
@@ -104,12 +144,34 @@ beforeAll(async () => {
     if (value !== undefined) env[key] = value
   }
   env.CODEWAIFU_HOME = home
-  // Hooks are installed into the agents' homes at launch. Left alone, a smoke
-  // run would rewrite the developer's real ~/.codex/hooks.json.
+  /*
+   * Hooks are installed into the agents' homes at launch, so every home has to
+   * be the sandbox's or the run edits the developer's real configs.
+   *
+   * `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are not enough on their own: Cursor
+   * and Gemini have no override of their own, and `main/env.ts` derives
+   * `cursorHome`/`geminiHome` from `os.homedir()`. Without `HOME`, a smoke run
+   * on a machine that has `~/.cursor` merged our hooks into it - nine stale
+   * `preToolUse` entries pointing at deleted `/tmp/cw-e2e-home-*` runners, each
+   * printing `{"permission":"ask"}`, which is one permission prompt per stale
+   * copy per tool call. `HOME` (and `USERPROFILE` on Windows, which is what
+   * `os.homedir()` reads there) closes that for every current and future agent.
+   */
+  env.HOME = home
+  env.USERPROFILE = home
   env.CODEX_HOME = path.join(home, 'codex')
   env.CLAUDE_CONFIG_DIR = path.join(home, 'claude')
   env.ELECTRON_DISABLE_SANDBOX = '1'
   env.CODEWAIFU_E2E = '1'
+  /*
+   * The sandbox home has to look like a machine worth installing into, or the
+   * hook pass silently does nothing and the case below asserts on files nobody
+   * tried to write. Cursor and Gemini are detected by their home existing, so
+   * both are created; Codex and Claude are reported on unconditionally and land
+   * in the `CODEX_HOME`/`CLAUDE_CONFIG_DIR` dirs above.
+   */
+  fs.mkdirSync(path.join(home, '.cursor'), { recursive: true })
+  fs.mkdirSync(path.join(home, '.gemini'), { recursive: true })
   // `npm run dev` exports this, and a shell that still has it would point the
   // Bench at a dev server that is not running: a blank frame that means nothing.
   delete env.ELECTRON_RENDERER_URL
@@ -284,6 +346,59 @@ describe('the built Bench', () => {
     fs.mkdirSync(artifacts, { recursive: true })
     await page!.screenshot({ path: shotFile })
     expect(fs.statSync(shotFile).size).toBeGreaterThan(10_000)
+  })
+
+  it('installs its hooks inside the sandbox, never into the real home', async () => {
+    /*
+     * The leak this pins. Hook installation runs at launch, and four of the six
+     * agents have no home override of their own: `cursorHome` and `geminiHome`
+     * come from `os.homedir()` alone. A smoke run that redirected
+     * `CODEWAIFU_HOME`/`CODEX_HOME`/`CLAUDE_CONFIG_DIR` but not `HOME` therefore
+     * merged our hooks into the developer's real `~/.cursor/hooks.json` on every
+     * run - nine stale `preToolUse` entries were found there, each pointing at a
+     * deleted `/tmp/cw-e2e-home-*` runner and each printing
+     * `{"permission":"ask"}`, which Cursor honours as one prompt per copy per
+     * tool call.
+     *
+     * So this reads the files the app actually wrote, and asserts both halves:
+     * the sandbox ones exist, and the real ones were left alone. Checking only
+     * the sandbox half would pass with a merge that also touched the real home;
+     * checking only the real half would pass with a hook pass that never ran.
+     */
+    const cursorHooks = path.join(home, '.cursor', 'hooks.json')
+    expect(fs.existsSync(cursorHooks), `${cursorHooks} was never written`).toBe(true)
+    const written = JSON.parse(fs.readFileSync(cursorHooks, 'utf8')) as {
+      hooks?: Record<string, Array<{ command?: string }>>
+    }
+    const commands = Object.values(written.hooks ?? {}).flatMap((group) =>
+      group.map((entry) => entry.command ?? '')
+    )
+    expect(commands.length, 'no hook definitions landed in the sandbox').toBeGreaterThan(0)
+    for (const command of commands) {
+      expect(
+        command.includes(home),
+        `a sandbox hook points outside the sandbox: ${command}`
+      ).toBe(true)
+    }
+
+    // Compared against the fingerprint taken before anything launched. The
+    // sandbox home must not be the real one for that to mean anything, so say
+    // so rather than trust `mkdtemp`.
+    const realHome = os.homedir()
+    expect(
+      realHome === home,
+      'the sandbox home is the real one; this case would pass by proving nothing'
+    ).toBe(false)
+    expect(
+      realAgentConfigs.size,
+      'no real config was fingerprinted before launch'
+    ).toBeGreaterThan(0)
+    for (const [file, before] of realAgentConfigs) {
+      expect(
+        fingerprint(file),
+        `${file} differs from its pre-launch contents: the smoke run wrote to the real home`
+      ).toBe(before)
+    }
   })
 })
 
@@ -465,6 +580,17 @@ function cliEnv(homeOverride?: string): Record<string, string> {
     if (value !== undefined) env[key] = value
   }
   env.CODEWAIFU_HOME = homeOverride ?? home
+  /*
+   * Same redirection the launched app gets. These verbs only read hook status
+   * today, but they share one environment, and a future `install` or
+   * `uninstall` case would resolve `cursorHome` and `geminiHome` against the
+   * real home from here - the leak the fingerprint case exists to catch.
+   * Redirecting at the source means a new verb cannot reintroduce it.
+   */
+  env.HOME = home
+  env.USERPROFILE = home
+  env.CODEX_HOME = path.join(home, 'codex')
+  env.CLAUDE_CONFIG_DIR = path.join(home, 'claude')
   env.ELECTRON_DISABLE_SANDBOX = '1'
   env.CODEWAIFU_E2E = '1'
   // `npm run dev` exports this, and a shell that still has it would point the
