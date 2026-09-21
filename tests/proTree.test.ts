@@ -376,11 +376,18 @@ describe('filterGroups', () => {
 
 describe('originCounts', () => {
   it('counts the whole tree, which is what a chip has to promise', () => {
-    expect(originCounts(groups())).toEqual({ all: 3, mine: 1, imported: 2 })
+    expect(originCounts(groups())).toEqual({ all: 3, mine: 1, imported: 2, needsMe: 0 })
   })
 
   it('is zero over an empty tree, so the facet row stays hidden', () => {
-    expect(originCounts([])).toEqual({ all: 0, mine: 0, imported: 0 })
+    expect(originCounts([])).toEqual({ all: 0, mine: 0, imported: 0, needsMe: 0 })
+  })
+
+  it('counts the rows a needs-me filter would keep, so its chip can promise too', () => {
+    const view = bench([MINE, ADOPTED, IMPORTED], {
+      attention: [attentionItem({ taskId: 't-mine' })]
+    })
+    expect(originCounts(view.groups).needsMe).toBe(1)
   })
 })
 

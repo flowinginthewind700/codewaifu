@@ -334,9 +334,11 @@ export function Bench(): ReactElement {
     return rows
   }, [shownGroups, collapsed, needsMeOnly])
 
-  // The facet row only exists while there is something imported or adopted. If
-  // the last one is removed while its chip is selected, the tree would stay
-  // empty with no control left on screen to unfilter it.
+  // If the last imported task goes away while its chip is the one selected, the
+  // facet would keep filtering on a count that is now zero. The rail does show
+  // the filtering strip and its clear button, so this is a kindness rather than
+  // the only way back - but a filter that outlived every row it could match is
+  // one the tree should not leave switched on.
   useEffect(() => {
     if (origins.imported === 0) setTreeFilter('all')
   }, [origins.imported])

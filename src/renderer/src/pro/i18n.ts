@@ -180,6 +180,14 @@ const STRINGS = {
   filterAll: { zh: '全部', en: 'All' },
   filterMine: { zh: '我建的', en: 'Mine' },
   filterImported: { zh: '不是这里建的', en: 'Imported' },
+  /** The needs-me facet: same family as the origin chips, so it reads as one
+   *  filter among filters rather than as a switch that hides the tree. */
+  filterNeedsMe: { zh: '需要我', en: 'Needs me' },
+  /** One click back to the whole tree, from the strip that names the filters. */
+  filterClear: { zh: '清除筛选', en: 'Clear filters' },
+  /** The strip above the rows while any filter is on. Names what is applied. */
+  railFiltering: { zh: '筛选中', en: 'Filtering' },
+  railHidden: { zh: '隐藏 {n}', en: '{n} hidden' },
   originAdopted: { zh: '接管', en: 'adopted' },
   originImported: { zh: '导入', en: 'imported' },
   treeFoot: { zh: '{shown} / {total} 个任务', en: '{shown} of {total} tasks' },

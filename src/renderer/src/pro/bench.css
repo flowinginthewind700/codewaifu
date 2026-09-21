@@ -887,8 +887,9 @@ textarea {
 /* The origin facet: chips above the tree, not a fourth group in it. The spine
    of this tree is directories, and an Imported folder would move a task out of
    the checkout it lives in to satisfy a fact about where it came from. The row
-   only renders when something was actually imported, so a fresh bench does not
-   grow a control that filters nothing. */
+   always renders, because needs-me is one of its chips and that filter can be
+   on before anything was ever imported; a rail that hid its own filter surface
+   would hide the reason the tree looks short. */
 .rail-facets {
   display: flex;
   align-items: center;
@@ -896,6 +897,56 @@ textarea {
   padding: 6px 9px;
   border-bottom: 1px solid var(--bench-line-soft);
   flex: 0 0 auto;
+}
+
+/* The "something is hidden" strip. It exists for the one failure mode a filter
+   row cannot prevent on its own: a chip that is on and a tree that looks
+   shorter than the count in the foot, with nothing between them saying why.
+   Names the active filters and how many rows they hide, and carries the clear
+   button, so the way back to the whole tree is always one visible click. */
+.rail-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-bottom: 1px solid var(--bench-line-soft);
+  background: rgba(var(--accent-rgb), 0.07);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+
+.filterbar-label {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.filterbar-tag {
+  padding: 1px 6px;
+  border-radius: 99px;
+  border: 1px solid rgba(var(--accent-rgb), 0.42);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.filterbar-hidden {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rail-filterbar .filterbar-clear {
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.rail-filterbar .filterbar-clear:hover {
+  color: var(--text);
 }
 
 .facet {

@@ -1912,15 +1912,19 @@ export interface OriginCounts {
   all: number
   mine: number
   imported: number
+  /** Rows a "needs me only" filter would keep, so its chip can promise a count
+   *  like the origin facets do. Over the unfiltered tree, same as the facets. */
+  needsMe: number
 }
 
 export function originCounts(groups: readonly GroupView[]): OriginCounts {
-  const counts: OriginCounts = { all: 0, mine: 0, imported: 0 }
+  const counts: OriginCounts = { all: 0, mine: 0, imported: 0, needsMe: 0 }
   for (const group of groups) {
     for (const task of group.tasks) {
       counts.all += 1
       if (task.origin === 'created') counts.mine += 1
       else counts.imported += 1
+      if (task.needsMe > 0) counts.needsMe += 1
     }
   }
   return counts
