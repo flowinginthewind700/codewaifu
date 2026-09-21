@@ -506,7 +506,11 @@ export type ChatBlock = { kind: 'text' | 'code'; text: string; lang?: string }
 export function splitBlocks(text: string): ChatBlock[] {
   const source = String(text ?? '')
   const blocks: ChatBlock[] = []
-  const fence = /^ {0,3}(```|~~~)[ \t]*([\w+-]*)[^\n]*\n/g
+  // The `m` flag is load-bearing: without it `^` only matches at offset zero,
+  // so a fence that opens mid-message - which is nearly every fence an agent
+  // writes, since replies lead with prose - never split and the whole block
+  // rendered as raw white prose, backticks and all, in both windows.
+  const fence = /^ {0,3}(```|~~~)[ \t]*([\w+-]*)[^\n]*\n/gm
   let cursor = 0
   for (;;) {
     fence.lastIndex = cursor

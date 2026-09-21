@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { isInjectedContext, normalizeMessages, parseClaudeRow, parseCodexRow, summarizeArgs } from '../src/shared/chat'
+import {
+  isInjectedContext,
+  normalizeMessages,
+  parseClaudeRow,
+  parseCodexRow,
+  splitBlocks,
+  summarizeArgs
+} from '../src/shared/chat'
 
 // ============================================================
 // Transcript rows -> chat bubbles. Pure functions only: file discovery and
@@ -134,5 +141,53 @@ describe('normalizeMessages', () => {
     const [message] = normalizeMessages({ agent: 'codex', rows }).messages
     expect(message.truncated).toBe(true)
     expect(message.text.length).toBeLessThan(5000)
+  })
+})
+
+describe('splitBlocks', () => {
+  it('splits a fence that opens mid-message, not only at offset zero', () => {
+    // The regression this pins: the opening-fence regex lacked the `m` flag, so
+    // `^` matched only at the very start of the text and every fence an agent
+    // wrote after a lead-in sentence rendered as raw white prose.
+    const text = 'Design for the parity harness:\n\n```ts\ninterface Solved {\n  readonly what: string;\n}\n```\nNow write the file.'
+    const blocks = splitBlocks(text)
+    expect(blocks).toHaveLength(3)
+    expect(blocks[0]).toMatchObject({ kind: 'text' })
+    expect(blocks[1]).toMatchObject({ kind: 'code', lang: 'ts', text: 'interface Solved {\n  readonly what: string;\n}' })
+    expect(blocks[2]).toMatchObject({ kind: 'text', text: 'Now write the file.' })
+  })
+
+  it('splits a fence at the very start of the message', () => {
+    const blocks = splitBlocks('```sh\nnpm test\n```\ndone')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toMatchObject({ kind: 'code', lang: 'sh', text: 'npm test' })
+    expect(blocks[1]).toMatchObject({ kind: 'text', text: 'done' })
+  })
+
+  it('splits several fences in one message, in order', () => {
+    const text = 'a\n```ts\nconst a = 1\n```\nb\n```diff\n-x\n+y\n```\nc'
+    const blocks = splitBlocks(text)
+    expect(blocks.map((b) => b.kind)).toEqual(['text', 'code', 'text', 'code', 'text'])
+    expect(blocks[1].lang).toBe('ts')
+    expect(blocks[3].lang).toBe('diff')
+    expect(blocks.map((b) => b.text).join('|')).toBe('a|const a = 1|b|-x\n+y|c')
+  })
+
+  it('keeps an unterminated fence as code - the agent is still streaming', () => {
+    const blocks = splitBlocks('intro\n```python\nprint(1)')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[1]).toMatchObject({ kind: 'code', lang: 'python', text: 'print(1)' })
+  })
+
+  it('honours the ~~~ marker and a fence with no info string', () => {
+    const blocks = splitBlocks('~~~\nplain dump\n~~~')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ kind: 'code', text: 'plain dump', lang: undefined })
+  })
+
+  it('does not treat a fence marker inside a line as an opening fence', () => {
+    const blocks = splitBlocks('the ``` marker is inline here\nand this is prose')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ kind: 'text' })
   })
 })
