@@ -193,6 +193,12 @@ export function createBenchWindow(deps: BenchWindowDeps): BenchHandle {
     // animation's whole effect is a temporary displacement. Writing it would
     // open the bench at the corner of a dart that finished a second ago.
     if (flying) return
+    // A hidden frame belongs to the window manager, not to the human: GNOME
+    // parks unmapped windows at its own slot and fires `move` for it, so
+    // persisting that would reopen the bench where the WM put a corpse rather
+    // than where the human left the window. The switch makes hide/show the
+    // everyday path, so this is no longer a corner case.
+    if (!win.isVisible()) return
     try {
       const bounds = win.getBounds()
       deps.saveGeometry({
