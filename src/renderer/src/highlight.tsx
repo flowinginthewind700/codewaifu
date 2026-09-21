@@ -110,6 +110,19 @@ function tokenize(language: string, text: string): ReactNode[] {
   return tree.children.flatMap((child, index) => toNodes(child, index))
 }
 
+/** Store one tokenized result and trim the cache back under its budget. */
+function remember(key: string, spans: ReactNode[], chars: number): ReactNode[] {
+  cache.set(key, { spans, chars })
+  cacheChars += chars
+  while (cacheChars > CACHE_MAX_CHARS) {
+    const oldest = cache.keys().next()
+    if (oldest.done) break
+    cacheChars -= cache.get(oldest.value)?.chars ?? 0
+    cache.delete(oldest.value)
+  }
+  return spans
+}
+
 /**
  * The coloured children for one fenced block. Returns plain text (as a single
  * string node) whenever there is no grammar worth trusting, so callers can
@@ -140,15 +153,7 @@ export function codeSpans(fence: string | undefined | null, text: string): React
     return [source]
   }
 
-  cache.set(key, { spans, chars: source.length })
-  cacheChars += source.length
-  while (cacheChars > CACHE_MAX_CHARS) {
-    const oldest = cache.keys().next()
-    if (oldest.done) break
-    cacheChars -= cache.get(oldest.value)?.chars ?? 0
-    cache.delete(oldest.value)
-  }
-  return spans
+  return remember(key, spans, source.length)
 }
 
 /** Test seam: the cache is module state, and a bounded cache needs a reset. */
@@ -161,9 +166,19 @@ export function clearCodeCache(): void {
  * The coloured children for one tool row's command line - the one sentence of
  * code a history shows for every tool row even while its output stays folded,
  * which is what makes it the text a human scanning a transcript actually
- * reads. `bash` is the grammar: these lines are shell, and `codeSpans()` keeps
- * the whole line as one plain string whenever tokenizing fails or the line is
- * over the size gate, so a mangled summary can never render half-coloured.
+ * reads.
+ *
+ * highlight.js's `bash` grammar is the wrong tool here, measured not guessed:
+ * on the command lines agents actually run (`npm run typecheck`,
+ * `DISPLAY=:1 xdotool mousemove 3360 1130 click 1`, `git log --oneline -5`) it
+ * emits ZERO scoped tokens - no builtin, no string, no number - so a history
+ * rendered through it is a history in one flat grey, which is exactly the
+ * complaint this feature exists to answer. `shellLineSpans()` below is the
+ * deterministic shell-line tokenizer that fills that gap: it colours what a
+ * command line is made of (the leading word, flags, strings, variables,
+ * numbers, paths, operators) and never returns an empty token set for a
+ * non-empty line. Fenced blocks and tool output keep going through
+ * `codeSpans()`, where a real grammar is the right call.
  *
  * The summary is clipped at 120 characters with a trailing ellipsis
  * (`summarizeArgs`), which bash reads as an unfinished word - the same thing a
@@ -172,7 +187,109 @@ export function clearCodeCache(): void {
 export function commandSpans(command: string | null | undefined): ReactNode[] {
   const source = String(command ?? '')
   if (!source) return []
-  return codeSpans('bash', source)
+  const key = `shell\u0000${source}`
+  const hit = cache.get(key)
+  if (hit) {
+    cache.delete(key)
+    cache.set(key, hit)
+    return hit.spans
+  }
+  const spans = shellLineSpans(source)
+  return remember(key, spans, source.length)
+}
+
+/* ---- the shell-line tokenizer -------------------------------------------
+ *
+ * One pass, five token kinds, in priority order: quoted strings, `$vars` and
+ * `${...}`, flags (`-x`, `--word`), bare numbers, and words. A word is a flag
+ * if it starts with a dash and has more than one character; it is the command
+ * if it is the first unquoted word of the line (or the first word after a
+ * shell separator, so `cd /tmp && ls` colours both verbs); it is a path if it
+ * contains a slash; otherwise it stays plain. `NAME=value` at the front of a
+ * word is an assignment, not the command, so it takes the variable colour and
+ * leaves the command slot for the word that follows. Separators (`&&`, `||`,
+ * `|`, `;`, redirects) take the keyword colour - the theme styles that scope
+ * in every container, and the structure of a pipeline reads at a glance.
+ *
+ * Every character of the input lands in exactly one node, quoted or not, so
+ * the rendered line is always byte-identical to the command - a colourer that
+ * can eat a character is worse than no colourer.
+ */
+type ShellToken = { cls: string; text: string }
+
+const SHELL_SEPARATORS = ['&&', '||', '|', ';', '>>', '>', '<', '&']
+
+function tokenizeShellLine(line: string): ShellToken[] {
+  const tokens: ShellToken[] = []
+  let i = 0
+  let expectCommand = true
+  const push = (cls: string, text: string): void => {
+    if (text) tokens.push({ cls, text })
+  }
+  while (i < line.length) {
+    const ch = line[i]
+    if (ch === ' ' || ch === '\t') {
+      let j = i
+      while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++
+      push('', line.slice(i, j))
+      i = j
+      continue
+    }
+    const sep = SHELL_SEPARATORS.find((candidate) => line.startsWith(candidate, i))
+    if (sep) {
+      push('hljs-keyword', sep)
+      i += sep.length
+      expectCommand = true
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      const quote = ch
+      let j = i + 1
+      while (j < line.length) {
+        if (line[j] === '\\' && quote === '"') {
+          j += 2
+          continue
+        }
+        if (line[j] === quote) {
+          j++
+          break
+        }
+        j++
+      }
+      // An unterminated quote (the 120-char clip cuts mid-string) still paints:
+      // the rest of the line is the string, exactly as a shell would read it.
+      push('hljs-string', line.slice(i, j))
+      i = j
+      continue
+    }
+    let j = i
+    while (j < line.length && !' \t"\''.includes(line[j]) && !SHELL_SEPARATORS.some((candidate) => line.startsWith(candidate, j))) j++
+    const word = line.slice(i, j)
+    i = j
+    if (/^\$\{?[A-Za-z_]/.test(word)) push('hljs-variable', word)
+    else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) push('hljs-variable', word)
+    else if (word.startsWith('-') && word.length > 1) push('hljs-attr', word)
+    else if (/^\d+(\.\d+)?$/.test(word)) push('hljs-number', word)
+    else if (expectCommand) {
+      push('hljs-built_in', word)
+      expectCommand = false
+    } else if (word.includes('/')) push('hljs-title', word)
+    else push('', word)
+  }
+  return tokens
+}
+
+/** One shell line as coloured spans; plain text nodes carry the unscoped parts. */
+export function shellLineSpans(line: string): ReactNode[] {
+  return tokenizeShellLine(line).map((token, index) =>
+    token.cls ? (
+      <span key={index} className={token.cls}>
+        {token.text}
+      </span>
+    ) : (
+      token.text
+    )
+  )
 }
 
 /**

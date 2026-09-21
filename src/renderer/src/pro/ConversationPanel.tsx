@@ -101,22 +101,26 @@ function Blocks({ text, unfold }: { text: string; unfold: boolean }): ReactEleme
 
 function Message({ message, t }: { message: ChatMessage; t: Translate }): ReactElement {
   const [unfolded, setUnfolded] = useState(false)
-  const lines = message.text.split('\n').length
+  // A tool row that carries its command shows that command as the body: the
+  // reader's `text` for such a row is the same line clipped to 120 chars, so
+  // rendering both would print the command twice, once coloured and once not.
+  const command = message.role === 'tool' ? message.command : undefined
+  const lines = (command ?? message.text).split('\n').length
   const foldable = lines > FOLD_LINES
   const output = useMemo(() => (message.output ? outputSpans(message) : null), [message])
   return (
     <article className="convo-msg" data-role={message.role} data-side={message.sidechain || undefined}>
       <header className="convo-msg-head">
         <span className="convo-role">{roleLabel(message, t)}</span>
-        {message.role === 'tool' && message.command ? (
-          <code className="convo-cmd mono" title={message.command}>
-            {commandSpans(message.command)}
-          </code>
-        ) : null}
         {message.at ? <span className="convo-when">{clockAt(message.at)}</span> : null}
         {message.truncated ? <span className="pill quiet">{t('convoTruncated')}</span> : null}
       </header>
-      {message.text ? <Blocks text={message.text} unfold={unfolded || !foldable} /> : null}
+      {command ? (
+        <pre className="convo-cmd mono" data-unfold={unfolded || undefined}>
+          {commandSpans(command)}
+        </pre>
+      ) : null}
+      {!command && message.text ? <Blocks text={message.text} unfold={unfolded || !foldable} /> : null}
       {output ? (
         <pre className="convo-output mono" data-unfold={unfolded || undefined}>
           {output}

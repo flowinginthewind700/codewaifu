@@ -281,4 +281,41 @@ describe('commandSpans', () => {
     const second = commandSpans(line)
     expect(second).toBe(first)
   })
+
+  // The regression that started this tokenizer: highlight.js's `bash` grammar
+  // emits ZERO scoped tokens for these three real lines (no builtin, no
+  // string, no number), so a history coloured through it was one flat grey.
+  // A command line a human reads must never render unscoped.
+  it.each([
+    'npm run typecheck',
+    'DISPLAY=:1 xdotool mousemove 3360 1130 click 1',
+    'git log --oneline -5',
+    'cd /home/wanlian/dev/threedream && git add src/physics/projection.ts'
+  ])('scopes every plain-looking command line: %s', (line) => {
+    clearCodeCache()
+    const spans = commandSpans(line)
+    expect(textOf(spans)).toBe(line)
+    expect(classesOf(spans).length).toBeGreaterThan(0)
+  })
+
+  it('reads NAME=value as an assignment, not as the command', () => {
+    clearCodeCache()
+    const spans = commandSpans('NODE_ENV=test npm run build')
+    const classes = classesOf(spans)
+    expect(classes[0]).toBe('hljs-variable')
+    expect(classes).toContain('hljs-built_in')
+    expect(textOf(spans)).toBe('NODE_ENV=test npm run build')
+  })
+
+  it('keeps every character across quotes, redirects and a cut-off string', () => {
+    clearCodeCache()
+    for (const line of [
+      `grep -rn "TODO" src | head -20`,
+      `sed -n '1,40p' app/main.py >> /tmp/out.log 2>&1`,
+      `echo "unterminated because the summary was clipped at 120…`,
+      `for u in "/api/a" "/api/b"; do curl $BASE$u; done`
+    ]) {
+      expect(textOf(commandSpans(line))).toBe(line)
+    }
+  })
 })

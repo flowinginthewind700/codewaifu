@@ -3200,16 +3200,16 @@ button.plan-title:focus-visible {
 }
 
 /* The command line of a tool row, coloured as shell (highlight.css holds the
-   token colours; this is only the chip's own shape). One line, clipped, and
-   the full command stays in the title attribute. */
+   token colours; this is only the block's own shape). It wraps like prose: a
+   command is the one line of code a history always shows, and clipping it to
+   one ellipsised row hid exactly the arguments a human reads it for. */
 .convo-cmd {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin: 0 0 4px;
   font-size: var(--fs-term);
+  line-height: 1.55;
   color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .convo-text {
@@ -3224,6 +3224,7 @@ button.plan-title:focus-visible {
 /* Folded means clamped, not truncated: the last line has to stay readable
    enough to decide whether the rest is worth opening. */
 .convo-blocks:not([data-unfold]) .convo-text,
+.convo-cmd:not([data-unfold]),
 .convo-output:not([data-unfold]) {
   display: -webkit-box;
   -webkit-box-orient: vertical;
