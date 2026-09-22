@@ -882,30 +882,33 @@ textarea {
 
 /* One row's box: the row, plus the rename pencil that belongs to it. The pencil
    is a sibling and not a child because a `<button>` may not hold another
-   `<button>`, so this is the element that owns "the pointer is over this row". */
+   `<button>`; the cell is a two-column grid so the pencil still sits in the
+   row's own flow, at its right end, instead of floating over it. A bordered
+   chip painted on top of the row read as a foreign object dropped on the
+   list - inline beside the pills is what "part of this row" looks like. */
 .task-cell {
-  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   min-width: 0;
 }
 
-/* The row's inline rename. It floats over padding the row reserves permanently
-   (`padding-right` below), so showing it cannot move the status pills: a row
-   that jumps under the pointer while you are reaching for it is a row people
-   miss. `opacity` rather than `display` keeps it in the accessibility tree -
-   a control that only exists on hover is one a keyboard user cannot reach, and
-   this one is also bound to F2. */
+/* The row's inline rename. Its column exists whether or not the pencil is
+   showing (`opacity`, not `display`), so showing it cannot move the status
+   pills: a row that jumps under the pointer while you are reaching for it is
+   a row people miss. Staying in the accessibility tree while invisible is
+   also what lets Tab and F2 reach a control the mouse would otherwise be the
+   only way into. Same ghost recipe as the card's pencil: no border, no fill,
+   one faint icon that lights up when you mean it. */
 .task-cell .row-rename {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
-  padding: 2px;
+  width: 22px;
+  height: 22px;
+  padding: 4px;
+  margin-right: 5px;
   border-radius: var(--radius-xs);
   color: var(--faint);
-  background: var(--bench-panel-2);
-  border: 1px solid var(--bench-line);
+  background: transparent;
+  border: 0;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -916,6 +919,19 @@ textarea {
 .task-cell .row-rename svg {
   width: 12px;
   height: 12px;
+}
+
+/* The row's hover wash moved here from `.task-row:hover`: the cell is what
+   owns "the pointer is over this row" now that the pencil is a column of it,
+   and it must not fire on rows that already carry a stronger wash of their
+   own: the title field (a row that glows under a caret reads as one more
+   selection), the selected row, and the keyboard cursor. Excluding them here
+   rather than out-speccing them later is what keeps this rule - which now
+   reaches across the pencil's column - from repainting an accent or cursor
+   wash gray on hover. */
+.task-cell:hover
+  .task-row:not([data-editing='true'], [data-selected='true'], [data-cursor='true']) {
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .task-cell:hover .row-rename,
@@ -1122,20 +1138,16 @@ textarea {
   align-items: center;
   gap: 6px;
   width: 100%;
-  /* The right side is the pencil's slot, reserved whether or not the pencil is
-     showing: a control that made room for itself on hover would shove the
-     status pills sideways on every row the pointer crossed. */
-  padding: 4px 26px 4px 18px;
+  /* The pencil owns its own grid column on the cell, so the row no longer
+     reserves a slot for it here; what is left is breathing room before the
+     pills meet the pencil. */
+  padding: 4px 6px 4px 18px;
   background: transparent;
   border: 0;
   border-left: 2px solid transparent;
   cursor: pointer;
   text-align: left;
   min-width: 0;
-}
-
-.task-row:hover {
-  background: rgba(255, 255, 255, 0.045);
 }
 
 .task-row:focus-visible {
@@ -1198,16 +1210,10 @@ textarea {
 
 /* The row while its title is open. It is a `div` then (an input cannot live in
    a button), so the pointer has to be told this is not something to click, and
-   the hover wash has to stay off: a row that lights up under a caret reads as
-   one more selection. */
+   the hover wash stays off by way of the cell-level rule above: a row that
+   lights up under a caret reads as one more selection. */
 .task-row[data-editing='true'] {
   cursor: text;
-}
-
-/* Selected and cursor washes are declared after the hover rule in the sheet, so
-   they already win: only the unselected row needs its hover taken away. */
-.task-row[data-editing='true']:not([data-selected='true']):hover {
-  background: transparent;
 }
 
 /* Same tokens as `.input`, one notch tighter: this field has to fit a 180px

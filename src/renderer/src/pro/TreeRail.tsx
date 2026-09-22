@@ -342,9 +342,13 @@ type TaskRowTask = GroupView['tasks'][number]
  * The rename pencil is the row's sibling, never its child: a `<button>` may not
  * hold another `<button>`, and turning the row into a `div` to make room would
  * cost it the click and the keyboard activation the whole tree runs on. So
- * `.task-cell` is the per-row box that owns both, and the pencil floats over the
- * right edge of the padding the row reserves permanently - which is why showing
- * it cannot shove the status pills sideways and move a row under the pointer.
+ * `.task-cell` is the per-row box that owns both, as a two-column grid: the row
+ * in the first column, the pencil in a second one at the row's right end, in
+ * the row's own flow. It used to float over padding the row reserved, and a
+ * bordered chip painted on top of a row reads as a foreign object dropped on
+ * the list; beside the pills, in line with them, is what "part of this row"
+ * looks like. The column exists whether or not the pencil shows, so showing it
+ * cannot shove the status pills sideways and move a row under the pointer.
  */
 function TaskRow({
   task,
