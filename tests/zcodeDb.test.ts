@@ -429,7 +429,17 @@ describe('readZcodeTranscript', () => {
     fs.utimesSync(sidecar, bumped, bumped)
 
     const after = readZcodeTranscript(file, bare)
-    expect(after?.mtimeMs).toBeGreaterThanOrEqual(bumped.getTime())
+    // Compared with a 2ms floor rather than exactly: APFS stores nanoseconds,
+    // so a millisecond written through `utimesSync` can read back a hair under
+    // what was set (`...615.999` for `...616`, seen on a macOS runner). ext4
+    // rounds the same value up instead. The production reader only ever asks
+    // "newer than the last read?", where a sub-millisecond artifact means
+    // nothing, so the assertion is about the sidecar winning and not about the
+    // filesystem's float representation.
+    expect(after?.mtimeMs).toBeGreaterThanOrEqual(bumped.getTime() - 2)
     expect(after?.bytes).toBeGreaterThan(0)
+    // The sidecar is 5s in the future and the database is not, so the sidecar
+    // is what the freshness number came from - the actual claim under test.
+    expect(after?.mtimeMs).toBeGreaterThan(before?.mtimeMs ?? 0)
   })
 })
