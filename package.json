@@ -1,8 +1,8 @@
 {
   "name": "codewaifu",
-  "version": "0.4.30",
+  "version": "0.4.31",
   "desktopName": "codewaifu",
-  "description": "A Live2D-style desktop companion that watches your coding agents - Codex, Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI, ZCode, OpenCode and Pi - speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
+  "description": "A Live2D-style desktop companion that watches your coding agents - Codex, Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI, ZCode, OpenCode, Kiro, Pi and Trae - speaks their notices out loud, lists every agent thread and lets you steer them without leaving your keyboard.",
   "keywords": [
     "codex",
     "claude-code",
@@ -11,7 +11,9 @@
     "kimi-cli",
     "zcode",
     "opencode",
+    "kiro",
     "pi",
+    "trae",
     "coding-agent",
     "live2d",
     "waifu",
