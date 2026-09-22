@@ -36,16 +36,21 @@ what every agent is doing right now.
   | Gemini CLI | yes | `~/.gemini/settings.json` | no |
   | Antigravity | yes | `~/.gemini/config/hooks.json` | no |
   | Kimi CLI | yes | `~/.kimi-code/config.toml` | no |
-  | ZCode | yes | `~/.zcode/cli/config.json` | no |
+  | ZCode | yes | `~/.zcode/cli/config.json` | read-only |
   | Kiro | yes | `~/.kiro/hooks/codewaifu.json` | no |
   | Trae | yes | `~/.trae/hooks.json` | no |
   | OpenCode | plugin | `~/.config/opencode/plugins/codewaifu-agent-state.js` | no |
   | Pi | plugin | `~/.pi/agent/extensions/codewaifu-agent-state.ts` | no |
 
-  The last column is the honest limit: only Codex and Claude Code write JSONL we
-  know how to find and parse, so those two are the ones whose history the panel
-  can open and whose thread you can queue a message into. The other nine still
-  speak, bubble, and land in the ledger and the bench tree.
+  The last column is the honest limit, and it splits into two halves. Reading
+  needs a transcript we can find and parse: Codex and Claude Code write JSONL,
+  ZCode keeps its whole history in one SQLite file (`~/.zcode/cli/db/db.sqlite`),
+  and those three are the ones whose history the panel can open. Steering needs
+  an injection path, and only Codex has one - it accepts a queued message, so
+  that is the only thread you can type into. On Claude Code and ZCode the same
+  box falls back to the clipboard: your text is copied, and the paste is yours
+  to make. The other eight still speak, bubble, and land in the ledger and the
+  bench tree.
 
   OpenCode and Pi have no hook config at all: each of them loads every file in
   its own `plugins/` or `extensions/` directory, so what CodeWaifu writes there
@@ -65,9 +70,10 @@ what every agent is doing right now.
   character switches the voice), or pinned to Chinese / English in Settings.
 - **A greeting, not a splash screen.** On launch the companion says something
   time-of-day appropriate, chosen at random from a pool.
-- **Thread board.** Every Codex thread and Claude Code session with live status;
-  steer a running Codex thread by queueing a message, or copy the message for
-  agents without an injection API.
+- **Thread board.** Every Codex thread, Claude Code session and ZCode session,
+  with live status; open any of the three to read its history, steer a running
+  Codex thread by queueing a message, or copy the message for an agent without
+  an injection API.
 - **Media transport.** Play / pause / next / previous for the player that owns
   your system session (Music and Spotify on macOS, the system session on
   Windows, any MPRIS player through `playerctl` on Linux), with the current

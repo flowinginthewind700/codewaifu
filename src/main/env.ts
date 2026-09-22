@@ -85,6 +85,12 @@ export const kimiConfigToml = path.join(kimiHome, 'config.toml')
  */
 export const zcodeHome = resolveOverride(process.env.ZCODE_STORAGE_DIR, path.join(home, '.zcode'))
 export const zcodeHooksFile = path.join(zcodeHome, 'cli', 'config.json')
+/**
+ * ZCode writes no JSONL: its whole history lives in one SQLite file, three
+ * tables (`session`, `message`, `part`), under the same home the hook config
+ * uses. Read-only access, in `main/zcodeDb.ts`.
+ */
+export const zcodeDbFile = path.join(zcodeHome, 'cli', 'db', 'db.sqlite')
 
 /**
  * OpenCode has no hook config: it loads every file in `plugins/` under its

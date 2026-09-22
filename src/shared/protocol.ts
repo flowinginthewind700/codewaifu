@@ -3,10 +3,12 @@ import type { MediaState } from './media'
 import type { RelayConflict } from './portPolicy'
 
 /**
- * Every agent flavor we can name. `codex` and `claude` are the ones we can read
- * a transcript for and steer; the rest are hook reporters - their events still
- * drive speech, bubbles, the ledger and the bench tree, but a transcript we
- * cannot parse is one we do not pretend to open.
+ * Every agent flavor we can name. `codex`, `claude` and `zcode` are the ones we
+ * can read a transcript for - Codex and Claude Code as JSONL on disk, ZCode out
+ * of its SQLite history - and Codex alone is the one we can steer by queue; the
+ * rest are hook reporters, whose events still drive speech, bubbles, the ledger
+ * and the bench tree, but a transcript we cannot parse is one we do not pretend
+ * to open.
  */
 export type Agent =
   | 'codex'

@@ -3820,15 +3820,16 @@ function clipText(text: string, max: number): string {
  *
  * `agentKind` is free text in the registry (herdr reports what it saw, import
  * reports what the tracker saw), so it is narrowed here rather than at every
- * call site: anything that is not codex or claude has no transcript format we
- * can parse, and saying so is better than handing `unknown` to a reader that
- * would then guess a directory.
+ * call site: anything else has no transcript format we can parse, and saying so
+ * is better than handing `unknown` to a reader that would then guess a
+ * directory. ZCode is in the list too - its history lives in SQLite instead of
+ * JSONL, and the reader knows that database.
  */
 function sessionOf(task: TaskRecord): { agent: Agent; id: string } | null {
   const id = String(task.agentSessionId || '').trim()
   if (!id) return null
   const kind = String(task.agentKind || '').trim().toLowerCase()
-  if (kind !== 'codex' && kind !== 'claude') return null
+  if (kind !== 'codex' && kind !== 'claude' && kind !== 'zcode') return null
   return { agent: kind, id }
 }
 function hookText(event: HookEvent): string {

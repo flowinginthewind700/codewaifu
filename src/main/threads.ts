@@ -4,6 +4,7 @@ import type { Agent, EventKind, HookEvent, ThreadInfo } from '../shared/protocol
 import { toSpeakable } from '../shared/lang'
 import { claudeProjectsDir, codexSessionIndex, codexSessionsDir } from './env'
 import { log } from './log'
+import { zcodeThreads } from './zcodeDb'
 
 const MAX_PER_AGENT = 40
 const CACHE_MS = 2500
@@ -20,10 +21,10 @@ interface LiveSession {
 }
 
 /**
- * Neither agent exposes a "list running threads" API we can poll cheaply, so
- * the list is assembled from three sources: live hook events (authoritative for
- * "running right now"), Codex's session index + rollout files, and Claude Code's
- * per-project transcript files.
+ * No agent exposes a "list running threads" API we can poll cheaply, so the
+ * list is assembled from four sources: live hook events (authoritative for
+ * "running right now"), Codex's session index + rollout files, Claude Code's
+ * per-project transcript files, and ZCode's SQLite `session` table.
  */
 export class ThreadTracker {
   private live = new Map<string, LiveSession>()
@@ -89,17 +90,23 @@ export class ThreadTracker {
 
   async list(): Promise<ThreadInfo[]> {
     if (this.cache && Date.now() - this.cache.at < CACHE_MS) return this.cache.threads
-    const [codex, claude] = await Promise.all([safe(() => codexThreads(), []), safe(() => claudeThreads(), [])])
+    const [codex, claude, zcode] = await Promise.all([
+      safe(() => codexThreads(), []),
+      safe(() => claudeThreads(), []),
+      // Synchronous SQLite, but behind the same `safe()` as the file walks: a
+      // database we cannot open must cost the board nothing but its ZCode rows.
+      safe(() => zcodeThreads(), [])
+    ])
     const byKey = new Map<string, ThreadInfo>()
-    for (const thread of [...codex, ...claude]) byKey.set(thread.key, thread)
+    for (const thread of [...codex, ...claude, ...zcode]) byKey.set(thread.key, thread)
 
     for (const session of this.live.values()) {
-      const key = `${session.agent}:${session.sessionId}`
-      const base = byKey.get(key)
+      const base = byKey.get(`${session.agent}:${session.sessionId}`) ?? aliasIn(byKey, session)
+      const key = base?.key || `${session.agent}:${session.sessionId}`
       byKey.set(key, {
         key,
         agent: session.agent,
-        id: session.sessionId,
+        id: base?.id || session.sessionId,
         title: base?.title || session.title || shortPath(session.cwd) || session.sessionId.slice(0, 8),
         cwd: session.cwd || base?.cwd || '',
         updatedAt: Math.max(session.at, base?.updatedAt || 0),
@@ -114,6 +121,25 @@ export class ThreadTracker {
     this.cache = { at: Date.now(), threads }
     return threads
   }
+}
+
+/**
+ * The same ZCode conversation under two spellings.
+ *
+ * The database keys a session `sess_<uuid>` while a hook payload may report the
+ * bare uuid, so a thread that is running right now would otherwise join the
+ * board twice: once live with no history, once from the database with no live
+ * status. Matching on the id suffix keeps it one row - the one that can
+ * actually open its transcript, since that is the spelling the reader wants.
+ */
+function aliasIn(byKey: Map<string, ThreadInfo>, session: LiveSession): ThreadInfo | undefined {
+  if (session.agent !== 'zcode') return undefined
+  const wanted = session.sessionId
+  for (const thread of byKey.values()) {
+    if (thread.agent !== 'zcode') continue
+    if (thread.id.endsWith(wanted) || wanted.endsWith(thread.id)) return thread
+  }
+  return undefined
 }
 
 async function safe<T>(fn: () => T | Promise<T>, fallback: T): Promise<T> {

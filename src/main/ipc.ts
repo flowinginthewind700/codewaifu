@@ -85,7 +85,8 @@ export function registerIpc(core: Core, getWin: () => BrowserWindow | null, ui: 
   handle(IPC.transcript, (payload) => {
     const body = (payload || {}) as { agent?: Agent; threadId?: string; limit?: number; fresh?: boolean }
     // `asAgent` accepts every agent we can name; the transcript reader itself
-    // only has readers for codex and claude, so it returns null for the rest.
+    // only has readers for codex, claude and zcode, so it returns null for the
+    // rest.
     const agent: Agent = asAgent(body.agent)
     if (agent === 'unknown') return { ok: false, transcript: null, error: 'unknown agent' }
     const limit = Number(body.limit) || undefined

@@ -33,15 +33,18 @@ Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode、Kiro、Pi 与 Trae,把�
   | Gemini CLI | 支持 | `~/.gemini/settings.json` | 不支持 |
   | Antigravity | 支持 | `~/.gemini/config/hooks.json` | 不支持 |
   | Kimi CLI | 支持 | `~/.kimi-code/config.toml` | 不支持 |
-  | ZCode | 支持 | `~/.zcode/cli/config.json` | 不支持 |
+  | ZCode | 支持 | `~/.zcode/cli/config.json` | 只读 |
   | Kiro | 支持 | `~/.kiro/hooks/codewaifu.json` | 不支持 |
   | Trae | 支持 | `~/.trae/hooks.json` | 不支持 |
   | OpenCode | 插件 | `~/.config/opencode/plugins/codewaifu-agent-state.js` | 不支持 |
   | Pi | 插件 | `~/.pi/agent/extensions/codewaifu-agent-state.ts` | 不支持 |
 
-  最后一列是诚实的边界:只有 Codex 与 Claude Code 会写我们找得到也解得开的
-  JSONL,所以只有这两家的历史面板打得开、线程能排队插话。另外九家照样说话、
-  弹气泡、进账本和工作台的树。
+  最后一列是诚实的边界,它分成两半。读得开要有一份找得到也解得开的历史:
+  Codex 与 Claude Code 写 JSONL,ZCode 把整段历史放在一个 SQLite 文件里
+  (`~/.zcode/cli/db/db.sqlite`),这三家的历史面板打得开。插得进去则要有一条
+  注入通道,而只有 Codex 有——它接受排队消息,所以那是唯一一条能直接打字的线程。
+  Claude Code 与 ZCode 上,同一个输入框回落到剪贴板:文字帮你复制好,粘贴由你来做。
+  另外八家照样说话、弹气泡、进账本和工作台的树。
 
   OpenCode 与 Pi 根本没有 hook 配置:它们各自会加载自己 `plugins/` 或
   `extensions/` 目录下的每一个文件,所以我们写进去的是一个很小的中继,把同样的
@@ -58,8 +61,9 @@ Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode、Kiro、Pi 与 Trae,把�
 - **默认双语。** 每条消息自动判定语言(出现一个汉字就切中文语音),也可以在
   设置里固定中文或英文。
 - **开机是问候,不是闪屏。** 启动时按时间段从短语池里随机挑一句跟你打招呼。
-- **线程看板。** 列出所有 Codex 线程与 Claude Code 会话及实时状态;对运行中的
-  Codex 线程可以直接排队插话,对没有注入接口的 agent 则把消息复制到剪贴板。
+- **线程看板。** 列出所有 Codex 线程、Claude Code 会话与 ZCode 会话及实时状态;
+  三家都能点开读历史,对运行中的 Codex 线程可以直接排队插话,对没有注入接口的
+  agent 则把消息复制到剪贴板。
 - **媒体控制。** 播放 / 暂停 / 下一曲 / 上一曲,作用于当前占用系统媒体会话的
   播放器(macOS 的 Music 与 Spotify,Windows 的系统媒体,Linux 通过 `playerctl`
   作用于任意 MPRIS 播放器),面板里同步显示曲目。

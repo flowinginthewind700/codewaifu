@@ -546,7 +546,15 @@ export class Core {
     const found = readTranscript(agent, threadId, options)
     if (!found) return null
     const known = this.tracker.peek(agent, threadId)
-    return { ...found, title: known?.title || '', cwd: found.cwd || known?.cwd || '', steerable: Boolean(known?.steerable ?? found.steerable) }
+    // The reader's own title is the fallback, not an empty string: ZCode names
+    // its sessions in the database, and a thread the tracker has not listed yet
+    // (nothing live, no scan since start) would otherwise lose that name.
+    return {
+      ...found,
+      title: known?.title || found.title,
+      cwd: found.cwd || known?.cwd || '',
+      steerable: Boolean(known?.steerable ?? found.steerable)
+    }
   }
 
   async steer(agent: Agent, threadId: string, message: string): Promise<SteerResult> {

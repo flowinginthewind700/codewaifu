@@ -9,8 +9,9 @@ import {
   type ChatTranscript
 } from '../shared/chat'
 import type { Agent } from '../shared/protocol'
-import { claudeProjectsDir, codexSessionsDir } from './env'
+import { claudeProjectsDir, codexSessionsDir, zcodeDbFile } from './env'
 import { log } from './log'
+import { readZcodeTranscript } from './zcodeDb'
 
 // ============================================================
 // Read-only transcript access.
@@ -141,6 +142,28 @@ export interface ReadOptions {
  * Codex thread whose rollout has not been flushed yet.
  */
 export function readTranscript(agent: Agent, threadId: string, options: ReadOptions = {}): ChatTranscript | null {
+  // ZCode keeps no JSONL file: its history is one SQLite database, so the
+  // byte-range tail below has nothing to tail. Its reader windows the query
+  // instead, and answers the same shape.
+  if (agent === 'zcode') {
+    const found = readZcodeTranscript(zcodeDbFile, threadId, { limit: options.limit })
+    if (!found) return null
+    return {
+      key: `zcode:${threadId}`,
+      agent: 'zcode',
+      id: threadId,
+      title: found.title,
+      cwd: found.cwd,
+      file: found.file,
+      messages: found.messages,
+      dropped: found.dropped,
+      mtimeMs: found.mtimeMs,
+      bytes: found.bytes,
+      // No injection API, so the composer's steer falls back to the clipboard.
+      steerable: false
+    }
+  }
+
   const file = transcriptFile(agent, threadId)
   if (!file) return null
   const key = `${agent}:${threadId}`
