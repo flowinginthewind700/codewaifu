@@ -1696,6 +1696,14 @@ input[type='number'] {
   color: var(--agent-pi);
 }
 
+.tag.kiro {
+  color: var(--agent-kiro);
+}
+
+.tag.trae {
+  color: var(--agent-trae);
+}
+
 .empty {
   padding: 20px 12px;
   text-align: center;

@@ -20,8 +20,9 @@ Run the official installer; it is idempotent and safe to re-run:
 The installer downloads the latest release, puts the app in `/Applications`
 (or `%LOCALAPPDATA%\Programs\CodeWaifu`), then runs `CodeWaifu --cli install`,
 which merges hooks into every agent config it finds on the machine - Codex,
-Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI and ZCode - with backups,
-and writes a relay plugin for OpenCode and Pi, which have no hook config at all.
+Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI, ZCode, Kiro and Trae -
+with backups - and writes a relay plugin for OpenCode and Pi, which have no hook
+config at all.
 An agent that is not installed gets nothing written. Never hand-edit those files
 for this purpose; `--cli install` is idempotent and is also the repair path.
 

@@ -783,6 +783,16 @@ textarea {
   background: rgba(var(--agent-pi-rgb), 0.13);
 }
 
+.tag.kiro {
+  color: var(--agent-kiro);
+  background: rgba(var(--agent-kiro-rgb), 0.13);
+}
+
+.tag.trae {
+  color: var(--agent-trae);
+  background: rgba(var(--agent-trae-rgb), 0.13);
+}
+
 .field {
   display: flex;
   flex-direction: column;

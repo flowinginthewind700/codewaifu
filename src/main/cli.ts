@@ -35,9 +35,9 @@ Run \`codewaifu pro help\` for the bench's own verbs.
 
 /**
  * One aligned line per agent flavor. The label column is padded so a machine
- * with nine agents reads as a table rather than as nine ragged sentences, and an
- * agent nobody installed still gets a line: silence there would look like the
- * install skipped it.
+ * with all eleven installed reads as a table rather than as eleven ragged
+ * sentences, and an agent nobody installed still gets a line: silence there
+ * would look like the install skipped it.
  */
 const AGENT_LABEL_WIDTH = Math.max(...HOOK_AGENTS.map((name) => name.length)) + 2
 

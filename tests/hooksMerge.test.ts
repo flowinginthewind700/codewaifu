@@ -11,13 +11,18 @@ import {
   mergeCodexHooks,
   mergeAntigravityHooks,
   mergeCursorHooks,
+  mergeKiroHooks,
+  mergeTraeHooks,
   mergeZcodeHooks,
   scanFlatEvents,
+  scanKiroEvents,
   scanZcodeEvents,
   stripClaudeHooks,
   stripCodexHooks,
   stripAntigravityHooks,
   stripCursorHooks,
+  stripKiroHooks,
+  stripTraeHooks,
   stripZcodeHooks,
   type HookSpec
 } from '../src/shared/hooksMerge'
@@ -579,5 +584,210 @@ describe('mergeZcodeHooks', () => {
       model: 'glm-4.6',
       hooks: { timeoutMs: 3000, maxOutputBytes: 4096 }
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Kiro: `~/.kiro/hooks/codewaifu.json`. A directory Kiro loads in full, so this
+// file is ours alone and its shape is the simplest of the four: `version: "v1"`
+// plus a flat array where each entry names its own `trigger` and carries the
+// command under `action`. What is worth pinning is the required `name`, that a
+// foreign entry in the same file survives both merge and strip, and that a
+// `hooks` we cannot parse is never written into.
+// ---------------------------------------------------------------------------
+
+/** Same runner, Kiro's agent name. Ownership is by path, not by agent. */
+function kiroCommand(event: string): string {
+  return `if [ -f '${SH}' ]; then /bin/sh '${SH}' kiro ${event}; fi`
+}
+
+function kiroSpecs(): HookSpec[] {
+  return [
+    { event: 'SessionStart', command: kiroCommand('SessionStart'), timeout: 5 },
+    { event: 'Stop', command: kiroCommand('Stop'), timeout: 5 }
+  ]
+}
+
+/** A Kiro hook file as the merge sees it: our two keys, plus whatever else is there. */
+type KiroJson = {
+  version?: unknown
+  hooks?: Array<Record<string, unknown>>
+  [key: string]: unknown
+}
+
+/** Someone else's hook, as it would sit in the same file. */
+const THEIR_KIRO_HOOK = {
+  name: 'notify-slack',
+  trigger: 'PostToolUse',
+  action: { type: 'command', command: ORCA },
+  enabled: true
+}
+
+function kiroCommands(json: unknown, trigger: string): string[] {
+  const hooks = (json as KiroJson).hooks
+  return (hooks || [])
+    .filter((hook) => hook.trigger === trigger)
+    .map((hook) => String((hook.action as { command?: string })?.command ?? ''))
+}
+
+describe('mergeKiroHooks', () => {
+  it('writes a flat array of triggers, with the name Kiro requires', () => {
+    const result = mergeKiroHooks(null, kiroSpecs())
+    const json = result.json as KiroJson
+    expect(json.version).toBe('v1')
+    expect(json.hooks).toEqual([
+      {
+        name: 'codewaifu-SessionStart',
+        trigger: 'SessionStart',
+        action: { type: 'command', command: kiroCommand('SessionStart') },
+        enabled: true,
+        timeout: 5
+      },
+      {
+        name: 'codewaifu-Stop',
+        trigger: 'Stop',
+        action: { type: 'command', command: kiroCommand('Stop') },
+        enabled: true,
+        timeout: 5
+      }
+    ])
+    expect(result.events).toEqual(['SessionStart', 'Stop'])
+  })
+
+  it('keeps every foreign entry and every root key, and is idempotent', () => {
+    // Kiro loads each file in the directory, but this one can still hold hooks
+    // the user wrote by hand; dropping theirs to install ours would be the quiet
+    // kind of damage that only shows up when their notification stops arriving.
+    const before = { version: 'v1', team: 'platform', hooks: [THEIR_KIRO_HOOK] }
+    const once = mergeKiroHooks(before, kiroSpecs())
+    const json = once.json as KiroJson
+    expect(json.team).toBe('platform')
+    expect(json.hooks?.[0]).toEqual(THEIR_KIRO_HOOK)
+    expect(kiroCommands(once.json, 'Stop')).toEqual([kiroCommand('Stop')])
+    expect(mergeKiroHooks(once.json, kiroSpecs()).changed).toBe(false)
+    // A version the user pinned is theirs to keep.
+    expect(mergeKiroHooks({ version: 'v2' }, kiroSpecs()).json).toMatchObject({ version: 'v2' })
+  })
+
+  it('takes ours back and leaves theirs running', () => {
+    const installed = mergeKiroHooks({ hooks: [THEIR_KIRO_HOOK] }, kiroSpecs()).json
+    const stripped = stripKiroHooks(installed)
+    expect((stripped.json as KiroJson).hooks).toEqual([THEIR_KIRO_HOOK])
+    expect(stripped.events).toEqual([])
+    expect(JSON.stringify(stripped.json)).not.toContain('.codewaifu')
+    // A file that held only ours goes back to a valid empty one rather than being
+    // deleted: it sits in a directory Kiro scans, and an empty file is quieter
+    // than a removal we would have to explain.
+    const only = stripKiroHooks(mergeKiroHooks(null, kiroSpecs()).json)
+    expect((only.json as KiroJson).hooks).toEqual([])
+    expect((only.json as KiroJson).version).toBe('v1')
+  })
+
+  it('scans only the triggers that carry a hook of ours', () => {
+    expect(scanKiroEvents(null)).toEqual([])
+    expect(scanKiroEvents({ version: 'v1' })).toEqual([])
+    expect(scanKiroEvents(mergeKiroHooks(null, kiroSpecs()).json)).toEqual(['SessionStart', 'Stop'])
+    expect(scanKiroEvents({ hooks: [THEIR_KIRO_HOOK] })).toEqual([])
+  })
+
+  it('leaves a non-array hooks alone and warns, and survives junk', () => {
+    // Unreadable means unwritable: installing into a key we cannot parse would
+    // mean guessing at the user's shape.
+    const junk = { hooks: { Stop: [] } }
+    const result = mergeKiroHooks(junk, kiroSpecs())
+    expect(result.changed).toBe(false)
+    expect(result.warnings.join(' ')).toContain('not an array')
+    expect((result.json as KiroJson).hooks).toEqual({ Stop: [] })
+    for (const bad of [null, undefined, 42, 'text', []]) {
+      expect(() => mergeKiroHooks(bad, kiroSpecs())).not.toThrow()
+      expect(() => stripKiroHooks(bad)).not.toThrow()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Trae: `~/.trae/hooks.json`. Claude's nested groups under `hooks.<Event>`, with
+// a numeric `version` beside them. The nesting itself is already covered by the
+// Claude cases above, so what is pinned here is the difference: the version
+// field, and that the merge invents no matcher of its own - Trae accepts the key
+// on PreToolUse, PostToolUse and Notification only.
+// ---------------------------------------------------------------------------
+
+function traeCommand(event: string): string {
+  return `if [ -f '${SH}' ]; then /bin/sh '${SH}' trae ${event}; fi`
+}
+
+/** Trae specs as `buildSpecs` emits them: no matcher on any trigger. */
+function traeSpecs(): HookSpec[] {
+  return [
+    { event: 'SessionStart', command: traeCommand('SessionStart'), timeout: 5 },
+    { event: 'Notification', command: traeCommand('Notification'), timeout: 5 },
+    { event: 'Stop', command: traeCommand('Stop'), timeout: 5 }
+  ]
+}
+
+function traeCommands(json: unknown, event: string): string[] {
+  const hooks = (json as HooksJson).hooks
+  return (hooks?.[event] || []).flatMap((group) => group.hooks.map((h) => h.command || ''))
+}
+
+describe('mergeTraeHooks', () => {
+  it('nests under the event and adds Trae numeric version', () => {
+    const result = mergeTraeHooks(null, traeSpecs())
+    const json = result.json as Record<string, unknown>
+    // Cursor spells this field the same way, Kiro spells its own "v1"; the wrong
+    // one is a file Trae refuses to load, with no error we would ever see.
+    expect(json.version).toBe(1)
+    expect(traeCommands(json, 'Notification')).toEqual([traeCommand('Notification')])
+    expect(result.events).toEqual(['Notification', 'SessionStart', 'Stop'])
+  })
+
+  it('writes no matcher of its own, and carries one only if a spec asks', () => {
+    const json = mergeTraeHooks(null, traeSpecs()).json as HooksJson
+    for (const event of ['SessionStart', 'Notification', 'Stop']) {
+      expect(json.hooks?.[event][0].matcher, event).toBeUndefined()
+    }
+    // The merge stays faithful to the spec, which keeps `buildSpecs` the single
+    // place that decides whether a matcher is safe to write.
+    const withMatcher = mergeTraeHooks(
+      null,
+      [{ event: 'PreToolUse', matcher: 'Bash', command: traeCommand('PreToolUse') }]
+    ).json as HooksJson
+    expect(withMatcher.hooks?.PreToolUse[0].matcher).toBe('Bash')
+  })
+
+  it('keeps another tool inside the same event, and is idempotent', () => {
+    const before = {
+      version: 1,
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: ORCA, timeout: 10 }] }] }
+    }
+    const once = mergeTraeHooks(before, traeSpecs())
+    expect(traeCommands(once.json, 'Stop')).toEqual([ORCA, traeCommand('Stop')])
+    expect(mergeTraeHooks(once.json, traeSpecs()).changed).toBe(false)
+    // Stripping takes ours and leaves theirs running, version included.
+    const after = stripTraeHooks(once.json)
+    expect(traeCommands(after.json, 'Stop')).toEqual([ORCA])
+    expect((after.json as { version?: unknown }).version).toBe(1)
+  })
+
+  it('drops hooks once strip empties it, and survives junk', () => {
+    const installed = mergeTraeHooks(null, traeSpecs()).json
+    const stripped = stripTraeHooks(installed)
+    expect((stripped.json as HooksJson).hooks).toBeUndefined()
+    expect(stripped.changed).toBe(true)
+    for (const junk of [null, undefined, 42, 'text', []]) {
+      expect(() => mergeTraeHooks(junk, traeSpecs())).not.toThrow()
+      expect(() => stripTraeHooks(junk)).not.toThrow()
+    }
+    expect(stripTraeHooks('not a config').json).toEqual({})
+  })
+
+  it('round-trips: merge then strip restores the user file', () => {
+    const before = {
+      version: 1,
+      mcpServers: { fetch: { command: 'uvx' } },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: ORCA, timeout: 10 }] }] }
+    }
+    expect(stripTraeHooks(mergeTraeHooks(before, traeSpecs()).json).json).toEqual(before)
   })
 })

@@ -455,3 +455,129 @@ export function scanFlatEvents(value: unknown, key?: string): string[] {
   const source = key ? root[key] : root.hooks
   return eventsWithFlatOurs(isRecord(source) ? source : {})
 }
+
+// ---------------------------------------------------------------------------
+// Kiro: one flat array, one trigger per entry.
+//
+// `~/.kiro/hooks/codewaifu.json` is a file of ours alone - Kiro loads *every*
+// file in that directory - so the shape is simpler than the shared configs:
+// a required `version: "v1"`, then a flat `hooks` array where each entry names
+// its own `trigger` and carries the command under `action`. Nothing nests, and
+// there is no event key to walk.
+//
+// Two fields the other schemas do not have, both from Kiro's own field table:
+// `name` is required, so it is derived from the trigger rather than left for
+// Kiro to reject; `matcher` is documented as "not evaluated" for
+// SessionStart/Stop and as tool-name/prompt-text for the rest, where a pattern
+// we wrote for Codex would filter out nearly everything. Omitting it means
+// always-match, which is what we want on every trigger.
+// ---------------------------------------------------------------------------
+
+interface KiroHook {
+  name?: string
+  trigger?: string
+  matcher?: string
+  action?: { type?: string; command?: string }
+  timeout?: number
+  enabled?: boolean
+  [key: string]: unknown
+}
+
+/** True when this entry's action points into our hooks dir. */
+function kiroHookIsOurs(raw: unknown): boolean {
+  if (!isRecord(raw)) return false
+  return isRecord(raw.action) && isOurHookCommand(raw.action.command)
+}
+
+/** The entry one spec becomes. `name` is required by Kiro's schema. */
+function kiroHookFor(spec: HookSpec): KiroHook {
+  const hook: KiroHook = {
+    name: `codewaifu-${spec.event}`,
+    trigger: spec.event,
+    action: { type: 'command', command: spec.command },
+    enabled: true
+  }
+  if (typeof spec.timeout === 'number') hook.timeout = spec.timeout
+  return hook
+}
+
+export function mergeKiroHooks(existing: unknown, specs: HookSpec[]): MergeResult {
+  const before = isRecord(existing) ? existing : {}
+  const warnings: string[] = []
+  const raw = before.hooks
+  if (raw !== undefined && !Array.isArray(raw)) {
+    // Unreadable, so unwritable: someone else's key keeps its bytes and our
+    // hooks are not installed, exactly like an opaque event elsewhere.
+    warnings.push('hooks is not an array; left untouched, CodeWaifu did not install into it')
+    return { json: before, changed: false, events: [], warnings }
+  }
+  const foreign = Array.isArray(raw) ? raw.filter((hook) => !kiroHookIsOurs(hook)) : []
+  const root: Record<string, unknown> = { ...before }
+  // Kiro rejects a file without it; a version the user pinned is never touched.
+  if (root.version === undefined) root.version = 'v1'
+  root.hooks = [...foreign, ...specs.map(kiroHookFor)]
+  const events = [...new Set(specs.map((spec) => spec.event))].sort()
+  const changed = stable(before) !== stable(root)
+  return { json: root, changed, events, warnings }
+}
+
+/**
+ * Undo `mergeKiroHooks`. A file whose hooks were all ours goes back to an empty
+ * array rather than being deleted: the file is inside a directory Kiro scans,
+ * and an empty valid file is quieter than a removal we would have to explain.
+ */
+export function stripKiroHooks(existing: unknown): MergeResult {
+  const root = isRecord(existing) ? { ...existing } : {}
+  const raw = root.hooks
+  if (raw !== undefined && !Array.isArray(raw)) {
+    return { json: root, changed: false, events: [], warnings: ['hooks is not an array; left untouched'] }
+  }
+  const kept = Array.isArray(raw) ? raw.filter((hook) => !kiroHookIsOurs(hook)) : []
+  root.hooks = kept
+  if (root.version === undefined) root.version = 'v1'
+  const changed = stable(existing ?? {}) !== stable(root)
+  return { json: root, changed, events: [], warnings: [] }
+}
+
+/** Trigger names in a Kiro file that currently carry a hook of ours. */
+export function scanKiroEvents(value: unknown): string[] {
+  const root = isRecord(value) ? value : {}
+  const hooks = Array.isArray(root.hooks) ? root.hooks : []
+  return hooks
+    .filter(kiroHookIsOurs)
+    .map((hook) => (isRecord(hook) && typeof hook.trigger === 'string' ? hook.trigger : ''))
+    .filter(Boolean)
+    .sort()
+}
+
+// ---------------------------------------------------------------------------
+// Trae: Claude's nested shape, with a numeric `version` on top.
+//
+// `~/.trae/hooks.json` maps `hooks.<Event>` to groups of definitions exactly the
+// way Claude Code does, so the group merge above is the right tool. What Trae
+// adds is a `version` of its own - the number `1`, spelled the way Cursor
+// spells that field, where Kiro's is the string `"v1"` and none of the three
+// read the others' - plus one constraint on `matcher`: it is only valid on
+// PreToolUse, PostToolUse and Notification, so the session matcher we write for
+// Codex must never reach a Trae file.
+// ---------------------------------------------------------------------------
+
+export function mergeTraeHooks(existing: unknown, specs: HookSpec[]): MergeResult {
+  const before = isRecord(existing) ? existing : {}
+  const root: Record<string, unknown> = { ...before }
+  const rebuilt = rebuild(normalizeEvents(root.hooks), specs)
+  root.hooks = rebuilt.hooks
+  if (root.version === undefined) root.version = 1
+  const changed = stable(before) !== stable(root)
+  return { json: root, changed, events: rebuilt.events, warnings: rebuilt.warnings }
+}
+
+export function stripTraeHooks(existing: unknown): MergeResult {
+  const root = isRecord(existing) ? { ...existing } : {}
+  const parsed = normalizeEvents(root.hooks)
+  const after = { ...parsed.opaque, ...pruneEmpty(stripOurs(parsed.events)) }
+  if (Object.keys(after).length > 0) root.hooks = after
+  else delete root.hooks
+  const changed = stable(existing ?? {}) !== stable(root)
+  return { json: root, changed, events: [], warnings: parsed.warnings }
+}

@@ -7,6 +7,12 @@ const KIND_BY_EVENT: Record<string, EventKind> = {
   sessionstart: 'session_start',
   sessionend: 'session_end',
   userpromptsubmit: 'prompt',
+  // Kiro's config trigger is `SessionStart`, but the CLI still sends the older
+  // name in `hook_event_name` - and its stop trigger arrives as `agentStop`.
+  // Both are the same moments under the old spelling, so both fold in here;
+  // without the first one a Kiro session would never be greeted.
+  agentspawn: 'session_start',
+  agentstop: 'stop',
   // Cursor names the same moments differently, and Gemini/Antigravity use
   // their own verbs. All three fold into the kinds the UI already knows.
   beforesubmitprompt: 'prompt',

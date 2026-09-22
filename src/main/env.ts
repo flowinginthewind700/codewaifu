@@ -121,6 +121,23 @@ export const piAgentDir = resolveOverride(
 export const piExtensionFile = path.join(piAgentDir, 'extensions', piExtensionName)
 
 /**
+ * Kiro reads hooks from `~/.kiro/hooks/`, honouring `KIRO_HOME` the same way
+ * its own CLI does. Every file in that directory is loaded, so ours is named
+ * after us and never overwrites a hook file the user wrote beside it.
+ */
+export const kiroHome = resolveOverride(process.env.KIRO_HOME, path.join(home, '.kiro'))
+export const kiroHooksFile = path.join(kiroHome, 'hooks', 'codewaifu.json')
+
+/**
+ * Trae has a single global hook file and no home override, so there is nothing
+ * to resolve and nothing to relocate: `~/.trae/hooks.json`. It is shared with
+ * whatever else the user put there, which is why the merge below carries every
+ * foreign entry through.
+ */
+export const traeHome = path.join(home, '.trae')
+export const traeHooksFile = path.join(traeHome, 'hooks.json')
+
+/**
  * Homes of every agent we can name, one or more candidate directories each.
  * Presence here is what the bench's agent menu and the settings panel use to
  * decide a runner is worth offering; absence just means the row stays hidden.
@@ -137,9 +154,9 @@ export const detectionHomes: Record<string, readonly string[]> = {
   kimi: [kimiHome],
   zcode: [zcodeHome],
   opencode: [opencodeConfigDir, opencodeLegacyConfigDir],
-  kiro: [path.join(home, '.kiro')],
+  kiro: [kiroHome],
   pi: [piHome],
-  trae: [path.join(home, '.trae')]
+  trae: [traeHome]
 }
 
 export const isMac = platform === 'darwin'

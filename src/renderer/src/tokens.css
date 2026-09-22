@@ -71,16 +71,19 @@
      the chroma here means re-checking that pairing, and reusing `--review` blue
      for an agent is out: it is the "awaiting my eyes" state colour.
 
-     Agents we only detect but do not integrate (kiro, trae, a custom herdr
-     manifest) keep the neutral tag - colouring them would advertise support we
-     do not have. ZCode, OpenCode and Pi do get hues: as of 0.4.30 they are
-     three of the nine flavors we install into, the first two through a plugin
-     file rather than a config merge.
+     Every flavor below gets a hue, because as of 0.4.31 every flavor we can
+     name is also one we install into: ZCode, OpenCode and Pi joined in 0.4.30
+     (the last two through a plugin file rather than a config merge), Kiro and
+     Trae in 0.4.31. A custom herdr manifest is the only thing left neutral -
+     naming it would advertise an identity we never learned.
 
-     The three new hues were placed in the widest gaps of the existing ramp
-     (lime between kimi and codex, orchid between gemini and antigravity, rose
-     between antigravity and claude) and away from warn's amber and review's
-     blue, which belong to states. */
+     Each new hue went into the widest gap left in the ramp (lime between kimi
+     and codex, orchid between gemini and antigravity, rose between antigravity
+     and claude, teal between cursor and opencode, spring between opencode and
+     kimi) and away from warn's amber and review's blue, which belong to states.
+     The floor to respect when adding another: the closest existing pair is
+     gemini/pi at 16.6 CIELAB dE, so a new agent colour below that is a colour
+     nobody can tell apart at tag size. */
   --agent-cursor-rgb: 127, 212, 232;
   --agent-cursor: rgb(var(--agent-cursor-rgb));
   --agent-gemini-rgb: 179, 164, 245;
@@ -95,6 +98,10 @@
   --agent-opencode: rgb(var(--agent-opencode-rgb));
   --agent-pi-rgb: 214, 150, 232;
   --agent-pi: rgb(var(--agent-pi-rgb));
+  --agent-kiro-rgb: 148, 230, 219;
+  --agent-kiro: rgb(var(--agent-kiro-rgb));
+  --agent-trae-rgb: 166, 221, 170;
+  --agent-trae: rgb(var(--agent-trae-rgb));
 
   --glass-blur: 26px;
   --glass-sat: 180%;

@@ -4,10 +4,10 @@
 
 **A desktop companion that lives next to your coding agents.** CodeWaifu sits in
 your menu bar as a small, draggable, always-on-top character. It listens to
-Codex, Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI, ZCode, OpenCode
-and Pi through their hook and plugin systems, speaks every event that needs you
-out loud, keeps a live board of all your agent threads, lets you steer them
-without leaving the keyboard, and drives your music player while you work.
+Codex, Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI, ZCode, OpenCode,
+Kiro, Pi and Trae through their hook and plugin systems, speaks every event that
+needs you out loud, keeps a live board of all your agent threads, lets you steer
+them without leaving the keyboard, and drives your music player while you work.
 
 ![CodeWaifu companion](docs/assets/companion.png)
 
@@ -21,7 +21,7 @@ what every agent is doing right now.
 
 ## Features
 
-- **Speaks your agents.** Hook events from nine agent flavors (session start,
+- **Speaks your agents.** Hook events from eleven agent flavors (session start,
   stop, permission request, notification, tool call, compaction, subagent,
   interrupt) become short spoken lines through the system TTS, with per-event
   toggles and a phrase pool so the same event never sounds identical twice.
@@ -37,12 +37,14 @@ what every agent is doing right now.
   | Antigravity | yes | `~/.gemini/config/hooks.json` | no |
   | Kimi CLI | yes | `~/.kimi-code/config.toml` | no |
   | ZCode | yes | `~/.zcode/cli/config.json` | no |
+  | Kiro | yes | `~/.kiro/hooks/codewaifu.json` | no |
+  | Trae | yes | `~/.trae/hooks.json` | no |
   | OpenCode | plugin | `~/.config/opencode/plugins/codewaifu-agent-state.js` | no |
   | Pi | plugin | `~/.pi/agent/extensions/codewaifu-agent-state.ts` | no |
 
   The last column is the honest limit: only Codex and Claude Code write JSONL we
   know how to find and parse, so those two are the ones whose history the panel
-  can open and whose thread you can queue a message into. The other seven still
+  can open and whose thread you can queue a message into. The other nine still
   speak, bubble, and land in the ledger and the bench tree.
 
   OpenCode and Pi have no hook config at all: each of them loads every file in
@@ -51,6 +53,14 @@ what every agent is doing right now.
   fire-and-forget by construction - the handler returns before the request
   resolves, so a CodeWaifu that is closed, hung or mid-restart costs your agent
   nothing.
+
+  Kiro and Trae are two more JSON shapes. Kiro loads every file in
+  `~/.kiro/hooks/`, so ours is named after us and sits beside whatever hooks you
+  wrote: a flat array of `trigger` entries under `version: "v1"`. Trae keeps one
+  shared `~/.trae/hooks.json` in Claude Code's nested shape under a numeric
+  `version`, and the merge carries your own entries through it. Neither takes
+  the session matcher the others get, so neither file has one - an omitted
+  matcher means always-match, which is what a hook that only ever reports wants.
 - **Bilingual by default.** Language is auto-detected per message (one CJK
   character switches the voice), or pinned to Chinese / English in Settings.
 - **A greeting, not a splash screen.** On launch the companion says something
@@ -78,7 +88,7 @@ what every agent is doing right now.
 
 The companion answers *which agent needs me right now*. The Bench answers the
 next question: what is every one of them doing, in their own terminals, without
-opening nine windows. Pro is a second window over
+opening eleven windows. Pro is a second window over
 [herdr](https://github.com/herdrdev/herdr), the durable terminal runtime that
 owns the PTYs - tasks, workspaces and panes outlive the Bench closing, the
 machine sleeping, and the app crashing.
@@ -267,7 +277,7 @@ the plugin commands both drive the same installer.
 Requirements: macOS 12+, Windows 10+, or a glibc desktop Linux (Ubuntu 22.04+,
 Debian 12+, Fedora 40+; x64), plus Codex CLI and/or Claude Code recent enough
 to support hooks - or any of Cursor Agent, Gemini CLI, Antigravity, Kimi CLI,
-ZCode, OpenCode and Pi.
+ZCode, OpenCode, Kiro, Pi and Trae.
 
 ## How it works
 

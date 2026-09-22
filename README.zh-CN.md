@@ -4,9 +4,9 @@
 
 **住在编码 agent 旁边的桌面伙伴。** CodeWaifu 以一个小巧、可拖拽、始终置顶的
 角色停在菜单栏里。它通过 hook 与插件机制监听 Codex、Claude Code、Cursor、
-Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode 与 Pi,把每一个需要你出面
-的事件说出来,维护一块实时线程看板,让你不离开键盘就能指挥它们,顺手还能控制
-你的音乐播放器。
+Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode、Kiro、Pi 与 Trae,把每一个
+需要你出面的事件说出来,维护一块实时线程看板,让你不离开键盘就能指挥它们,
+顺手还能控制你的音乐播放器。
 
 ![CodeWaifu 桌面伙伴](docs/assets/companion.png)
 
@@ -19,7 +19,7 @@ Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode 与 Pi,把每一个需要
 
 ## 功能
 
-- **替 agent 说话。** 九种 agent 的 hook 事件(会话开始、结束、
+- **替 agent 说话。** 十一种 agent 的 hook 事件(会话开始、结束、
   权限请求、通知、工具调用、上下文压缩、子代理、中断)都会变成一句简短语音,
   走系统 TTS;每类事件可单独开关,短语池保证同一件事不会两次说的一模一样。
   每种 agent 只注册它真正会发出的事件——名字不靠编,没装的 agent 一个字节的
@@ -34,17 +34,27 @@ Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode 与 Pi,把每一个需要
   | Antigravity | 支持 | `~/.gemini/config/hooks.json` | 不支持 |
   | Kimi CLI | 支持 | `~/.kimi-code/config.toml` | 不支持 |
   | ZCode | 支持 | `~/.zcode/cli/config.json` | 不支持 |
+  | Kiro | 支持 | `~/.kiro/hooks/codewaifu.json` | 不支持 |
+  | Trae | 支持 | `~/.trae/hooks.json` | 不支持 |
   | OpenCode | 插件 | `~/.config/opencode/plugins/codewaifu-agent-state.js` | 不支持 |
   | Pi | 插件 | `~/.pi/agent/extensions/codewaifu-agent-state.ts` | 不支持 |
 
   最后一列是诚实的边界:只有 Codex 与 Claude Code 会写我们找得到也解得开的
-  JSONL,所以只有这两家的历史面板打得开、线程能排队插话。另外七家照样说话、
+  JSONL,所以只有这两家的历史面板打得开、线程能排队插话。另外九家照样说话、
   弹气泡、进账本和工作台的树。
 
   OpenCode 与 Pi 根本没有 hook 配置:它们各自会加载自己 `plugins/` 或
   `extensions/` 目录下的每一个文件,所以我们写进去的是一个很小的中继,把同样的
   事件 POST 到同一个回环端口。它在结构上就是发完即走——handler 不等请求返回就
   自己回去了,所以 CodeWaifu 关着、卡住或正在重启,都不会让你的 agent 付出任何代价。
+
+  Kiro 与 Trae 是另外两种 JSON 形状。Kiro 会加载 `~/.kiro/hooks/` 下的每一个文件,
+  所以我们那份以我们自己命名,和你自己写的 hook 并排放着:一个扁平数组,每项写
+  自己的 `trigger`,顶层带 `version: "v1"`。Trae 只有一个全局的
+  `~/.trae/hooks.json`,形状与 Claude Code 的嵌套结构一致,顶层 `version` 是数字
+  `1`,合并时你自己的条目会原样带过去。两家都不接受别家那套会话 matcher,所以
+  文件里一个都不写——省略 matcher 就是永远匹配,而一个只负责上报的 hook 要的
+  正是这个。
 - **默认双语。** 每条消息自动判定语言(出现一个汉字就切中文语音),也可以在
   设置里固定中文或英文。
 - **开机是问候,不是闪屏。** 启动时按时间段从短语池里随机挑一句跟你打招呼。
@@ -65,7 +75,7 @@ Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode 与 Pi,把每一个需要
 ## Pro:你的 agent 终端的驾驶舱
 
 浮窗回答的是「现在哪个 agent 需要我」。工作台回答下一个问题:它们每一个此刻在
-干什么——不用开九个窗口。Pro 是盖在 [herdr](https://github.com/herdrdev/herdr)
+干什么——不用开十一个窗口。Pro 是盖在 [herdr](https://github.com/herdrdev/herdr)
 上的第二扇窗:那个持有 PTY 的持久终端运行时。任务、工作区、面板都活得比 Bench
 关窗、机器睡眠、应用崩溃更久。
 
@@ -228,7 +238,7 @@ mkdir -p ~/.codex/skills/codewaifu && curl -fsSL \
 环境要求:macOS 12+、Windows 10+,或 glibc 桌面版 Linux(Ubuntu 22.04+、
 Debian 12+、Fedora 40+;x64),外加支持 hooks 的较新版本 Codex CLI /
 Claude Code——或者 Cursor Agent、Gemini CLI、Antigravity、Kimi CLI、ZCode、
-OpenCode、Pi 中的任意一个。
+OpenCode、Kiro、Pi、Trae 中的任意一个。
 
 ## 工作原理
 

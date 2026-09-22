@@ -26,13 +26,18 @@ import {
   mergeClaudeHooks,
   mergeCodexHooks,
   mergeCursorHooks,
+  mergeKiroHooks,
+  mergeTraeHooks,
   mergeZcodeHooks,
   scanFlatEvents,
+  scanKiroEvents,
   scanZcodeEvents,
   stripAntigravityHooks,
   stripClaudeHooks,
   stripCodexHooks,
   stripCursorHooks,
+  stripKiroHooks,
+  stripTraeHooks,
   stripZcodeHooks,
   type HookSpec
 } from '../shared/hooksMerge'
@@ -48,6 +53,8 @@ import {
   hooksDir,
   isWindows,
   kimiConfigToml,
+  kiroHome,
+  kiroHooksFile,
   opencodeConfigDir,
   opencodeLegacyConfigDir,
   opencodePluginFile,
@@ -56,6 +63,7 @@ import {
   piHome,
   platform,
   stateDir,
+  traeHooksFile,
   zcodeHome,
   zcodeHooksFile
 } from './env'
@@ -86,7 +94,9 @@ export type HookAgent =
   | 'kimi'
   | 'zcode'
   | 'opencode'
+  | 'kiro'
   | 'pi'
+  | 'trae'
 
 /** Agents whose integration is a generated code file rather than a hook config. */
 export type PluginAgent = 'opencode' | 'pi'
@@ -136,7 +146,13 @@ const TARGETS: AgentTarget[] = [
   // write: OpenCode has two legitimate homes and `pluginFileFor` picks the live
   // one. It is the path the settings panel shows before an install happens.
   { name: 'opencode', file: opencodePluginFile },
-  { name: 'pi', file: piExtensionFile }
+  // Kiro loads *every* file in its hooks directory, so ours is named after us
+  // and lives beside whatever hooks the user wrote rather than replacing them.
+  { name: 'kiro', file: kiroHooksFile },
+  { name: 'pi', file: piExtensionFile },
+  // Trae's one global hook file is shared with the user's own hooks, so it is a
+  // JSON target like the others and the merge carries theirs through.
+  { name: 'trae', file: traeHooksFile }
 ]
 
 /**
@@ -162,6 +178,10 @@ const TARGETS: AgentTarget[] = [
  * (SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
  * PostToolUseFailure, Stop), so it has no compact, subagent or notification row:
  * a name it does not know would be rejected with the whole config file.
+ *
+ * Kiro spells its triggers exactly like Claude Code but emits no permission,
+ * compact, subagent or notification event, so four of the seven rows are empty
+ * for it. Trae adds `Notification` on top of Kiro's set and stops there.
  */
 const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, string[]>>> = {
   sessionStart: {
@@ -169,7 +189,9 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     claude: ['SessionStart'],
     gemini: ['SessionStart'],
     antigravity: ['PreInvocation'],
-    zcode: ['SessionStart']
+    zcode: ['SessionStart'],
+    kiro: ['SessionStart'],
+    trae: ['SessionStart']
   },
   stop: {
     codex: ['Stop'],
@@ -178,7 +200,9 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     gemini: ['AfterAgent'],
     antigravity: ['PostInvocation', 'Stop'],
     kimi: ['Stop', 'StopFailure'],
-    zcode: ['Stop']
+    zcode: ['Stop'],
+    kiro: ['Stop'],
+    trae: ['Stop']
   },
   permission: {
     codex: ['PermissionRequest'],
@@ -188,7 +212,7 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     kimi: ['PermissionRequest'],
     zcode: ['PermissionRequest']
   },
-  notification: { claude: ['Notification'], gemini: ['Notification'] },
+  notification: { claude: ['Notification'], gemini: ['Notification'], trae: ['Notification'] },
   tool: {
     codex: ['PostToolUse'],
     claude: ['PostToolUse'],
@@ -196,7 +220,9 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     gemini: ['BeforeTool', 'AfterTool'],
     antigravity: ['PostToolUse'],
     kimi: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'],
-    zcode: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']
+    zcode: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'],
+    kiro: ['PreToolUse', 'PostToolUse'],
+    trae: ['PreToolUse', 'PostToolUse']
   },
   compact: { codex: ['PreCompact'], claude: ['PreCompact'], gemini: ['PreCompress'] },
   subagent: { codex: ['SubagentStop'], claude: ['SubagentStop'] },
@@ -206,7 +232,9 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     cursor: ['beforeSubmitPrompt'],
     gemini: ['BeforeAgent'],
     kimi: ['UserPromptSubmit'],
-    zcode: ['UserPromptSubmit']
+    zcode: ['UserPromptSubmit'],
+    kiro: ['UserPromptSubmit'],
+    trae: ['UserPromptSubmit']
   }
 }
 
@@ -284,7 +312,14 @@ export function buildSpecs(config: AppConfig, agent: Exclude<HookAgent, 'kimi' |
       // which means every source.
       // ZCode is like Gemini here: its SessionStart takes no matcher, and an
       // unknown key on a strict schema risks the whole config being rejected.
-      if (event === 'SessionStart' && agent !== 'gemini' && agent !== 'zcode') spec.matcher = SESSION_MATCHER
+      // Kiro documents `matcher` as "not evaluated" on SessionStart/Stop and as
+      // tool-name/prompt-text elsewhere, where our regex would filter out nearly
+      // everything. Trae only accepts `matcher` on PreToolUse, PostToolUse and
+      // Notification. Both therefore get no matcher at all: omitted means
+      // always-match, which is the behaviour we want on every trigger.
+      const noMatcher =
+        agent === 'gemini' || agent === 'zcode' || agent === 'kiro' || agent === 'trae'
+      if (event === 'SessionStart' && !noMatcher) spec.matcher = SESSION_MATCHER
       // Cursor puts `command` straight on the definition; Antigravity only does
       // that for its non-tool events and wants a `type` when it does.
       if (agent === 'cursor') spec.flat = true
@@ -334,6 +369,10 @@ function mergeFor(agent: HookAgent, value: unknown, specs: HookSpec[]) {
       // Claude's nested shape, one level deeper under `hooks.events`, plus the
       // `hooks.enabled` switch that defaults to false.
       return mergeZcodeHooks(value, specs)
+    case 'kiro':
+      return mergeKiroHooks(value, specs)
+    case 'trae':
+      return mergeTraeHooks(value, specs)
     default:
       // Claude and Gemini share the nested `hooks.<Event>[].hooks[]` shape.
       return mergeClaudeHooks(value, specs)
@@ -350,6 +389,10 @@ function stripFor(agent: HookAgent, value: unknown) {
       return stripAntigravityHooks(value)
     case 'zcode':
       return stripZcodeHooks(value)
+    case 'kiro':
+      return stripKiroHooks(value)
+    case 'trae':
+      return stripTraeHooks(value)
     default:
       return stripClaudeHooks(value)
   }
@@ -360,6 +403,7 @@ function scanEventsFor(agent: HookAgent, value: unknown): string[] {
   if (agent === 'cursor') return scanFlatEvents(value)
   if (agent === 'antigravity') return scanFlatEvents(value, ANTIGRAVITY_BUNDLE)
   if (agent === 'zcode') return scanZcodeEvents(value)
+  if (agent === 'kiro') return scanKiroEvents(value)
   return scanOurEvents(value)
 }
 
@@ -508,6 +552,9 @@ function agentPresent(name: HookAgent, file: string): boolean {
     if (name === 'zcode') return fs.existsSync(zcodeHome)
     if (name === 'opencode') return fs.existsSync(opencodeConfigDir) || fs.existsSync(opencodeLegacyConfigDir)
     if (name === 'pi') return fs.existsSync(piHome)
+    // Kiro creates `~/.kiro/hooks/` lazily, so an installed Kiro with no hook
+    // file yet would look absent if we only checked the file's own directory.
+    if (name === 'kiro') return fs.existsSync(kiroHome)
     return fs.existsSync(path.dirname(file))
   } catch {
     return false

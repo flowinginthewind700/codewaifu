@@ -591,8 +591,8 @@ export function Pane({
     })
 
     // The bell is the agent's own "look at me" and it is easy to miss when the
-    // Bench is one of nine windows. It lights the pane header instead of raising
-    // a toast: a build that rings once per error would otherwise bury the
+    // Bench holds a row of panes. It lights the pane header instead of raising a
+    // toast: a build that rings once per error would otherwise bury the
     // attention queue, which is the thing that actually deserves a toast.
     let bellTimer: ReturnType<typeof setTimeout> | null = null
     const bellSub = term.onBell(() => {

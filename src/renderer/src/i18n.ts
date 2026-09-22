@@ -229,7 +229,9 @@ const STRINGS = {
   hooksKimi: { zh: 'Kimi CLI', en: 'Kimi CLI' },
   hooksZcode: { zh: 'ZCode', en: 'ZCode' },
   hooksOpencode: { zh: 'OpenCode', en: 'OpenCode' },
+  hooksKiro: { zh: 'Kiro', en: 'Kiro' },
   hooksPi: { zh: 'Pi', en: 'Pi' },
+  hooksTrae: { zh: 'Trae', en: 'Trae' },
   /** Fallback label for a flavor this table has not been taught yet. */
   hooksAgent: { zh: 'Agent', en: 'Agent' },
   installed: { zh: '已接入', en: 'installed' },

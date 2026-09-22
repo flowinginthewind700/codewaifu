@@ -495,10 +495,11 @@ const SIGNATURE_BUCKET_MS = 15000
  *
  * Only ids herdr itself accepts belong here: it is the catalogue this form
  * launches against, so listing an agent herdr does not know would offer a row
- * that starts nothing. ZCode is one of the nine agents we install hooks into
- * but is not in herdr 0.9.0's list, so it is absent on purpose - its events
- * still reach us, they just cannot be launched from this form. Antigravity is
- * here as herdr spells it (`agy`), and `agentTag.ts` maps that back.
+ * that starts nothing. ZCode and Trae are two of the eleven agents we install
+ * hooks into, and neither is in herdr's kind list, so both are absent on
+ * purpose - their events still reach us, they just cannot be launched from this
+ * form. Antigravity is here as herdr spells it (`agy`), and `agentTag.ts` maps
+ * that back.
  */
 const KNOWN_AGENT_KINDS: readonly string[] = [
   'codex',

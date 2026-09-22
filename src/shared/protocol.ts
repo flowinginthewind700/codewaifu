@@ -37,13 +37,15 @@ export const KNOWN_AGENTS: readonly Agent[] = [
 ]
 
 /**
- * Agents we can install hooks into. The rest (`kiro`, `trae`) are
- * detection-only: their CLIs expose no hook or plugin surface we can write
- * into, so the bench can name a task as theirs but cannot be told about it.
+ * Agents we can install hooks into. Every flavor above is here: nothing we can
+ * name is left detection-only.
  *
- * Three shapes live in this list. `zcode` is a JSON hook config like Codex's.
- * `opencode` and `pi` have no hook config at all - we write a *plugin* file
- * each of them loads, and that plugin relays events to us over HTTP.
+ * Four shapes live in this list. `zcode`, `kiro` and `trae` are JSON hook
+ * configs like Codex's, each with its own schema - Kiro's a flat array of
+ * `trigger` entries in a file of ours alone, Trae's Claude's nested groups
+ * under a numeric `version`. `opencode` and `pi` have no hook config at all -
+ * we write a *plugin* file each of them loads, and that plugin relays events
+ * to us over HTTP.
  */
 export const HOOK_AGENTS: readonly Agent[] = [
   'codex',
@@ -54,7 +56,9 @@ export const HOOK_AGENTS: readonly Agent[] = [
   'kimi',
   'zcode',
   'opencode',
-  'pi'
+  'kiro',
+  'pi',
+  'trae'
 ]
 
 export function isKnownAgent(value: unknown): value is Agent {

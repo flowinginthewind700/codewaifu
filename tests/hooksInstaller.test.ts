@@ -24,7 +24,9 @@ const JSON_AGENTS: Array<Exclude<HookAgent, 'kimi' | PluginAgent>> = [
   'cursor',
   'gemini',
   'antigravity',
-  'zcode'
+  'zcode',
+  'kiro',
+  'trae'
 ]
 
 /** Kinds that are logged and never read aloud; see the assertion that uses them. */
@@ -155,6 +157,60 @@ describe('buildSpecs', () => {
     const spec = buildSpecs(onlyToggle('sessionStart'), 'zcode').find((s) => s.event === 'SessionStart')
     expect(spec).toBeDefined()
     expect(spec?.matcher).toBeUndefined()
+  })
+
+  it('writes Kiro and Trae no matcher at all, on any trigger', () => {
+    // Both read `matcher` as a filter rather than as a hint. Kiro documents it
+    // as "not evaluated" on SessionStart/Stop and as tool-name or prompt-text
+    // elsewhere, where `startup|resume|clear|compact` would match nothing; Trae
+    // accepts the key on PreToolUse, PostToolUse and Notification only. An
+    // omitted matcher means always-match on both, which is what we want, so the
+    // session pattern must not reach either file under any toggle.
+    const withMatcher: string[] = []
+    for (const toggle of TOGGLES) {
+      const config = onlyToggle(toggle)
+      for (const agent of ['kiro', 'trae'] as const) {
+        for (const spec of buildSpecs(config, agent)) {
+          if (spec.matcher !== undefined) withMatcher.push(`${agent}:${spec.event}`)
+        }
+      }
+    }
+    expect(withMatcher).toEqual([])
+  })
+
+  it('installs only the moments Kiro and Trae really emit', () => {
+    // Inventing an event name is not a harmless no-op here: Kiro loads every
+    // file in its hooks directory, so a trigger it does not know makes the whole
+    // file unreadable, and with it every hook the user had beside ours.
+    expect(buildSpecs(onlyToggle('sessionStart'), 'kiro').map((s) => s.event)).toEqual(['SessionStart'])
+    expect(buildSpecs(onlyToggle('stop'), 'kiro').map((s) => s.event)).toEqual(['Stop'])
+    expect(buildSpecs(onlyToggle('prompt'), 'kiro').map((s) => s.event)).toEqual(['UserPromptSubmit'])
+    expect(buildSpecs(onlyToggle('tool'), 'kiro').map((s) => s.event)).toEqual([
+      'PreToolUse',
+      'PostToolUse'
+    ])
+    // Neither CLI has a permission, compact or subagent moment, and Trae's
+    // notification is the one row Kiro lacks.
+    for (const agent of ['kiro', 'trae'] as const) {
+      for (const toggle of ['permission', 'compact', 'subagent'] as const) {
+        expect(buildSpecs(onlyToggle(toggle), agent), `${agent}:${toggle}`).toEqual([])
+      }
+    }
+    expect(buildSpecs(onlyToggle('notification'), 'kiro')).toEqual([])
+    expect(buildSpecs(onlyToggle('notification'), 'trae').map((s) => s.event)).toEqual(['Notification'])
+  })
+
+  it('announces Kiro under the trigger names its CLI actually sends', () => {
+    // The config side says `SessionStart`, but Kiro's payload still carries the
+    // older `agentSpawn`/`agentStop` spellings. Folded in, a Kiro session is
+    // greeted and its finish is announced under the stop toggle; unmapped, both
+    // land in `other`, which no toggle owns and so is permanently mute.
+    const spawned = normalizeHook('kiro', { hook_event_name: 'agentSpawn' }, 5, '', 'SessionStart')
+    expect(spawned.kind).toBe('session_start')
+    expect(planEvent(onlyToggle('sessionStart'), spawned, { rng }).speak).toBe(true)
+    const stopped = normalizeHook('kiro', { hook_event_name: 'agentStop' }, 5, '', 'Stop')
+    expect(stopped.kind).toBe('stop')
+    expect(planEvent(onlyToggle('stop'), stopped, { rng }).speak).toBe(true)
   })
 })
 
