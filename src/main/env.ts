@@ -79,21 +79,67 @@ export const kimiHome = resolveOverride(process.env.KIMI_CODE_HOME, path.join(ho
 export const kimiConfigToml = path.join(kimiHome, 'config.toml')
 
 /**
- * Homes of every agent we can name. Presence here is what the bench's agent menu
- * and the settings panel use to decide a runner is worth offering; absence just
- * means the row stays hidden. Codex and Claude Code key off the same override
- * their CLIs use, so a relocated config is still found.
+ * ZCode keeps a hook config at `~/.zcode/cli/config.json`. Its root object is
+ * the user's (provider, model, permission, storage, ...), so only `hooks` is
+ * ever rewritten here - see `shared/hooksMerge.ts::mergeZcodeHooks`.
  */
-export const detectionHomes: Record<string, string> = {
-  codex: codexHome,
-  claude: claudeHome,
-  cursor: cursorHome,
-  gemini: geminiHome,
-  kimi: kimiHome,
-  opencode: path.join(home, '.opencode'),
-  kiro: path.join(home, '.kiro'),
-  pi: path.join(home, '.pi'),
-  trae: path.join(home, '.trae')
+export const zcodeHome = resolveOverride(process.env.ZCODE_STORAGE_DIR, path.join(home, '.zcode'))
+export const zcodeHooksFile = path.join(zcodeHome, 'cli', 'config.json')
+
+/**
+ * OpenCode has no hook config: it loads every file in `plugins/` under its
+ * config dir. We write one plugin that relays lifecycle events to us. Both
+ * homes are checked because `~/.config/opencode` is current and `~/.opencode`
+ * is the older layout still in use.
+ */
+export const opencodeConfigDir = resolveOverride(
+  process.env.OPENCODE_CONFIG_DIR,
+  path.join(home, '.config', 'opencode')
+)
+export const opencodeLegacyConfigDir = path.join(home, '.opencode')
+/** Basename, so a relocated config dir still resolves to the same plugin. */
+export const opencodePluginName = 'codewaifu-agent-state.js'
+export const opencodePluginFile = path.join(opencodeConfigDir, 'plugins', opencodePluginName)
+
+/**
+ * Pi loads TypeScript extensions from `~/.pi/agent/extensions/`. Same idea as
+ * OpenCode's plugin: a relay file, not a hook config.
+ */
+export const piHome = resolveOverride(process.env.PI_CODING_AGENT_DIR, path.join(home, '.pi'))
+export const piExtensionName = 'codewaifu-agent-state.ts'
+/**
+ * Pi's own `getAgentDir()` returns `$PI_CODING_AGENT_DIR` *as-is* when it is
+ * set, and only falls back to `~/.pi/agent` otherwise. So the override replaces
+ * the `agent` directory, not its parent - mirroring that exactly, because
+ * `piHome/agent/extensions` would look one level too deep on a relocated agent
+ * dir and we would install a file Pi never loads.
+ */
+export const piAgentDir = resolveOverride(
+  process.env.PI_CODING_AGENT_DIR,
+  path.join(home, '.pi', 'agent')
+)
+export const piExtensionFile = path.join(piAgentDir, 'extensions', piExtensionName)
+
+/**
+ * Homes of every agent we can name, one or more candidate directories each.
+ * Presence here is what the bench's agent menu and the settings panel use to
+ * decide a runner is worth offering; absence just means the row stays hidden.
+ * Codex, Claude Code, Kimi, ZCode, OpenCode and Pi key off the same override
+ * their own CLI uses, so a relocated config is still found. A list rather than
+ * a single path because two agents have two legitimate homes (OpenCode:
+ * `~/.config/opencode` or `~/.opencode`) and either one means "installed".
+ */
+export const detectionHomes: Record<string, readonly string[]> = {
+  codex: [codexHome],
+  claude: [claudeHome],
+  cursor: [cursorHome],
+  gemini: [geminiHome],
+  kimi: [kimiHome],
+  zcode: [zcodeHome],
+  opencode: [opencodeConfigDir, opencodeLegacyConfigDir],
+  kiro: [path.join(home, '.kiro')],
+  pi: [piHome],
+  trae: [path.join(home, '.trae')]
 }
 
 export const isMac = platform === 'darwin'

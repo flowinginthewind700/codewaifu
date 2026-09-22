@@ -149,6 +149,7 @@ function renderRail(opts: {
         filter={opts.filter ?? 'all'}
         counts={originCounts(groups)}
         collapsed={new Set()}
+        open={true}
         t={t}
         onFilter={(filter) => filters.push(filter)}
         onToggleNeedsMe={() => {

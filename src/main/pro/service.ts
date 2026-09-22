@@ -488,10 +488,17 @@ const SIGNATURE_BUCKET_MS = 15000
 /**
  * herdr's own agent ids. Used when it cannot answer `agent.list` itself.
  *
- * Ordered the way the create form reads: the six we install hooks into first
- * (they are the ones whose events actually reach this app), then the rest of
- * herdr's catalogue. The order is the menu order, so it is pinned rather than
- * incidental.
+ * Ordered the way the create form reads: the agents we install hooks into
+ * first (they are the ones whose events actually reach this app), then the
+ * rest of herdr's catalogue. The order is the menu order, so it is pinned
+ * rather than incidental.
+ *
+ * Only ids herdr itself accepts belong here: it is the catalogue this form
+ * launches against, so listing an agent herdr does not know would offer a row
+ * that starts nothing. ZCode is one of the nine agents we install hooks into
+ * but is not in herdr 0.9.0's list, so it is absent on purpose - its events
+ * still reach us, they just cannot be launched from this form. Antigravity is
+ * here as herdr spells it (`agy`), and `agentTag.ts` maps that back.
  */
 const KNOWN_AGENT_KINDS: readonly string[] = [
   'codex',

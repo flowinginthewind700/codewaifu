@@ -1030,6 +1030,7 @@ export function Bench(): ReactElement {
             collapsed={collapsed}
             filter={treeFilter}
             counts={origins}
+            open={railOpen}
             t={t}
             onToggleNeedsMe={() => setNeedsMeOnly((value) => !value)}
             onToggleGroup={toggleGroup}

@@ -14,6 +14,14 @@
  * attribute it had. A test that only checks "the input appeared" would pass
  * with a row that lost its cursor, and the cursor is what `j/k` walks.
  *
+ * Two ways in are pinned besides double-click: the pencil that belongs to a row,
+ * and `F2` on whatever `j/k` last highlighted. The pencil is the row's sibling
+ * rather than its child - a `<button>` may not hold another `<button>` - so the
+ * test finds it through `.task-cell`, which is the box that owns both. `F2` is
+ * bound on `window` because that is where the Bench's own keys are handled, and
+ * it has to stay out of a text field: the common case is a terminal with focus,
+ * where the key belongs to the agent.
+ *
  * Groups come out of `buildBench` rather than being hand-written, for the same
  * reason `tests/proTree.test.ts` does it: a fixture here should not be able to
  * describe a tree the projection could never produce.
@@ -63,6 +71,9 @@ function groupsOf(tasks: readonly TaskRecord[]): GroupView[] {
 let container: HTMLDivElement
 let root: Root
 let renamed: { id: string; title: string }[]
+/** Every row click the rail made, so "the pencil did not select the row" is a
+ *  thing this file can assert rather than assume. */
+let selected: string[]
 
 async function render(node: ReactNode): Promise<void> {
   await act(async () => {
@@ -72,7 +83,7 @@ async function render(node: ReactNode): Promise<void> {
 
 function renderRail(
   tasks: readonly TaskRecord[] = [SHIP, FIX],
-  opts: { cursorId?: string; selectedId?: string } = {}
+  opts: { cursorId?: string; selectedId?: string; open?: boolean } = {}
 ): Promise<void> {
   const groups = groupsOf(tasks)
   const total = tasks.length
@@ -86,11 +97,12 @@ function renderRail(
       filter="all"
       counts={originCounts(groups)}
       collapsed={new Set()}
+      open={opts.open ?? true}
       t={t}
       onFilter={vi.fn()}
       onToggleNeedsMe={vi.fn()}
       onToggleGroup={vi.fn()}
-      onSelect={vi.fn()}
+      onSelect={(id) => selected.push(id)}
       onRename={(id, title) => renamed.push({ id, title })}
     />
   )
@@ -157,10 +169,21 @@ function composition(input: HTMLInputElement, kind: 'compositionstart' | 'compos
   })
 }
 
-function headPencil(): HTMLButtonElement {
-  const button = container.querySelector<HTMLButtonElement>('.rail-head .rename-toggle')
-  if (!button) throw new Error('the rail head has no rename button')
+/** This row's own pencil, found through the box that owns row and pencil. */
+function pencilOf(title: string): HTMLButtonElement {
+  const button = rowOf(title)
+    .closest('.task-cell')
+    ?.querySelector<HTMLButtonElement>('.row-rename')
+  if (!button) throw new Error(`the row reading ${title} has no pencil`)
   return button
+}
+
+/** A bare F2 on the window, which is where the rail listens for it. */
+function f2(target: EventTarget | null = null): void {
+  const event = new KeyboardEvent('keydown', { key: 'F2', bubbles: true, cancelable: true })
+  act(() => {
+    ;(target ?? window).dispatchEvent(event)
+  })
 }
 
 /** Real time: the grace window is measured against `performance.now()`. */
@@ -190,6 +213,7 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   renamed = []
+  selected = []
 })
 
 afterEach(async () => {
@@ -329,22 +353,115 @@ describe('renaming a task from the tree', () => {
     expect(rowOf('fix the approval card').tagName).toBe('BUTTON')
   })
 
-  it('renames the row j/k left highlighted, and says so', async () => {
-    await renderRail([SHIP, FIX])
-    expect(headPencil().disabled).toBe(true)
-    await renderRail([SHIP, FIX], { cursorId: 't-fix' })
-    expect(headPencil().disabled).toBe(false)
-    expect(headPencil().getAttribute('aria-label')).toBe(t('renameTask'))
+  it('renames from the pencil on its own row, without selecting that row', async () => {
+    await renderRail([SHIP, FIX], { selectedId: 't-ship' })
+    const pencil = pencilOf('fix the approval card')
+    expect(pencil.getAttribute('aria-label')).toBe(t('renameTask'))
     await act(async () => {
-      headPencil().click()
+      pencil.click()
     })
     const input = field()
-    if (!input) throw new Error('the head button did not open a field')
+    if (!input) throw new Error('the pencil did not open a field')
     expect(input.value).toBe('fix the approval card')
+    // The field replaced the title, on the row that was clicked - not on the one
+    // that happened to be selected. `data-cursor` is always present as a boolean
+    // attribute value, so 'false' is what "not the highlighted row" reads as.
+    expect(editingRow()?.dataset.cursor).toBe('false')
+    expect(editingRow()?.dataset.selected).toBe('false')
     expect(editingRow()?.querySelector('.task-name')).toBeNull()
+    // A pencil inside a row that also selects would rename a task it just made
+    // current, which is a second thing happening on one click.
+    expect(selected).toEqual([])
     type(input, 'fix the permission card')
     key(input, 'Enter')
     expect(renamed).toEqual([{ id: 't-fix', title: 'fix the permission card' }])
+  })
+
+  it('keeps one pencil per row, so showing it cannot move the pills', async () => {
+    await renderRail([SHIP, FIX], { cursorId: 't-fix' })
+    expect(container.querySelectorAll('.row-rename')).toHaveLength(2)
+    for (const title of ['ship the bench', 'fix the approval card']) {
+      const cell = rowOf(title).closest('.task-cell')
+      expect(cell?.querySelectorAll('.row-rename')).toHaveLength(1)
+      // The pencil floats over padding the row reserves permanently, so it is a
+      // sibling of the row and never inside it.
+      expect(rowOf(title).contains(cell?.querySelector('.row-rename') ?? null)).toBe(false)
+    }
+    // And it goes away while the field is open: a pencil beside a caret is two
+    // ways to do one thing, and the second reopens what was just closed.
+    await open('ship the bench')
+    // `rowOf` finds rows by their title, and the open row has handed its title
+    // to the field - so this walks up from the row that says it is editing.
+    expect(editingRow()?.closest('.task-cell')?.querySelector('.row-rename')).toBeNull()
+    expect(pencilOf('fix the approval card')).toBeTruthy()
+  })
+
+  it('renames the row j/k left highlighted on F2', async () => {
+    await renderRail([SHIP, FIX], { cursorId: 't-fix', selectedId: 't-ship' })
+    f2()
+    const input = field()
+    if (!input) throw new Error('F2 did not open a field')
+    // The cursor, not the selection: F2 renames the row you are pointing at with
+    // the keyboard, the way a file manager renames the highlighted file.
+    expect(input.value).toBe('fix the approval card')
+    expect(selected).toEqual([])
+    type(input, 'fix the permission card')
+    key(input, 'Enter')
+    expect(renamed).toEqual([{ id: 't-fix', title: 'fix the permission card' }])
+  })
+
+  it('does nothing on F2 when there is no row to rename', async () => {
+    // Nothing highlighted: a field opening on an arbitrary row would be a rename
+    // the human did not ask for.
+    await renderRail([SHIP, FIX])
+    f2()
+    expect(field()).toBeNull()
+
+    // A rail folded away cannot show the field it opened, and a rename that
+    // commits on the next blur with nothing on screen reads as data loss.
+    await renderRail([SHIP, FIX], { cursorId: 't-fix', open: false })
+    f2()
+    expect(field()).toBeNull()
+  })
+
+  it('leaves F2 to whatever is taking text', async () => {
+    await renderRail([SHIP, FIX], { cursorId: 't-fix' })
+    const term = document.createElement('div')
+    term.className = 'xterm'
+    const helper = document.createElement('textarea')
+    term.appendChild(helper)
+    document.body.appendChild(term)
+    f2(helper)
+    expect(field()).toBeNull()
+    term.remove()
+
+    // A dialog owns the window: renaming a row behind it steals focus from the
+    // field being filled in, and commits on the blur that follows.
+    const dialog = document.createElement('div')
+    dialog.setAttribute('aria-modal', 'true')
+    dialog.appendChild(document.createElement('input'))
+    document.body.appendChild(dialog)
+    f2(document.body)
+    expect(field()).toBeNull()
+    dialog.remove()
+
+    // Still ours once neither is on screen.
+    f2()
+    expect(field()).not.toBeNull()
+  })
+
+  it('leaves a chorded F2 alone: a chord is somebody else', async () => {
+    await renderRail([SHIP, FIX], { cursorId: 't-fix' })
+    const mods = [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }]
+    for (const mod of mods) {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true, ...mod }))
+      })
+      expect(field(), JSON.stringify(mod)).toBeNull()
+    }
+    // Bare F2 still arrives, so the guard did not take the key with it.
+    f2()
+    expect(field()).not.toBeNull()
   })
 
   it('drops the field when the row it was editing leaves the tree', async () => {

@@ -51,6 +51,14 @@ export interface TreeRailProps {
   counts: OriginCounts
   /** Group keys currently folded. Owned by the Bench; see the header note. */
   collapsed: ReadonlySet<string>
+  /**
+   * Whether the rail is on screen. Owned by the Bench, which is the only place
+   * that knows: at a wide window a closed rail is `display: none`, and below
+   * 721px it is a drawer slid off the left edge. Both mean "nothing here can be
+   * seen", and a control that opens on an invisible row is one that commits on
+   * the next blur with no way to read what it wrote.
+   */
+  open: boolean
   t: Translate
   onFilter: (filter: TreeFilter) => void
   onToggleNeedsMe: () => void
@@ -90,6 +98,35 @@ function emptyNote(needsMeOnly: boolean, filter: TreeFilter, t: Translate): stri
   return t('treeEmpty')
 }
 
+/**
+ * True when a keystroke belongs to something that is taking text.
+ *
+ * The same question the Bench's window handler asks, answered here again because
+ * F2 is bound in this component and a handler that fires while you are typing
+ * into a terminal eats a key the agent was waiting for. xterm keeps a hidden
+ * helper textarea inside `.xterm`, so the container check comes first.
+ */
+function inTextField(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null
+  if (!element) return false
+  if (element.closest('.xterm')) return true
+  const tag = element.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  return (element as HTMLElement).isContentEditable === true
+}
+
+/**
+ * True while a dialog owns the window.
+ *
+ * Every dialog here is `aria-modal="true"` - new task, connect, import, remove,
+ * and the character picker - so one selector covers the family. F2 renaming a
+ * row behind an open dialog would steal focus from a field the human is filling
+ * in, and the rename would commit on the blur that follows.
+ */
+function dialogOpen(): boolean {
+  return document.querySelector('[aria-modal="true"]') !== null
+}
+
 export function TreeRail({
   groups,
   totalTasks,
@@ -99,6 +136,7 @@ export function TreeRail({
   filter,
   counts,
   collapsed,
+  open,
   t,
   onFilter,
   onToggleNeedsMe,
@@ -143,28 +181,40 @@ export function TreeRail({
     })
   }, [cursorId])
 
+  /**
+   * F2 renames the row `j/k` left highlighted, the way every file manager and
+   * IDE renames the thing you are pointing at.
+   *
+   * Three ways out, each for a reason that is not obvious from the key: a rail
+   * folded away cannot show the field it opened; a dialog owns the window; and a
+   * keystroke belongs to whatever is taking text. Nothing is claimed in those
+   * cases, so the Bench's own handler still sees the event.
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      // Bare F2 only. A chord is somebody else's shortcut, and guessing which
+      // one claims a key the agent or the terminal may be waiting on.
+      if (event.key !== 'F2' || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
+        return
+      if (inTextField(event.target) || dialogOpen()) return
+      if (!open) return
+      if (editingId) return
+      // The cursor is only set on rows this rail can show, so it doubles as the
+      // "there is something to rename" check: a folded group leaves it empty.
+      if (!cursorId) return
+      event.preventDefault()
+      setEditingId(cursorId)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, cursorId, editingId])
+
   const stopEditing = useCallback(() => setEditingId(''), [])
-  /** The head button names the row `j/k` left highlighted, so it is never a guess. */
-  const renameCursor = useCallback(() => {
-    if (cursorId) setEditingId(cursorId)
-  }, [cursorId])
 
   return (
     <aside className="bench-rail">
       <div className="rail-head">
         <span className="section-label">{t('treeTitle')}</span>
-        <span className="spacer" />
-        <Tip label={t('renameTask')} side="bottom">
-          <button
-            type="button"
-            className="btn ghost icon rename-toggle"
-            aria-label={t('renameTask')}
-            disabled={!cursorId}
-            onClick={renameCursor}
-          >
-            <PencilLine />
-          </button>
-        </Tip>
       </div>
 
       {/* The facet row is the tree's filter surface, and it is always there:
@@ -288,6 +338,13 @@ type TaskRowTask = GroupView['tasks'][number]
  * class and data attribute it had - the same row, minus one thing it may not
  * contain. `data-editing` is what the stylesheet uses to stop the row from
  * looking clickable while you are typing into it.
+ *
+ * The rename pencil is the row's sibling, never its child: a `<button>` may not
+ * hold another `<button>`, and turning the row into a `div` to make room would
+ * cost it the click and the keyboard activation the whole tree runs on. So
+ * `.task-cell` is the per-row box that owns both, and the pencil floats over the
+ * right edge of the padding the row reserves permanently - which is why showing
+ * it cannot shove the status pills sideways and move a row under the pointer.
  */
 function TaskRow({
   task,
@@ -308,61 +365,87 @@ function TaskRow({
     'data-editing': editing || undefined
   }
 
+  /** Hidden while the field is open: a pencil beside a caret renames twice. */
+  const pencil = editing ? null : (
+    <Tip label={t('renameTask')} kbd="F2">
+      <button
+        type="button"
+        className="btn ghost icon row-rename"
+        aria-label={t('renameTask')}
+        onClick={(event) => {
+          // Without this the row underneath also takes the click, and the field
+          // opens on a task that just became the selected one.
+          event.stopPropagation()
+          onEdit()
+        }}
+      >
+        <PencilLine />
+      </button>
+    </Tip>
+  )
+
   if (editing) {
     return (
-      <div className="task-row" {...flags}>
-        <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
-        <span className="task-main">
-          <RenameField
-            value={task.title}
-            className="task-rename"
-            ariaLabel={t('renameTask')}
-            hint={t('renameKeys')}
-            onCommit={(title) => {
-              onDone()
-              onRename(task.id, title)
-            }}
-            onCancel={onDone}
-          />
-          <span className="task-sub">
-            {agent && <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>}
-            {task.branch && <span className="branch">{task.branch}</span>}
+      <div className="task-cell">
+        <div className="task-row" {...flags}>
+          <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
+          <span className="task-main">
+            <RenameField
+              value={task.title}
+              className="task-rename"
+              ariaLabel={t('renameTask')}
+              hint={t('renameKeys')}
+              onCommit={(title) => {
+                onDone()
+                onRename(task.id, title)
+              }}
+              onCancel={onDone}
+            />
+            <span className="task-sub">
+              {agent && <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>}
+              {task.branch && <span className="branch">{task.branch}</span>}
+            </span>
           </span>
-        </span>
+        </div>
       </div>
     )
   }
 
   return (
-    <button
-      type="button"
-      className="task-row"
-      {...flags}
-      aria-current={selected || undefined}
-      onClick={() => onSelect(task.id)}
-      onDoubleClick={onEdit}
-    >
-      <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
-      <span className="task-main">
-        <span className="task-name">{task.title || t('unfiled')}</span>
-        <span className="task-sub">
-          {agent && <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>}
-          {/* Provenance, quiet: it answers "did I start this here" without
-              competing with the status pill for the same row. */}
-          {task.origin !== 'created' && (
-            <span className="tag" data-origin={task.origin}>
-              {t(ORIGIN_KEY[task.origin])}
-            </span>
-          )}
-          {task.branch && <span className="branch">{task.branch}</span>}
-          {task.dirty > 0 && <span>{fill(t, 'dirtyCount', { n: task.dirty })}</span>}
-          {task.blockedMs > 0 && <span className="warn">{dur(task.blockedMs, t)}</span>}
+    <div className="task-cell">
+      <button
+        type="button"
+        className="task-row"
+        {...flags}
+        aria-current={selected || undefined}
+        onClick={() => onSelect(task.id)}
+        onDoubleClick={onEdit}
+      >
+        <span className="dot" data-state={task.liveStatus} title={task.liveStatus} />
+        <span className="task-main">
+          <span className="task-name">{task.title || t('unfiled')}</span>
+          <span className="task-sub">
+            {agent && <span className={`tag ${agentClass(agent)}`.trim()}>{agent}</span>}
+            {/* Provenance, quiet: it answers "did I start this here" without
+                competing with the status pill for the same row. */}
+            {task.origin !== 'created' && (
+              <span className="tag" data-origin={task.origin}>
+                {t(ORIGIN_KEY[task.origin])}
+              </span>
+            )}
+            {task.branch && <span className="branch">{task.branch}</span>}
+            {task.dirty > 0 && <span>{fill(t, 'dirtyCount', { n: task.dirty })}</span>}
+            {task.blockedMs > 0 && <span className="warn">{dur(task.blockedMs, t)}</span>}
+          </span>
         </span>
-      </span>
-      <span className="task-side">
-        {task.needsMe > 0 && <span className="pill">{task.needsMe}</span>}
-        {task.status !== 'active' && <span className="pill quiet">{t(STATUS_KEY[task.status])}</span>}
-      </span>
-    </button>
+        <span className="task-side">
+          {task.needsMe > 0 && <span className="pill">{task.needsMe}</span>}
+          {task.status !== 'active' && (
+            <span className="pill quiet">{t(STATUS_KEY[task.status])}</span>
+          )}
+        </span>
+      </button>
+      {pencil}
+    </div>
   )
 }

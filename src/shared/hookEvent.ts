@@ -30,6 +30,17 @@ const KIND_BY_EVENT: Record<string, EventKind> = {
   posttoolusefailure: 'tool',
   tool: 'tool',
   permissionrequest: 'permission',
+  // OpenCode and Pi relay through a plugin rather than a config file, and their
+  // own names are `permission.ask`, `session.idle`, `session.compacted` and
+  // `agent_end`. The plugins translate to the canonical spellings above before
+  // sending, so these rows are the belt to that brace: if a future relay passes
+  // an agent's own name through, it still lands in the right bucket instead of
+  // in `other`, which no toggle owns and so is permanently mute.
+  permissionasked: 'permission',
+  permissionreplied: 'interrupt',
+  sessionidle: 'stop',
+  sessioncompacted: 'compact',
+  agentend: 'stop',
   notification: 'notification',
   stop: 'stop',
   stopfailure: 'stop',

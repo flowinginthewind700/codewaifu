@@ -3,9 +3,10 @@
 [产品落地页](https://robotworld.top/zh/codewaifu) · [English](README.md) · [发行版](https://github.com/flowinginthewind700/codewaifu/releases) · [MIT](LICENSE)
 
 **住在编码 agent 旁边的桌面伙伴。** CodeWaifu 以一个小巧、可拖拽、始终置顶的
-角色停在菜单栏里。它通过 hook 机制监听 Codex、Claude Code、Cursor、Gemini
-CLI、Antigravity 与 Kimi CLI,把每一个需要你出面的事件说出来,维护一块实时
-线程看板,让你不离开键盘就能指挥它们,顺手还能控制你的音乐播放器。
+角色停在菜单栏里。它通过 hook 与插件机制监听 Codex、Claude Code、Cursor、
+Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode 与 Pi,把每一个需要你出面
+的事件说出来,维护一块实时线程看板,让你不离开键盘就能指挥它们,顺手还能控制
+你的音乐播放器。
 
 ![CodeWaifu 桌面伙伴](docs/assets/companion.png)
 
@@ -18,13 +19,13 @@ CLI、Antigravity 与 Kimi CLI,把每一个需要你出面的事件说出来,维
 
 ## 功能
 
-- **替 agent 说话。** 六种 agent 的 hook 事件(会话开始、结束、
+- **替 agent 说话。** 九种 agent 的 hook 事件(会话开始、结束、
   权限请求、通知、工具调用、上下文压缩、子代理、中断)都会变成一句简短语音,
   走系统 TTS;每类事件可单独开关,短语池保证同一件事不会两次说的一模一样。
   每种 agent 只注册它真正会发出的事件——名字不靠编,没装的 agent 一个字节的
   配置文件都不会写。
 
-  | Agent | Hooks | 写入的配置 | 历史回放 + 插话 |
+  | Agent | Hooks | 写入的文件 | 历史回放 + 插话 |
   |-------|-------|------------|------------------|
   | Codex | 支持 | `~/.codex/hooks.json` | 支持 |
   | Claude Code | 支持 | `~/.claude/settings.json` | 支持 |
@@ -32,10 +33,18 @@ CLI、Antigravity 与 Kimi CLI,把每一个需要你出面的事件说出来,维
   | Gemini CLI | 支持 | `~/.gemini/settings.json` | 不支持 |
   | Antigravity | 支持 | `~/.gemini/config/hooks.json` | 不支持 |
   | Kimi CLI | 支持 | `~/.kimi-code/config.toml` | 不支持 |
+  | ZCode | 支持 | `~/.zcode/cli/config.json` | 不支持 |
+  | OpenCode | 插件 | `~/.config/opencode/plugins/codewaifu-agent-state.js` | 不支持 |
+  | Pi | 插件 | `~/.pi/agent/extensions/codewaifu-agent-state.ts` | 不支持 |
 
   最后一列是诚实的边界:只有 Codex 与 Claude Code 会写我们找得到也解得开的
-  JSONL,所以只有这两家的历史面板打得开、线程能排队插话。另外四家照样说话、
+  JSONL,所以只有这两家的历史面板打得开、线程能排队插话。另外七家照样说话、
   弹气泡、进账本和工作台的树。
+
+  OpenCode 与 Pi 根本没有 hook 配置:它们各自会加载自己 `plugins/` 或
+  `extensions/` 目录下的每一个文件,所以我们写进去的是一个很小的中继,把同样的
+  事件 POST 到同一个回环端口。它在结构上就是发完即走——handler 不等请求返回就
+  自己回去了,所以 CodeWaifu 关着、卡住或正在重启,都不会让你的 agent 付出任何代价。
 - **默认双语。** 每条消息自动判定语言(出现一个汉字就切中文语音),也可以在
   设置里固定中文或英文。
 - **开机是问候,不是闪屏。** 启动时按时间段从短语池里随机挑一句跟你打招呼。
@@ -76,7 +85,16 @@ CLI、Antigravity 与 Kimi CLI,把每一个需要你出面的事件说出来,维
 - **账本与恢复计划。** 每个决策 append-only 落盘;agent 会话死掉的任务会拿到
   一条可以执行或重新提问的恢复提示。
 - **键盘优先。** `j/k` 移动、`Enter` 打开、`i` 把键盘交给终端、`Shift+Tab` 交回、
-  `a/d/s` 决策、`1/2/3` 切面板、`Shift+PageUp/Down` 翻面板历史。
+  `a/d/s` 决策、`1/2/3` 切面板、`c` 连接、`t` 开一个本地 shell、
+  `Shift+PageUp/Down` 翻面板历史。`F2` 重命名光标所在的任务——一个任务活得比它
+  最初的目标久,树里写的应该是它**现在**在干什么。
+- **可以照你的样子塑形的驾驶舱。** 左右两栏都能从顶栏收起,中缝可以拖着调宽度,
+  调好的宽度下次启动还记得。`Ctrl`/`Cmd` `+`/`-` 走一条固定的缩放档位,两个窗口
+  共用同一档,`Ctrl/Cmd+0` 回到 100%,而且每次都会把你现在在哪一档说出来——
+  不小心按错了也知道怎么退回去。
+- **默认自己画窗口边框。** Bench 自己画顶栏,而不是向窗口管理器要一条只写着窗口
+  名字的边框:顶栏可拖动,八条边可缩放,右端是最小化与关闭。想要 WM 那套装饰的
+  话,在设置里把 `pro.benchFrame` 打开(切换会重开 Bench 窗口)。
 
 Pro 先做 Linux,需要 herdr 0.9+ 在跑;没有 herdr 时 Bench 显示安装引导卡片,
 不会崩。点托盘图标弹出菜单选「打开工作台」(菜单项上带着注意力计数),或把
@@ -209,7 +227,8 @@ mkdir -p ~/.codex/skills/codewaifu && curl -fsSL \
 
 环境要求:macOS 12+、Windows 10+,或 glibc 桌面版 Linux(Ubuntu 22.04+、
 Debian 12+、Fedora 40+;x64),外加支持 hooks 的较新版本 Codex CLI /
-Claude Code——或者 Cursor Agent、Gemini CLI、Antigravity、Kimi CLI 中的任意一个。
+Claude Code——或者 Cursor Agent、Gemini CLI、Antigravity、Kimi CLI、ZCode、
+OpenCode、Pi 中的任意一个。
 
 ## 工作原理
 
@@ -229,6 +248,10 @@ Claude Code——或者 Cursor Agent、Gemini CLI、Antigravity、Kimi CLI 中�
 
 relay 地址在 socket 绑定之后才写入 `~/.codewaifu/endpoint.env`,runner 每次
 hook 都重新读它。这正是端口策略敢随便搬家而不改任何 agent 配置的原因。
+
+OpenCode 与 Pi 不走这个 shell runner——它们没有可以指向 runner 的 hook 配置。
+它们的插件读同一个 `endpoint.env`、打同一个 `/health` 预检、POST 同样形状的事件
+JSON,所以下游那条 relay 根本不知道也不需要知道事件是哪一种形态送来的。
 
 ### 端口策略
 

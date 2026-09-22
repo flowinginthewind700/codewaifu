@@ -574,7 +574,9 @@ export class Core {
     // honest signal, and it is deliberately read-only: probing a missing agent
     // must never create its config dir, or the bench would offer it.
     const agents: Record<string, boolean> = {}
-    for (const [name, dir] of Object.entries(detectionHomes)) agents[name] = exists(dir)
+    // Any one candidate home is enough: OpenCode reads `~/.config/opencode`
+    // today and `~/.opencode` on older installs, and both mean "installed".
+    for (const [name, dirs] of Object.entries(detectionHomes)) agents[name] = dirs.some(exists)
     return {
       version: this.version,
       relay: this.relayStatus(),

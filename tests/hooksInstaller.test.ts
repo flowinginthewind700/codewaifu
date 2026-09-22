@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, parseConfig, type AppConfig, type EventToggles } from '../src/shared/config'
 import { normalizeHook, planEvent } from '../src/shared/hookEvent'
-import { buildKimiCommands, buildSpecs, type HookAgent } from '../src/main/hooksInstaller'
+import {
+  buildKimiCommands,
+  buildSpecs,
+  type HookAgent,
+  type PluginAgent
+} from '../src/main/hooksInstaller'
 
 const rng = (): number => 0
 
@@ -10,7 +15,17 @@ const rng = (): number => 0
 // installing nothing, which is exactly the failure mode worth catching here.
 const TOGGLES = Object.keys(DEFAULT_CONFIG.events) as Array<keyof EventToggles>
 
-const JSON_AGENTS: Array<Exclude<HookAgent, 'kimi'>> = ['codex', 'claude', 'cursor', 'gemini', 'antigravity']
+// Kimi's config is TOML and OpenCode/Pi have no config at all, so the agents that
+// go through `buildSpecs` are the rest. Keeping this derived from the exported
+// types means a new plugin-shaped agent cannot slip into the list unnoticed.
+const JSON_AGENTS: Array<Exclude<HookAgent, 'kimi' | PluginAgent>> = [
+  'codex',
+  'claude',
+  'cursor',
+  'gemini',
+  'antigravity',
+  'zcode'
+]
 
 /** Kinds that are logged and never read aloud; see the assertion that uses them. */
 const UNSPOKEN_KINDS = new Set(['session_end', 'prompt'])
@@ -121,6 +136,25 @@ describe('buildSpecs', () => {
     const config = onlyToggle('stop')
     for (const spec of buildSpecs(config, 'gemini')) expect(spec.timeout).toBe(5000)
     for (const spec of buildSpecs(config, 'codex')) expect(spec.timeout).toBe(5)
+  })
+
+  it('spells ZCode timeouts both ways and never blocks its agent', () => {
+    // ZCode reads `timeout` in seconds and prefers `timeoutMs`; writing only one
+    // would leave the other path to guess. `async: true` is free because ZCode
+    // ignores a hook's stdout, and it means a slow relay cannot stall a session.
+    for (const spec of buildSpecs(onlyToggle('stop'), 'zcode')) {
+      expect(spec.timeout).toBe(5)
+      expect(spec.timeoutMs).toBe(5000)
+      expect(spec.async).toBe(true)
+    }
+  })
+
+  it('gives ZCode a matcher-free SessionStart too', () => {
+    // Like Gemini, ZCode has no SessionStart matcher, and an unknown key on its
+    // strict schema risks the whole config being rejected.
+    const spec = buildSpecs(onlyToggle('sessionStart'), 'zcode').find((s) => s.event === 'SessionStart')
+    expect(spec).toBeDefined()
+    expect(spec?.matcher).toBeUndefined()
   })
 })
 

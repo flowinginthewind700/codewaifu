@@ -54,8 +54,8 @@ const STRINGS = {
   /** Said once, when a splitter is reset to the shipped width. */
   splitReset: { zh: '栏宽已恢复默认', en: 'Column width reset' },
   keyHints: {
-    zh: 'j/k 移动 · Enter 打开 · i 聚焦终端 · c 连接 · t 开新终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
-    en: 'j/k move · Enter open · i focus pane · c connect · t shell · Space filter · a/d/s decide · 1/2/3 tabs'
+    zh: 'j/k 移动 · Enter 打开 · F2 重命名 · i 聚焦终端 · c 连接 · t 开新终端 · 空格 筛选 · a/d/s 决策 · 1/2/3 切换',
+    en: 'j/k move · Enter open · F2 rename · i focus pane · c connect · t shell · Space filter · a/d/s decide · 1/2/3 tabs'
   },
   /** `a/d/s` hit the head of the queue; this is what "that one has no such verb" says. */
   actionNotAvailable: {
@@ -193,12 +193,12 @@ const STRINGS = {
   treeFoot: { zh: '{shown} / {total} 个任务', en: '{shown} of {total} tasks' },
   unfiled: { zh: '未归档', en: 'Unfiled' },
   /**
-   * Renaming a task. The label names the row that will be edited (double-click
-   * a row, or the pencil in the rail head for whatever `j/k` last highlighted),
-   * and the hint gives the two keys because a field with no visible buttons has
-   * no other way to say how it closes.
+   * Renaming a task. Every row carries its own pencil and `F2` reaches whatever
+   * `j/k` last highlighted, so the label only has to name the verb - the tip
+   * already shows the key. The hint gives the two exits because a field with no
+   * visible buttons has no other way to say how it closes.
    */
-  renameTask: { zh: '重命名任务（或在树里双击）', en: 'Rename this task (or double-click it in the tree)' },
+  renameTask: { zh: '重命名该任务（或双击这一行）', en: 'Rename this task (or double-click the row)' },
   renameKeys: { zh: 'Enter 保存 · Esc 取消', en: 'Enter to save · Esc to cancel' },
   statusActive: { zh: '进行中', en: 'Active' },
   statusParked: { zh: '已搁置', en: 'Parked' },

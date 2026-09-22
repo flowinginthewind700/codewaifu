@@ -4,10 +4,10 @@
 
 **A desktop companion that lives next to your coding agents.** CodeWaifu sits in
 your menu bar as a small, draggable, always-on-top character. It listens to
-Codex, Claude Code, Cursor, Gemini CLI, Antigravity and Kimi CLI through their
-hook systems, speaks every event that needs you out loud, keeps a live board of
-all your agent threads, lets you steer them without leaving the keyboard, and
-drives your music player while you work.
+Codex, Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI, ZCode, OpenCode
+and Pi through their hook and plugin systems, speaks every event that needs you
+out loud, keeps a live board of all your agent threads, lets you steer them
+without leaving the keyboard, and drives your music player while you work.
 
 ![CodeWaifu companion](docs/assets/companion.png)
 
@@ -21,26 +21,36 @@ what every agent is doing right now.
 
 ## Features
 
-- **Speaks your agents.** Hook events from six agent flavors (session start,
+- **Speaks your agents.** Hook events from nine agent flavors (session start,
   stop, permission request, notification, tool call, compaction, subagent,
   interrupt) become short spoken lines through the system TTS, with per-event
   toggles and a phrase pool so the same event never sounds identical twice.
   Each agent gets the events it really emits - a name nobody invented, and no
   config file is written for an agent that is not installed.
 
-  | Agent | Hooks | Config it writes | Transcript + steer |
-  |-------|-------|------------------|--------------------|
+  | Agent | Hooks | What it writes | Transcript + steer |
+  |-------|-------|----------------|--------------------|
   | Codex | yes | `~/.codex/hooks.json` | yes |
   | Claude Code | yes | `~/.claude/settings.json` | yes |
   | Cursor Agent | yes | `~/.cursor/hooks.json` | no |
   | Gemini CLI | yes | `~/.gemini/settings.json` | no |
   | Antigravity | yes | `~/.gemini/config/hooks.json` | no |
   | Kimi CLI | yes | `~/.kimi-code/config.toml` | no |
+  | ZCode | yes | `~/.zcode/cli/config.json` | no |
+  | OpenCode | plugin | `~/.config/opencode/plugins/codewaifu-agent-state.js` | no |
+  | Pi | plugin | `~/.pi/agent/extensions/codewaifu-agent-state.ts` | no |
 
   The last column is the honest limit: only Codex and Claude Code write JSONL we
   know how to find and parse, so those two are the ones whose history the panel
-  can open and whose thread you can queue a message into. The other four still
+  can open and whose thread you can queue a message into. The other seven still
   speak, bubble, and land in the ledger and the bench tree.
+
+  OpenCode and Pi have no hook config at all: each of them loads every file in
+  its own `plugins/` or `extensions/` directory, so what CodeWaifu writes there
+  is a small relay that POSTs the same events to the same loopback port. It is
+  fire-and-forget by construction - the handler returns before the request
+  resolves, so a CodeWaifu that is closed, hung or mid-restart costs your agent
+  nothing.
 - **Bilingual by default.** Language is auto-detected per message (one CJK
   character switches the voice), or pinned to Chinese / English in Settings.
 - **A greeting, not a splash screen.** On launch the companion says something
@@ -99,6 +109,17 @@ machine sleeping, and the app crashing.
 - **Keyboard first.** `j/k` move, `Enter` opens, `i` hands the keyboard to a
   terminal, `Shift+Tab` takes it back, `a/d/s` decide, `1/2/3` switch panels,
   `c` connects, `t` opens a shell, `Shift+PageUp/Down` scrolls a pane's history.
+  `F2` renames the task the cursor is on - a task outlives the goal it was
+  started for, and the tree should say what it is doing *now*.
+- **A bench you can shape.** Both side columns collapse from the topbar and drag
+  their seam to a width you choose, remembered between launches. `Ctrl`/`Cmd`
+  `+`/`-` walks a fixed zoom ladder that both windows share, `Ctrl/Cmd+0` lands
+  back on 100%, and the rung you are on is announced so an accidental keystroke
+  is one you can undo.
+- **Its own chrome, by default.** The bench paints its topbar instead of asking
+  the window manager for a frame carrying only the window name: drag it, resize
+  from eight edges, minimise and close at its right end. Turn `pro.benchFrame`
+  on in Settings if you would rather have the frame your WM decorates.
 
 Pro is Linux-first and needs herdr 0.9+ running; with no herdr the Bench shows
 an install card instead of crashing. Open it from the tray menu (the bench row
@@ -245,7 +266,8 @@ the plugin commands both drive the same installer.
 
 Requirements: macOS 12+, Windows 10+, or a glibc desktop Linux (Ubuntu 22.04+,
 Debian 12+, Fedora 40+; x64), plus Codex CLI and/or Claude Code recent enough
-to support hooks - or any of Cursor Agent, Gemini CLI, Antigravity, Kimi CLI.
+to support hooks - or any of Cursor Agent, Gemini CLI, Antigravity, Kimi CLI,
+ZCode, OpenCode and Pi.
 
 ## How it works
 
@@ -266,6 +288,11 @@ loopback relay (127.0.0.1, token + Host check)
 The relay address is published to `~/.codewaifu/endpoint.env` after the socket
 is bound, and the runners re-read it on every hook. That is what makes the port
 policy safe: the port may move at any time and no agent config needs editing.
+
+OpenCode and Pi skip the shell runner - they have no hook config to point at
+one. Their plugin reads the same `endpoint.env`, makes the same `/health`
+preflight and POSTs the same event JSON, so the relay above does not know or
+care which of the two shapes delivered it.
 
 ### Port policy
 

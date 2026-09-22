@@ -11,11 +11,14 @@ import {
   mergeCodexHooks,
   mergeAntigravityHooks,
   mergeCursorHooks,
+  mergeZcodeHooks,
   scanFlatEvents,
+  scanZcodeEvents,
   stripClaudeHooks,
   stripCodexHooks,
   stripAntigravityHooks,
   stripCursorHooks,
+  stripZcodeHooks,
   type HookSpec
 } from '../src/shared/hooksMerge'
 
@@ -243,6 +246,11 @@ function cursorCommand(event: string): string {
   return `if [ -f '${SH}' ]; then /bin/sh '${SH}' cursor ${event}; fi`
 }
 
+/** Same runner, ZCode's agent name. Ownership is by path, not by agent. */
+function zcodeCommand(event: string): string {
+  return `if [ -f '${SH}' ]; then /bin/sh '${SH}' zcode ${event}; fi`
+}
+
 /** Cursor specs, as `buildSpecs` emits them: flat, no matcher, one event each. */
 function cursorSpecs(): HookSpec[] {
   return [
@@ -460,5 +468,116 @@ describe('mergeClaudeHooks for Gemini', () => {
     expect(json.selectedAuthType).toBe('oauth-personal')
     expect(mergeClaudeHooks(once.json, geminiSpecs).changed).toBe(false)
     expect(stripClaudeHooks(once.json).json).toEqual(before)
+  })
+})
+
+describe('mergeZcodeHooks', () => {
+  // `~/.zcode/cli/config.json` is ZCode's whole configuration - provider, model,
+  // permission, storage - with hooks one level deeper than Claude's: under
+  // `hooks.events.<Event>[].hooks[]`. Inside `events` the shape is Claude's
+  // exactly, so what is worth pinning here is the wrapper: the keys around it,
+  // the switch inside it, and what strip leaves behind.
+  const zcodeSpecs: HookSpec[] = [
+    { event: 'SessionStart', command: zcodeCommand('SessionStart'), timeout: 5, timeoutMs: 5000, async: true },
+    { event: 'Stop', command: zcodeCommand('Stop'), timeout: 5, timeoutMs: 5000, async: true }
+  ]
+
+  /** The real shape of a machine that already configured ZCode, minus hooks. */
+  function userConfig(): Record<string, unknown> {
+    return {
+      provider: 'glm',
+      model: 'glm-4.6',
+      hooks: { timeoutMs: 3000, maxOutputBytes: 4096 }
+    }
+  }
+
+  function eventsOf(json: unknown): Record<string, HookGroupJson[]> {
+    const hooks = (json as { hooks?: { events?: Record<string, HookGroupJson[]> } }).hooks
+    return hooks?.events ?? {}
+  }
+
+  function zcodeCommands(json: unknown, event: string): string[] {
+    return (eventsOf(json)[event] || []).flatMap((group) => group.hooks.map((h) => h.command || ''))
+  }
+
+  it('turns hooks on, because the default is off and nothing would run', () => {
+    // The failure this prevents is invisible: a config that looks installed,
+    // hooks ZCode never runs, and no error anywhere to find.
+    const json = mergeZcodeHooks(userConfig(), zcodeSpecs).json as {
+      hooks: { enabled?: boolean }
+    }
+    expect(json.hooks.enabled).toBe(true)
+    expect((eventsOf(json).Stop[0].hooks[0] as Record<string, unknown>)).toMatchObject({
+      type: 'command',
+      command: zcodeCommand('Stop'),
+      timeout: 5,
+      timeoutMs: 5000,
+      async: true
+    })
+  })
+
+  it('keeps every root key and every wrapper key the user had', () => {
+    const json = mergeZcodeHooks(userConfig(), zcodeSpecs).json as Record<string, unknown>
+    expect(json.provider).toBe('glm')
+    expect(json.model).toBe('glm-4.6')
+    const hooks = json.hooks as Record<string, unknown>
+    expect(hooks.timeoutMs).toBe(3000)
+    expect(hooks.maxOutputBytes).toBe(4096)
+  })
+
+  it('keeps another tool inside the same event, and is idempotent', () => {
+    const before = {
+      hooks: {
+        enabled: true,
+        events: { Stop: [{ hooks: [{ type: 'command', command: ORCA, timeout: 10 }] }] }
+      }
+    }
+    const once = mergeZcodeHooks(before, zcodeSpecs)
+    expect(zcodeCommands(once.json, 'Stop')).toEqual([ORCA, zcodeCommand('Stop')])
+    expect(mergeZcodeHooks(once.json, zcodeSpecs).changed).toBe(false)
+    // Stripping takes ours and leaves theirs running.
+    const after = stripZcodeHooks(once.json)
+    expect(zcodeCommands(after.json, 'Stop')).toEqual([ORCA])
+    expect((after.json as { hooks: { enabled?: boolean } }).hooks.enabled).toBe(true)
+  })
+
+  it('clears `enabled` only once no events are left, and drops `hooks` then', () => {
+    const installed = mergeZcodeHooks(null, zcodeSpecs).json
+    const stripped = stripZcodeHooks(installed)
+    // A file we created goes back to ZCode's own default: no events, not enabled,
+    // and no empty wrapper left behind to imply we configured something.
+    expect(stripped.json).toEqual({})
+    expect(stripped.changed).toBe(true)
+    // A user who enabled hooks of their own keeps them enabled.
+    const theirs = { hooks: { enabled: true, events: { Stop: [{ hooks: [{ type: 'command', command: ORCA }] }] } } }
+    const mixed = stripZcodeHooks(mergeZcodeHooks(theirs, zcodeSpecs).json)
+    expect((mixed.json as { hooks: { enabled?: boolean } }).hooks.enabled).toBe(true)
+  })
+
+  it('scans through the wrapper, and only for entries of ours', () => {
+    expect(scanZcodeEvents(null)).toEqual([])
+    expect(scanZcodeEvents({ provider: 'glm' })).toEqual([])
+    expect(scanZcodeEvents(mergeZcodeHooks(null, zcodeSpecs).json)).toEqual(['SessionStart', 'Stop'])
+    // A foreign hook in the same event is not ours to report.
+    const foreign = { hooks: { events: { Stop: [{ hooks: [{ type: 'command', command: ORCA }] }] } } }
+    expect(scanZcodeEvents(foreign)).toEqual([])
+  })
+
+  it('leaves a non-array event alone and warns, and survives junk', () => {
+    const junk = { hooks: { events: { Stop: 'nope' } } }
+    const result = mergeZcodeHooks(junk, zcodeSpecs)
+    expect(result.warnings.join(' ')).toContain('Stop')
+    expect((eventsOf(result.json).Stop as unknown)).toBe('nope')
+    expect(mergeZcodeHooks('not a config', zcodeSpecs).json).toBeTruthy()
+    expect(stripZcodeHooks('not a config').json).toEqual({})
+  })
+
+  it('round-trips: merge then strip restores the user file', () => {
+    const before = userConfig()
+    expect(stripZcodeHooks(mergeZcodeHooks(before, zcodeSpecs).json).json).toEqual({
+      provider: 'glm',
+      model: 'glm-4.6',
+      hooks: { timeoutMs: 3000, maxOutputBytes: 4096 }
+    })
   })
 })

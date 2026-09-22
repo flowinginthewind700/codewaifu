@@ -174,6 +174,7 @@ const AGENT_LABEL: Record<string, Record<Lang, string>> = {
   kiro: { zh: 'Kiro', en: 'Kiro' },
   pi: { zh: 'Pi', en: 'Pi' },
   trae: { zh: 'Trae', en: 'Trae' },
+  zcode: { zh: 'ZCode', en: 'ZCode' },
   unknown: { zh: 'agent', en: 'the agent' }
 }
 

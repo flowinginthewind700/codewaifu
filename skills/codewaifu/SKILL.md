@@ -1,6 +1,6 @@
 ---
 name: codewaifu
-description: Install, repair, inspect or uninstall CodeWaifu, the desktop companion that speaks Codex/Claude Code events out loud, lists agent threads and steers them. Use when the user asks to install codewaifu, fix silent hooks, check the relay port, or remove it.
+description: Install, repair, inspect or uninstall CodeWaifu, the desktop companion that speaks coding-agent events out loud, lists agent threads and steers them. Use when the user asks to install codewaifu, fix silent hooks, check the relay port, or remove it.
 ---
 
 # CodeWaifu companion
@@ -19,8 +19,11 @@ Run the official installer; it is idempotent and safe to re-run:
 
 The installer downloads the latest release, puts the app in `/Applications`
 (or `%LOCALAPPDATA%\Programs\CodeWaifu`), then runs `CodeWaifu --cli install`,
-which merges hooks into `~/.codex/hooks.json` and `~/.claude/settings.json`
-with backups. Never hand-edit those two files for this purpose.
+which merges hooks into every agent config it finds on the machine - Codex,
+Claude Code, Cursor, Gemini CLI, Antigravity, Kimi CLI and ZCode - with backups,
+and writes a relay plugin for OpenCode and Pi, which have no hook config at all.
+An agent that is not installed gets nothing written. Never hand-edit those files
+for this purpose; `--cli install` is idempotent and is also the repair path.
 
 On Linux the user-space install lands in `~/.local/share/CodeWaifu` (extracted
 AppImage tree), with a launcher at `~/.local/bin/codewaifu` and a desktop entry
@@ -50,8 +53,9 @@ On Linux use `codewaifu status` if the launcher is on `PATH`, otherwise
 `~/.local/share/CodeWaifu/AppRun --cli status`. `--cli` still needs a display:
 on a headless box wrap it in `xvfb-run -a`.
 
-Healthy output: `app: running`, `relay: 127.0.0.1:<port>`, both agents listed
-with events, `runner: installed`. A `relay.conflict` note means the preferred
+Healthy output: `app: running`, `relay: 127.0.0.1:<port>`, one aligned line per
+agent - installed ones name their events, absent ones say so instead of
+vanishing - and `runner: installed`. A `relay.conflict` note means the preferred
 port was busy and the relay moved; that is normal and self-healing, because the
 runners re-read `~/.codewaifu/endpoint.env` on every hook.
 

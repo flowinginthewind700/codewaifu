@@ -23,6 +23,7 @@ const SUBSTRINGS: ReadonlyArray<[needle: string, klass: string]> = [
   ['cursor', 'cursor'],
   ['gemini', 'gemini'],
   ['kimi', 'kimi'],
+  ['zcode', 'zcode'],
   ['opencode', 'opencode'],
   ['kiro', 'kiro'],
   ['trae', 'trae']

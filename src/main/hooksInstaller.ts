@@ -3,6 +3,13 @@ import path from 'node:path'
 import type { AppConfig } from '../shared/config'
 import { renderEndpointEnv, type Endpoint } from '../shared/endpoint'
 import {
+  isOurPluginFile,
+  OPENCODE_PLUGIN_EVENTS,
+  PI_EXTENSION_EVENTS,
+  renderOpencodePlugin,
+  renderPiExtension
+} from '../shared/agentPlugins'
+import {
   hookCommand,
   hookCommandWindows,
   renderHookCmd,
@@ -19,11 +26,14 @@ import {
   mergeClaudeHooks,
   mergeCodexHooks,
   mergeCursorHooks,
+  mergeZcodeHooks,
   scanFlatEvents,
+  scanZcodeEvents,
   stripAntigravityHooks,
   stripClaudeHooks,
   stripCodexHooks,
   stripCursorHooks,
+  stripZcodeHooks,
   type HookSpec
 } from '../shared/hooksMerge'
 import { applyKimiHooks, stripKimiHooks, scanKimiEvents } from '../shared/kimiToml'
@@ -38,8 +48,16 @@ import {
   hooksDir,
   isWindows,
   kimiConfigToml,
+  opencodeConfigDir,
+  opencodeLegacyConfigDir,
+  opencodePluginFile,
+  opencodePluginName,
+  piExtensionFile,
+  piHome,
   platform,
-  stateDir
+  stateDir,
+  zcodeHome,
+  zcodeHooksFile
 } from './env'
 import { log } from './log'
 import { backupFile } from './store'
@@ -52,8 +70,54 @@ const HOOK_TIMEOUT_MS = HOOK_TIMEOUT * 1000
  * Every agent we can install into. The first two are the ones we can also read a
  * transcript for; the rest are hook reporters whose events still drive speech,
  * bubbles, the ledger and the bench tree.
+ *
+ * Two integration shapes live here. Most agents read a config file that names a
+ * command per event, so we merge a command in and the shared relay runs it.
+ * `opencode` and `pi` have no config surface at all - they load *code* - so for
+ * those we generate a plugin file each of them discovers, and that file relays
+ * events to us over HTTP (see `shared/agentPlugins.ts`).
  */
-export type HookAgent = 'codex' | 'claude' | 'cursor' | 'gemini' | 'antigravity' | 'kimi'
+export type HookAgent =
+  | 'codex'
+  | 'claude'
+  | 'cursor'
+  | 'gemini'
+  | 'antigravity'
+  | 'kimi'
+  | 'zcode'
+  | 'opencode'
+  | 'pi'
+
+/** Agents whose integration is a generated code file rather than a hook config. */
+export type PluginAgent = 'opencode' | 'pi'
+
+export function isPluginAgent(agent: HookAgent): agent is PluginAgent {
+  return agent === 'opencode' || agent === 'pi'
+}
+
+/** The generated relay file for a plugin agent. */
+export function renderPluginFile(agent: PluginAgent): string {
+  return agent === 'opencode' ? renderOpencodePlugin() : renderPiExtension()
+}
+
+/**
+ * Where a plugin agent's relay file goes on this machine.
+ *
+ * OpenCode reads `~/.config/opencode` today and `~/.opencode` on older installs,
+ * and a plugin dropped into a directory the CLI does not scan is a plugin that
+ * silently never loads. So: the current home when it exists, else the legacy one
+ * when that exists, else the current one. Callers must only ever ask this after
+ * `agentPresent` said the agent is installed, so the last branch is a home we
+ * already found - creating `plugins/` inside it advertises nothing new.
+ */
+export function pluginFileFor(agent: PluginAgent): string {
+  if (agent === 'pi') return piExtensionFile
+  if (fs.existsSync(opencodeConfigDir)) return path.join(opencodeConfigDir, 'plugins', opencodePluginName)
+  if (fs.existsSync(opencodeLegacyConfigDir)) {
+    return path.join(opencodeLegacyConfigDir, 'plugins', opencodePluginName)
+  }
+  return opencodePluginFile
+}
 
 interface AgentTarget {
   name: HookAgent
@@ -66,7 +130,13 @@ const TARGETS: AgentTarget[] = [
   { name: 'cursor', file: cursorHooksFile },
   { name: 'gemini', file: geminiSettingsFile },
   { name: 'antigravity', file: antigravityHooksFile },
-  { name: 'kimi', file: kimiConfigToml }
+  { name: 'kimi', file: kimiConfigToml },
+  { name: 'zcode', file: zcodeHooksFile },
+  // For the plugin agents this is the default home, not necessarily the one we
+  // write: OpenCode has two legitimate homes and `pluginFileFor` picks the live
+  // one. It is the path the settings panel shows before an install happens.
+  { name: 'opencode', file: opencodePluginFile },
+  { name: 'pi', file: piExtensionFile }
 ]
 
 /**
@@ -87,13 +157,19 @@ const TARGETS: AgentTarget[] = [
  * /`PreCompress` events for everything else. Mapping AfterAgent to the session
  * kind used to leave a Gemini finish installed but never announced: `session_end`
  * has no toggle, so it is always silent.
+ *
+ * ZCode's `events` object is a closed set of exactly seven names
+ * (SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
+ * PostToolUseFailure, Stop), so it has no compact, subagent or notification row:
+ * a name it does not know would be rejected with the whole config file.
  */
 const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, string[]>>> = {
   sessionStart: {
     codex: ['SessionStart'],
     claude: ['SessionStart'],
     gemini: ['SessionStart'],
-    antigravity: ['PreInvocation']
+    antigravity: ['PreInvocation'],
+    zcode: ['SessionStart']
   },
   stop: {
     codex: ['Stop'],
@@ -101,14 +177,16 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     cursor: ['stop', 'afterAgentResponse'],
     gemini: ['AfterAgent'],
     antigravity: ['PostInvocation', 'Stop'],
-    kimi: ['Stop', 'StopFailure']
+    kimi: ['Stop', 'StopFailure'],
+    zcode: ['Stop']
   },
   permission: {
     codex: ['PermissionRequest'],
     claude: [],
     cursor: ['preToolUse'],
     antigravity: ['PreToolUse'],
-    kimi: ['PermissionRequest']
+    kimi: ['PermissionRequest'],
+    zcode: ['PermissionRequest']
   },
   notification: { claude: ['Notification'], gemini: ['Notification'] },
   tool: {
@@ -117,7 +195,8 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     cursor: ['postToolUse', 'postToolUseFailure', 'beforeShellExecution', 'beforeMCPExecution'],
     gemini: ['BeforeTool', 'AfterTool'],
     antigravity: ['PostToolUse'],
-    kimi: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']
+    kimi: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'],
+    zcode: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']
   },
   compact: { codex: ['PreCompact'], claude: ['PreCompact'], gemini: ['PreCompress'] },
   subagent: { codex: ['SubagentStop'], claude: ['SubagentStop'] },
@@ -126,7 +205,8 @@ const EVENT_MAP: Record<keyof AppConfig['events'], Partial<Record<HookAgent, str
     claude: ['UserPromptSubmit'],
     cursor: ['beforeSubmitPrompt'],
     gemini: ['BeforeAgent'],
-    kimi: ['UserPromptSubmit']
+    kimi: ['UserPromptSubmit'],
+    zcode: ['UserPromptSubmit']
   }
 }
 
@@ -173,10 +253,11 @@ function commandFor(agent: HookAgent, event: string): string {
 }
 
 /**
- * The hook definitions one agent wants for the enabled toggles. Kimi is not
- * covered here - its config is TOML, see `buildKimiCommands`.
+ * The hook definitions one agent wants for the enabled toggles. Three agents are
+ * not covered here: Kimi's config is TOML (see `buildKimiCommands`) and OpenCode
+ * and Pi have no config at all (see `renderPluginFile`).
  */
-export function buildSpecs(config: AppConfig, agent: Exclude<HookAgent, 'kimi'>): HookSpec[] {
+export function buildSpecs(config: AppConfig, agent: Exclude<HookAgent, 'kimi' | PluginAgent>): HookSpec[] {
   const specs: HookSpec[] = []
   const toggles = config.events
   for (const key of Object.keys(EVENT_MAP) as Array<keyof typeof EVENT_MAP>) {
@@ -188,12 +269,22 @@ export function buildSpecs(config: AppConfig, agent: Exclude<HookAgent, 'kimi'>)
         command: commandFor(agent, event),
         timeout: agent === 'gemini' ? HOOK_TIMEOUT_MS : HOOK_TIMEOUT
       }
+      // ZCode accepts both spellings and prefers the millisecond one, so write
+      // both and keep our intent out of a unit conversion. It also ignores a
+      // hook's stdout, which makes `async: true` free: the agent never waits on
+      // us, and a slow relay cannot stall a session.
+      if (agent === 'zcode') {
+        spec.timeoutMs = HOOK_TIMEOUT_MS
+        spec.async = true
+      }
       // Codex and Claude read a SessionStart `matcher` as a regex, so one
       // pattern covers startup/resume/clear. Gemini reads the same field as an
       // *exact string* for lifecycle events, where that pattern matches nothing
       // and the greeting would silently never fire - so Gemini gets no matcher,
       // which means every source.
-      if (event === 'SessionStart' && agent !== 'gemini') spec.matcher = SESSION_MATCHER
+      // ZCode is like Gemini here: its SessionStart takes no matcher, and an
+      // unknown key on a strict schema risks the whole config being rejected.
+      if (event === 'SessionStart' && agent !== 'gemini' && agent !== 'zcode') spec.matcher = SESSION_MATCHER
       // Cursor puts `command` straight on the definition; Antigravity only does
       // that for its non-tool events and wants a `type` when it does.
       if (agent === 'cursor') spec.flat = true
@@ -239,6 +330,10 @@ function mergeFor(agent: HookAgent, value: unknown, specs: HookSpec[]) {
       return mergeCursorHooks(value, specs)
     case 'antigravity':
       return mergeAntigravityHooks(value, specs)
+    case 'zcode':
+      // Claude's nested shape, one level deeper under `hooks.events`, plus the
+      // `hooks.enabled` switch that defaults to false.
+      return mergeZcodeHooks(value, specs)
     default:
       // Claude and Gemini share the nested `hooks.<Event>[].hooks[]` shape.
       return mergeClaudeHooks(value, specs)
@@ -253,6 +348,8 @@ function stripFor(agent: HookAgent, value: unknown) {
       return stripCursorHooks(value)
     case 'antigravity':
       return stripAntigravityHooks(value)
+    case 'zcode':
+      return stripZcodeHooks(value)
     default:
       return stripClaudeHooks(value)
   }
@@ -262,6 +359,7 @@ function stripFor(agent: HookAgent, value: unknown) {
 function scanEventsFor(agent: HookAgent, value: unknown): string[] {
   if (agent === 'cursor') return scanFlatEvents(value)
   if (agent === 'antigravity') return scanFlatEvents(value, ANTIGRAVITY_BUNDLE)
+  if (agent === 'zcode') return scanZcodeEvents(value)
   return scanOurEvents(value)
 }
 
@@ -395,6 +493,11 @@ function writeTextAtomic(file: string, text: string): void {
  * home directory for an agent the user does not have: a fresh `~/.gemini` is
  * exactly what makes the bench offer Gemini as a runner, so writing one would
  * advertise a CLI that is not on the machine.
+ *
+ * The agents that name their own home are listed explicitly, because for them
+ * `dirname(file)` is a directory the CLI creates lazily: OpenCode's `plugins/`
+ * and Pi's `agent/extensions/` do not exist on a working install until someone
+ * puts a file in them, so the generic test would report both as absent.
  */
 function agentPresent(name: HookAgent, file: string): boolean {
   try {
@@ -402,10 +505,57 @@ function agentPresent(name: HookAgent, file: string): boolean {
     // Codex and Claude Code are the two we always report on, present or not:
     // the settings panel lists them unconditionally and says "not installed".
     if (name === 'codex' || name === 'claude') return true
+    if (name === 'zcode') return fs.existsSync(zcodeHome)
+    if (name === 'opencode') return fs.existsSync(opencodeConfigDir) || fs.existsSync(opencodeLegacyConfigDir)
+    if (name === 'pi') return fs.existsSync(piHome)
     return fs.existsSync(path.dirname(file))
   } catch {
     return false
   }
+}
+
+/**
+ * The file a plugin agent's relay lives in, right now. Re-resolved on every
+ * call rather than pinned at import: an OpenCode user who moves their config
+ * dir between launches gets the file rewritten in the new home, and a stale
+ * absolute path would keep reporting the old one.
+ */
+function pluginTarget(name: PluginAgent): string {
+  return pluginFileFor(name)
+}
+
+/** The event names a plugin relay reports, once it is on disk. */
+function pluginEvents(name: PluginAgent): string[] {
+  return [...(name === 'opencode' ? OPENCODE_PLUGIN_EVENTS : PI_EXTENSION_EVENTS)]
+}
+
+/**
+ * Write (or confirm) a generated relay file.
+ *
+ * Unlike the config merges this is a whole file we own end to end: identical
+ * bytes already on disk means nothing to do, and a file that differs is backed
+ * up before it is replaced, whether it was ours or something the user wrote at
+ * the same path.
+ */
+function installPlugin(name: PluginAgent, entry: AgentHookStatus, warnings: string[]): void {
+  const file = pluginTarget(name)
+  entry.path = file
+  const body = renderPluginFile(name)
+  const { text, exists, error } = readText(file)
+  if (error) {
+    entry.error = error
+    warnings.push(`${name}: ${error}`)
+    return
+  }
+  entry.events = pluginEvents(name)
+  if (exists && text === body) {
+    entry.installed = true
+    return
+  }
+  if (exists) backupFile(file)
+  writeTextAtomic(file, body)
+  entry.installed = true
+  log('info', `plugin installed for ${name}`, { events: entry.events, file })
 }
 
 /**
@@ -468,6 +618,12 @@ function installOne(
   entry: AgentHookStatus,
   warnings: string[]
 ): void {
+  // OpenCode and Pi have no config to merge into: the integration *is* the file.
+  if (isPluginAgent(name)) {
+    installPlugin(name, entry, warnings)
+    return
+  }
+
   if (name === 'kimi') {
     const commands = buildKimiCommands(config)
     if (Object.keys(commands).length === 0) return
@@ -547,6 +703,27 @@ export function uninstallAgentHooks(): InstallReport {
 }
 
 function uninstallOne(name: HookAgent, file: string, entry: AgentHookStatus, warnings: string[]): void {
+  if (isPluginAgent(name)) {
+    const target = pluginTarget(name)
+    const { text, exists, error } = readText(target)
+    if (error) {
+      entry.error = error
+      warnings.push(`${name}: ${error}`)
+      return
+    }
+    // A plugins directory holds whatever the user wrote. Removing a file we do
+    // not recognise as ours would delete someone else's integration.
+    if (!exists || !isOurPluginFile(text)) return
+    backupFile(target)
+    try {
+      fs.rmSync(target, { force: true })
+      log('info', `plugin removed for ${name}`, target)
+    } catch (removeError) {
+      warnings.push(`${name}: could not remove ${target}: ${String(removeError)}`)
+    }
+    return
+  }
+
   if (name === 'kimi') {
     const { text, exists, error } = readText(file)
     if (error) {
@@ -599,6 +776,22 @@ export function reportHooks(): Pick<HooksReport, 'agents' | 'codex' | 'claude' |
 }
 
 function reportOne(name: HookAgent, file: string, entry: AgentHookStatus): void {
+  if (isPluginAgent(name)) {
+    const target = pluginTarget(name)
+    entry.path = target
+    const { text, error } = readText(target)
+    if (error) {
+      entry.error = error
+      return
+    }
+    // Present and ours. A foreign file at our path is reported as "not
+    // installed" rather than adopted, so the panel never claims someone else's
+    // plugin and uninstall never eats it.
+    entry.installed = isOurPluginFile(text)
+    entry.events = entry.installed ? pluginEvents(name) : []
+    return
+  }
+
   if (name === 'kimi') {
     const { text, error } = readText(file)
     if (error) {

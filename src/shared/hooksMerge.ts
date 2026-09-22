@@ -8,6 +8,12 @@ export interface HookSpec {
   /** Codex-only: alternate command for Windows. */
   commandWindows?: string
   timeout?: number
+  /**
+   * Millisecond timeout, for agents that spell it that way. Gemini's `timeout`
+   * is already milliseconds; ZCode accepts both and prefers this one when
+   * present, so writing it keeps our intent out of a unit-conversion trap.
+   */
+  timeoutMs?: number
   /** Codex-only: do not block the agent on this hook. */
   async?: boolean
   statusMessage?: string
@@ -33,6 +39,7 @@ interface HookEntry {
   type: string
   command?: string
   timeout?: number
+  timeoutMs?: number
   async?: boolean
   statusMessage?: string
   commandWindows?: string
@@ -137,6 +144,7 @@ function stripOurs(events: Record<string, HookGroup[]>): Record<string, HookGrou
 function entryFor(spec: HookSpec): HookEntry {
   const entry: HookEntry = { type: 'command', command: spec.command }
   if (typeof spec.timeout === 'number') entry.timeout = spec.timeout
+  if (typeof spec.timeoutMs === 'number') entry.timeoutMs = spec.timeoutMs
   if (typeof spec.async === 'boolean') entry.async = spec.async
   if (typeof spec.statusMessage === 'string') entry.statusMessage = spec.statusMessage
   if (typeof spec.commandWindows === 'string') entry.commandWindows = spec.commandWindows
@@ -236,6 +244,70 @@ export function stripClaudeHooks(existing: unknown): MergeResult {
   else delete root.hooks
   const changed = stable(existing ?? {}) !== stable(root)
   return { json: root, changed, events: [], warnings: parsed.warnings }
+}
+
+// ---------------------------------------------------------------------------
+// ZCode: Claude's nested event shape, one level deeper.
+//
+// `~/.zcode/cli/config.json` is ZCode's whole configuration - provider, model,
+// permission, storage and dozens of keys we have no business reading - with
+// hooks under `hooks.events.<Event>[].hooks[]`. Inside `hooks` the shape is
+// Claude's exactly, so the group-based merge above does the work; what ZCode
+// adds is the wrapper and one switch we must flip.
+//
+// ⛔ `hooks.enabled` defaults to `false`, so merging our events without
+// setting it writes hooks that are silently never run - the file looks
+// installed, the bench never hears anything, and there is no error to find.
+// Setting it is the whole point of having a ZCode-specific merge.
+// ---------------------------------------------------------------------------
+
+/** ZCode's own `hooks` wrapper keys, carried through untouched. */
+function zcodeHooksRoot(root: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(root.hooks) ? root.hooks : {}
+}
+
+export function mergeZcodeHooks(existing: unknown, specs: HookSpec[]): MergeResult {
+  const before = isRecord(existing) ? existing : {}
+  const root: Record<string, unknown> = { ...before }
+  const wrapper = zcodeHooksRoot(root)
+  const rebuilt = rebuild(normalizeEvents(wrapper.events), specs)
+  root.hooks = { ...wrapper, enabled: true, events: rebuilt.hooks }
+  const changed = stable(before) !== stable(root)
+  return { json: root, changed, events: rebuilt.events, warnings: rebuilt.warnings }
+}
+
+/**
+ * Undo `mergeZcodeHooks`. The wrapper keys (`timeoutMs`, `maxOutputBytes`,
+ * `enabled`) are the user's, so `enabled` is only cleared once no events are
+ * left at all: a user who enabled hooks of their own keeps them enabled, and a
+ * file we created goes back to ZCode's default of "no events, not enabled".
+ */
+export function stripZcodeHooks(existing: unknown): MergeResult {
+  const root = isRecord(existing) ? { ...existing } : {}
+  const wrapper = zcodeHooksRoot(root)
+  const parsed = normalizeEvents(wrapper.events)
+  const after = { ...parsed.opaque, ...pruneEmpty(stripOurs(parsed.events)) }
+  const empty = Object.keys(after).length === 0
+  if (isRecord(root.hooks)) {
+    const next = { ...root.hooks }
+    if (empty) {
+      delete next.events
+      delete next.enabled
+      if (Object.keys(next).length === 0) delete root.hooks
+      else root.hooks = next
+    } else {
+      next.events = after
+      root.hooks = next
+    }
+  }
+  const changed = stable(existing ?? {}) !== stable(root)
+  return { json: root, changed, events: [], warnings: parsed.warnings }
+}
+
+/** Event names under `hooks.events` that currently carry a hook of ours. */
+export function scanZcodeEvents(value: unknown): string[] {
+  const root = isRecord(value) ? value : {}
+  return eventsWithOurs(normalizeEvents(zcodeHooksRoot(root).events).events)
 }
 
 // ---------------------------------------------------------------------------

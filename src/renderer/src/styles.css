@@ -1684,6 +1684,18 @@ input[type='number'] {
   color: var(--agent-kimi);
 }
 
+.tag.zcode {
+  color: var(--agent-zcode);
+}
+
+.tag.opencode {
+  color: var(--agent-opencode);
+}
+
+.tag.pi {
+  color: var(--agent-pi);
+}
+
 .empty {
   padding: 20px 12px;
   text-align: center;

@@ -768,6 +768,21 @@ textarea {
   background: rgba(var(--agent-kimi-rgb), 0.13);
 }
 
+.tag.zcode {
+  color: var(--agent-zcode);
+  background: rgba(var(--agent-zcode-rgb), 0.13);
+}
+
+.tag.opencode {
+  color: var(--agent-opencode);
+  background: rgba(var(--agent-opencode-rgb), 0.13);
+}
+
+.tag.pi {
+  color: var(--agent-pi);
+  background: rgba(var(--agent-pi-rgb), 0.13);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -865,23 +880,60 @@ textarea {
   flex: 0 0 auto;
 }
 
-/* The rail's one icon button. The head is short on vertical room and already
-   carries a labelled toggle, so this is the smallest button in the bench. */
-.rail-head .rename-toggle {
-  flex: 0 0 auto;
+/* One row's box: the row, plus the rename pencil that belongs to it. The pencil
+   is a sibling and not a child because a `<button>` may not hold another
+   `<button>`, so this is the element that owns "the pointer is over this row". */
+.task-cell {
+  position: relative;
+  min-width: 0;
+}
+
+/* The row's inline rename. It floats over padding the row reserves permanently
+   (`padding-right` below), so showing it cannot move the status pills: a row
+   that jumps under the pointer while you are reaching for it is a row people
+   miss. `opacity` rather than `display` keeps it in the accessibility tree -
+   a control that only exists on hover is one a keyboard user cannot reach, and
+   this one is also bound to F2. */
+.task-cell .row-rename {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
   width: 20px;
   height: 20px;
   padding: 2px;
+  border-radius: var(--radius-xs);
   color: var(--faint);
+  background: var(--bench-panel-2);
+  border: 1px solid var(--bench-line);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-1) var(--ease-swift),
+    color var(--dur-1) var(--ease-swift);
 }
 
-.rail-head .rename-toggle:hover:not(:disabled) {
+.task-cell .row-rename svg {
+  width: 12px;
+  height: 12px;
+}
+
+.task-cell:hover .row-rename,
+.task-cell .row-rename:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.task-cell .row-rename:hover {
   color: var(--text);
 }
 
-.rail-head .rename-toggle:disabled {
-  opacity: 0.4;
-  cursor: default;
+/* The keyboard cursor gets its pencil too: j/k walks rows the pointer is
+   nowhere near, and a control that only answers the mouse leaves that walk
+   without a visible way in. */
+.task-cell:has(.task-row[data-cursor='true']) .row-rename {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* The origin facet: chips above the tree, not a fourth group in it. The spine
@@ -1070,7 +1122,10 @@ textarea {
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 4px 9px 4px 18px;
+  /* The right side is the pencil's slot, reserved whether or not the pencil is
+     showing: a control that made room for itself on hover would shove the
+     status pills sideways on every row the pointer crossed. */
+  padding: 4px 26px 4px 18px;
   background: transparent;
   border: 0;
   border-left: 2px solid transparent;

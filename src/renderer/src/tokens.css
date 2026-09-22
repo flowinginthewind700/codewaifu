@@ -71,9 +71,16 @@
      the chroma here means re-checking that pairing, and reusing `--review` blue
      for an agent is out: it is the "awaiting my eyes" state colour.
 
-     Agents we only detect but do not integrate (opencode, kiro, pi, trae, a
-     custom herdr manifest) keep the neutral tag - colouring them would
-     advertise support we do not have. */
+     Agents we only detect but do not integrate (kiro, trae, a custom herdr
+     manifest) keep the neutral tag - colouring them would advertise support we
+     do not have. ZCode, OpenCode and Pi do get hues: as of 0.4.30 they are
+     three of the nine flavors we install into, the first two through a plugin
+     file rather than a config merge.
+
+     The three new hues were placed in the widest gaps of the existing ramp
+     (lime between kimi and codex, orchid between gemini and antigravity, rose
+     between antigravity and claude) and away from warn's amber and review's
+     blue, which belong to states. */
   --agent-cursor-rgb: 127, 212, 232;
   --agent-cursor: rgb(var(--agent-cursor-rgb));
   --agent-gemini-rgb: 179, 164, 245;
@@ -82,6 +89,12 @@
   --agent-antigravity: rgb(var(--agent-antigravity-rgb));
   --agent-kimi-rgb: 207, 224, 122;
   --agent-kimi: rgb(var(--agent-kimi-rgb));
+  --agent-zcode-rgb: 236, 142, 152;
+  --agent-zcode: rgb(var(--agent-zcode-rgb));
+  --agent-opencode-rgb: 150, 214, 122;
+  --agent-opencode: rgb(var(--agent-opencode-rgb));
+  --agent-pi-rgb: 214, 150, 232;
+  --agent-pi: rgb(var(--agent-pi-rgb));
 
   --glass-blur: 26px;
   --glass-sat: 180%;

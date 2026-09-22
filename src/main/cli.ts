@@ -35,7 +35,7 @@ Run \`codewaifu pro help\` for the bench's own verbs.
 
 /**
  * One aligned line per agent flavor. The label column is padded so a machine
- * with six agents reads as a table rather than as six ragged sentences, and an
+ * with nine agents reads as a table rather than as nine ragged sentences, and an
  * agent nobody installed still gets a line: silence there would look like the
  * install skipped it.
  */

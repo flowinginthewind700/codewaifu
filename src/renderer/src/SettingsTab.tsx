@@ -406,7 +406,10 @@ const HOOK_LABELS: Record<string, Parameters<Translate>[0]> = {
   cursor: 'hooksCursor',
   gemini: 'hooksGemini',
   antigravity: 'hooksAntigravity',
-  kimi: 'hooksKimi'
+  kimi: 'hooksKimi',
+  zcode: 'hooksZcode',
+  opencode: 'hooksOpencode',
+  pi: 'hooksPi'
 }
 
 const HOOK_ROWS: Array<{ agent: (typeof HOOK_AGENTS)[number]; label: Parameters<Translate>[0] }> = HOOK_AGENTS.map(
