@@ -74,6 +74,14 @@ export const geminiHome = path.join(home, '.gemini')
 export const geminiSettingsFile = path.join(geminiHome, 'settings.json')
 /** Antigravity shares Gemini's config dir; its global hooks live one level down. */
 export const antigravityHooksFile = path.join(geminiHome, 'config', 'hooks.json')
+/**
+ * Antigravity has no home directory of its own to probe - it lives inside
+ * Gemini's. The `config/` dir holding its hooks file is the closest honest
+ * marker, so a machine with both agents reports both instead of claiming only
+ * one exists. Still a heuristic like every other probe here: presence of that
+ * dir means "some Antigravity config is there", not that a binary is on PATH.
+ */
+export const antigravityHome = path.dirname(antigravityHooksFile)
 /** Same resolution Kimi's own CLI uses, so hooks land in the home Kimi reads. */
 export const kimiHome = resolveOverride(process.env.KIMI_CODE_HOME, path.join(home, '.kimi-code'))
 export const kimiConfigToml = path.join(kimiHome, 'config.toml')
@@ -157,6 +165,7 @@ export const detectionHomes: Record<string, readonly string[]> = {
   claude: [claudeHome],
   cursor: [cursorHome],
   gemini: [geminiHome],
+  antigravity: [antigravityHome],
   kimi: [kimiHome],
   zcode: [zcodeHome],
   opencode: [opencodeConfigDir, opencodeLegacyConfigDir],
