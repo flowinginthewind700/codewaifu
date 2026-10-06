@@ -47,8 +47,25 @@ const TEXT_LIMIT = 4000
 /** Entries kept per task before compaction is worth offering. */
 export const DEFAULT_LEDGER_LIMIT = 400
 
+/**
+ * A process-local sequence, so a burst minted inside one millisecond cannot
+ * collide with itself.
+ *
+ * Entry ids only have to be unique among the lines one writer appends, but a
+ * burst is exactly when the ledger gets many lines at the same `at`: a herdr
+ * reconnect or a paste can mint dozens in the same millisecond. A 3-byte random
+ * suffix is not enough for that - 500 draws collide with ~0.7% probability (the
+ * birthday bound at 2^24), which is what failed a linux release runner. The
+ * counter makes two ids from this writer in the same millisecond impossible to
+ * equal; the random tail only has to separate writers, so it stays.
+ */
+let entrySeq = 0
+const ENTRY_SEQ_MOD = 0x1000000
+
 export function newEntryId(at: number, kind: string): string {
-  return `${at.toString(36)}-${kind}-${crypto.randomBytes(3).toString('hex')}`
+  entrySeq = (entrySeq + 1) % ENTRY_SEQ_MOD
+  const seq = entrySeq.toString(36)
+  return `${at.toString(36)}-${kind}-${seq}-${crypto.randomBytes(3).toString('hex')}`
 }
 
 /**

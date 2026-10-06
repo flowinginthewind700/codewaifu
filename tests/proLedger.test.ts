@@ -147,7 +147,7 @@ describe('newEntry', () => {
     expect(built).toEqual({
       v: 1,
       at: 1700000000000,
-      id: expect.stringMatching(/^[a-z0-9]+-goal-[0-9a-f]{6}$/),
+      id: expect.stringMatching(/^[a-z0-9]+-goal-[a-z0-9]+-[0-9a-f]{6}$/),
       taskId: id,
       kind: 'goal',
       text: 'ship the bench',
