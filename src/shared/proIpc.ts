@@ -683,6 +683,13 @@ export function parseProPane(payload: unknown): ProPaneParse {
 
 export type ProHostRequest =
   | { op: 'discovery' }
+  /**
+   * Re-run discovery and, when installed-but-not-running, start the server.
+   * `discovery` only reads the last answer; this is what the refresh buttons
+   * mean, and collapsing the two left them unable to see a server that had
+   * died after the app booted.
+   */
+  | { op: 'rediscover' }
   | { op: 'agents' }
   /** Sessions the companion can see, with the task that already claims each. */
   | { op: 'threads' }
@@ -716,6 +723,7 @@ export function parseProHost(payload: unknown): ProHostParse {
   const op = str(raw.op, 20).trim().toLowerCase() || 'discovery'
   switch (op) {
     case 'discovery':
+    case 'rediscover':
     case 'agents':
     case 'threads':
       return { op }

@@ -9,11 +9,13 @@
  * in, not a crash to surface.
  */
 import fs from 'node:fs'
+import type net from 'node:net'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_TIMEOUT_MS,
   HerdrError,
+  probeSocketLive,
   request,
   subscribe
 } from '../src/main/pro/herdr/socket'
@@ -24,7 +26,7 @@ import {
   parseStatusChange,
   type HerdrEvent
 } from '../src/shared/herdr'
-import { fakeServer } from './helpers/herdrSocket'
+import { FakeSocket, fakeServer } from './helpers/herdrSocket'
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'herdr')
 
@@ -310,5 +312,44 @@ describe('subscribe', () => {
     expect(closes).toEqual([])
     expect(sub.live(), 'an unacked stream is not live even if it is talking').toBe(false)
     sub.close()
+  })
+})
+
+/**
+ * A unix socket file is a file. A server that was killed leaves the path
+ * behind, so `exists` says yes while nobody is listening - the difference
+ * between "already running, do not spawn another" and "an unattended corpse,
+ * start one". Only a connect can tell them apart.
+ */
+describe('probeSocketLive', () => {
+  it('answers true for a listener and hangs up the probe immediately', async () => {
+    const server = fakeServer({ silent: true })
+    await expect(probeSocketLive(SOCKET, { connect: server.connect })).resolves.toBe(true)
+    expect(server.paths).toEqual([SOCKET])
+    expect(server.socket().destroyed).toBe(true)
+  })
+
+  it('answers false for a stale socket file the kernel refuses', async () => {
+    const server = fakeServer({ failConnect: 'ECONNREFUSED' })
+    await expect(probeSocketLive(SOCKET, { connect: server.connect })).resolves.toBe(false)
+    expect(server.socket().destroyed).toBe(true)
+  })
+
+  it('answers false when connect() itself throws', async () => {
+    const server = fakeServer({ throwOnConnect: 'bad path' })
+    await expect(probeSocketLive(SOCKET, { connect: server.connect })).resolves.toBe(false)
+  })
+
+  it('counts a socket that connects but never acknowledges as alive, not as a corpse', async () => {
+    // A full accept backlog is slow, not dead. Downgrading it would fork a
+    // second server on top of a live one, which is the worse failure.
+    const socket = new FakeSocket()
+    await expect(
+      probeSocketLive(SOCKET, {
+        connect: () => socket as unknown as net.Socket,
+        timeoutMs: 5
+      })
+    ).resolves.toBe(true)
+    expect(socket.destroyed).toBe(true)
   })
 })

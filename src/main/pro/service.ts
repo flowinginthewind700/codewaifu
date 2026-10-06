@@ -127,13 +127,14 @@ import {
   discoverHerdr,
   fsListDir,
   fsPathExists,
+  SOCKET_ENV_VAR,
   type ExistsFn,
   type HerdrTarget,
   type ListDirFn,
   type ResolveDeps
 } from './herdr/discovery'
 import { HerdrSession, type SessionChange, type SessionStatus } from './herdr/session'
-import { HerdrError, type ConnectFn } from './herdr/socket'
+import { HerdrError, probeSocketLive, type ConnectFn } from './herdr/socket'
 import { HerdrLauncher, realServerSpawn } from './herdr/launcher'
 import {
   TerminalBridge,
@@ -412,6 +413,12 @@ export interface ProServiceDeps {
   findBinary?: (name: string) => Promise<string | null>
   /** Injected into `HerdrSession` and `HerdrClient`; a test fakes the socket. */
   connect?: ConnectFn
+  /**
+   * Whether something is listening on a resolved socket path. Real by default
+   * (`net.connect`); a test fakes it so "a socket file with no server behind it"
+   * is a state it can lay out without leaving a daemon on the box.
+   */
+  probeSocket?: (socketPath: string) => Promise<boolean>
   spawn?: SpawnFn
   /**
    * Starts the headless herdr server when discovery finds a binary and no
@@ -644,6 +651,7 @@ export class ProService implements CompanionApi {
   private readonly listDirFn: ListDirFn
   private readonly findBinaryFn: (name: string) => Promise<string | null>
   private readonly connect: ConnectFn | undefined
+  private readonly probeSocketFn: (socketPath: string) => Promise<boolean>
   private readonly spawn: SpawnFn | undefined
   private readonly launcher: HerdrLauncher
   private readonly env: () => Record<string, string | undefined>
@@ -726,6 +734,7 @@ export class ProService implements CompanionApi {
     this.findBinaryFn = deps.findBinary ?? findBinary
     this.discoverFn = deps.discover ?? ((input) => discoverHerdr(input))
     this.connect = deps.connect
+    this.probeSocketFn = deps.probeSocket ?? probeSocketLive
     this.spawn = deps.spawn
     this.launcher =
       deps.launcher ??
@@ -870,6 +879,16 @@ export class ProService implements CompanionApi {
     return this.session?.status() ?? null
   }
 
+  /** What the install card and the discovery host op report. */
+  private discoveryInfo(): Record<string, unknown> {
+    return {
+      target: this.target,
+      description: describeDiscovery(this.target, this.host.lang()),
+      online: this.online(),
+      status: this.sessionStatus()
+    }
+  }
+
   private armTimers(): void {
     this.cancelTimers()
     this.tickTimer = this.timers.every(() => this.tick(), this.intervals.tickMs)
@@ -965,6 +984,27 @@ export class ProService implements CompanionApi {
     } catch (error) {
       this.host.log('error', 'pro: herdr discovery threw', { error: String(error) })
       target = EMPTY_TARGET
+    }
+
+    // A unix socket is a file, and the file outlives the server. herdr killed
+    // by the OS, or a machine reboot that happened before herdr could clean up,
+    // leaves `herdr.sock` behind; discovery only proves the path exists, so a
+    // dead socket used to be indistinguishable from a live one: the reason was
+    // `ok`, the rediscover backoff never armed, and the launcher - which trusts
+    // a non-empty `socketPath` as proof of life - never started a server. The
+    // session then reconnected forever to nobody. Prove the listener, and if
+    // there is none, shape the target exactly like the no-socket case discovery
+    // would have produced so the auto-start and backoff below run.
+    if (target.socketPath && !(await this.probeSocketFn(target.socketPath))) {
+      const childEnv = { ...target.childEnv }
+      delete childEnv[SOCKET_ENV_VAR]
+      target = {
+        ...target,
+        socketPath: null,
+        childEnv,
+        found: false,
+        reason: target.binaryPath ? 'no-socket' : 'no-server'
+      }
     }
     this.target = target
 
@@ -3007,16 +3047,13 @@ export class ProService implements CompanionApi {
   async hostOp(request: ProHostRequest): Promise<ProResult> {
     switch (request.op) {
       case 'discovery':
-        return okResult(
-          {
-            target: this.target,
-            description: describeDiscovery(this.target, this.host.lang()),
-            online: this.online(),
-            status: this.sessionStatus()
-          },
-          '',
-          'discovery'
-        )
+        return okResult(this.discoveryInfo(), '', 'discovery')
+      case 'rediscover':
+        // The button is labelled "re-discover herdr"; reading the cached target
+        // made it a no-op that could never recover a server that died after
+        // boot. Ask the world again before answering.
+        await this.rediscover()
+        return okResult(this.discoveryInfo(), '', 'rediscover')
       case 'agents': {
         /*
          * The form wants names, not records. `listAgents` answers one object

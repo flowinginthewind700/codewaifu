@@ -59,6 +59,7 @@ import type { SteerResult, ThreadInfo } from '../src/shared/protocol'
 import { FORGOTTEN_TTL_MS, TaskRegistry, type RegistryFile } from '../src/main/pro/bench'
 import type { AnnounceResult } from '../src/main/pro/companion'
 import { GitProbe } from '../src/main/pro/git'
+import { HerdrLauncher, type ServerChild } from '../src/main/pro/herdr/launcher'
 import type { HerdrTarget } from '../src/main/pro/herdr/discovery'
 import type { LedgerInput } from '../src/main/pro/ledger'
 import type { SessionChange, SessionStatus } from '../src/main/pro/herdr/session'
@@ -746,6 +747,28 @@ interface BootOpts {
   startAgentError?: string
   /** Overrides for `pro.*`; see `FakeHostOpts.pro`. */
   pro?: Partial<ProConfig>
+  /** What `discover()` resolves; the default is a live socket at SOCKET. */
+  target?: HerdrTarget
+  /** Whether something answers on the resolved socket; default true (live). */
+  socketLive?: boolean
+  /** Called on every discovery pass, so "re-discover" is observable. */
+  onDiscover?: () => void
+  /** Records `herdr server` spawns instead of leaving a daemon on the box. */
+  serverSpawns?: Array<{ binary: string; args: string[] }>
+}
+
+/** A `herdr server` child that only records that it was spawned. */
+function fakeServerSpawner(
+  tape: Array<{ binary: string; args: string[] }>
+): (binary: string, args: readonly string[]) => ServerChild {
+  return (binary, args) => {
+    tape.push({ binary, args: [...args] })
+    return {
+      pid: 1200 + tape.length,
+      unref: () => {},
+      on: () => {}
+    } as unknown as ServerChild
+  }
 }
 
 async function boot(opts: BootOpts = {}): Promise<Bench> {
@@ -798,7 +821,20 @@ async function boot(opts: BootOpts = {}): Promise<Bench> {
       bootResumeMs: opts.bootResumeMs ?? 60_000,
       autoResumeMax: opts.autoResumeMax ?? 12
     },
-    discover: () => herdrTarget(),
+    discover: () => {
+      opts.onDiscover?.()
+      return opts.target ?? herdrTarget()
+    },
+    probeSocket: async () => opts.socketLive ?? true,
+    ...(opts.serverSpawns
+      ? {
+          launcher: new HerdrLauncher({
+            spawn: fakeServerSpawner(opts.serverSpawns),
+            timers: clock.timers,
+            log: () => {}
+          })
+        }
+      : {}),
     // Which agent CLIs are installed is a fact about the machine running the
     // test, so the picker's probe is faked the way `git` and `ssh` are: a case
     // that passed here and failed on a laptop without `claude` would have been
@@ -861,6 +897,32 @@ describe('ProService', () => {
     bench.clock.advance(PUSH_MS * 4)
     expect(verdicts(bench)).toEqual(['offline'])
     expect(bench.planAllCalls(), 'the memo stopped memoizing').toBe(1)
+  })
+
+  it('sees through a stale socket file and starts the server behind it', async () => {
+    // The machine rebooted before herdr could remove its socket. Discovery
+    // finds the path; nothing answers on it. Treating the file as a server is
+    // what pinned the bench offline forever, because the launcher's proof of
+    // life was the very path it should have distrusted.
+    const serverSpawns: Array<{ binary: string; args: string[] }> = []
+    const bench = await boot({ socketLive: false, serverSpawns })
+    expect(serverSpawns.map((call) => call.args)).toEqual([['server']])
+    expect(bench.service.herdrTarget.socketPath).toBeNull()
+    expect(bench.service.herdrTarget.reason).toBe('no-socket')
+    expect(bench.service.online()).toBe(false)
+  })
+
+  it('re-runs discovery for the refresh button instead of re-reading the old answer', async () => {
+    let discoveries = 0
+    const bench = await boot({
+      onDiscover: () => {
+        discoveries += 1
+      }
+    })
+    expect(discoveries).toBe(1)
+    const result = await bench.service.hostOp({ op: 'rediscover' })
+    expect(result.ok).toBe(true)
+    expect(discoveries).toBe(2)
   })
 
   it('re-plans when herdr comes back inside the memo window', async () => {

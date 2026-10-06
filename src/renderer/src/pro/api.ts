@@ -244,6 +244,8 @@ export const proApi = {
 
   host: {
     discovery: (): Promise<ProResult> => call(CH.proHost, { op: 'discovery' }),
+    /** Re-run discovery; the only op that can auto-start a stopped herdr. */
+    rediscover: (): Promise<ProResult> => call(CH.proHost, { op: 'rediscover' }),
     agents: (): Promise<ProResult<ProAgentsData>> =>
       call<ProAgentsData>(CH.proHost, { op: 'agents' }),
     /**

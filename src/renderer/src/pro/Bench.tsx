@@ -701,7 +701,7 @@ export function Bench(): ReactElement {
   }, [bump, push, report, t])
 
   const rediscover = useCallback((): void => {
-    void proApi.host.discovery().then((result) => report(result))
+    void proApi.host.rediscover().then((result) => report(result))
   }, [report])
 
   const setStatus = useCallback(

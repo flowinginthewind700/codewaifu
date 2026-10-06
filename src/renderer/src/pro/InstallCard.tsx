@@ -74,7 +74,7 @@ export function InstallCard({
 
   const retry = async (): Promise<void> => {
     setBusy(true)
-    const result = await proApi.host.discovery()
+    const result = await proApi.host.rediscover()
     setBusy(false)
     if (!result.ok) onNotify(result.detail || result.code, 'error')
   }

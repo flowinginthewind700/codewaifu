@@ -46,6 +46,53 @@ function defaultConnect(path: string): net.Socket {
   return net.createConnection(path)
 }
 
+/** How long a liveness probe waits before it calls a slow listener alive. */
+export const PROBE_TIMEOUT_MS = 700
+
+/**
+ * Is anything listening on this socket path?
+ *
+ * A unix socket is a file, and that file outlives the process that created it:
+ * kill herdr, or reboot the machine, and `herdr.sock` is still sitting there.
+ * `fs.existsSync` therefore proves the socket *was* created, never that herdr is
+ * alive. The only honest probe is a connect. Its verdict is what lets discovery
+ * tell "a server is up, do not spawn another" from "an unattended socket file,
+ * start one" - the distinction a bench that silently reconnects forever is
+ * missing.
+ *
+ * A timeout counts as alive on purpose. A socket whose accept backlog is full is
+ * still a live server, and forking a second one on top of it is a worse failure
+ * than waiting for the next retry. A stale file never reaches the timeout: the
+ * kernel refuses the connection immediately.
+ */
+export function probeSocketLive(
+  socketPath: string,
+  options: { timeoutMs?: number; connect?: ConnectFn } = {}
+): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS
+  const connect = options.connect ?? defaultConnect
+  let socket: net.Socket
+  try {
+    socket = connect(socketPath)
+  } catch {
+    return Promise.resolve(false)
+  }
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (live: boolean): void => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      socket.destroy()
+      resolve(live)
+    }
+    timer = setTimeout(() => finish(true), timeoutMs)
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+  })
+}
+
 /**
  * One method call. Resolves with the `result` object (which still carries its
  * `type` discriminator), rejects with `HerdrError`.
