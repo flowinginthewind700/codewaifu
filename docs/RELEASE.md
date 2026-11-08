@@ -28,7 +28,7 @@ decides that from the tag name alone.
 ## What the tag does
 
 `.github/workflows/release.yml` builds all three platforms in parallel
-(`macos-14`, `windows-latest`, `ubuntu-22.04`). Each matrix entry first runs
+(`macos-15`, `windows-latest`, `ubuntu-22.04`). Each matrix entry first runs
 `node scripts/ensure-voice-runtime.mjs <platform> <arches>`, because the neural
 voice is a native optionalDependency per platform/arch: npm installs only the
 binaries of the machine it runs on, and a missing one degrades every spoken

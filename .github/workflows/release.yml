@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             platform: mac
             # The mac target ships two arches from one arm64 runner, so the
             # x64 voice runtime has to be fetched: npm installs only the
