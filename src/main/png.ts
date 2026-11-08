@@ -249,3 +249,53 @@ export function waifuIconPng(size: number, badge = 0): Buffer {
   if (!label) return encodePng(size, size, base)
   return encodePng(size, size, compose([base, paintBadge(size, label)]))
 }
+
+function ellipseCoverage(
+  x: number,
+  y: number,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  softness: number
+): number {
+  const dx = (x + 0.5 - cx) / rx
+  const dy = (y + 0.5 - cy) / ry
+  const distance = Math.sqrt(dx * dx + dy * dy)
+  const edge = softness / Math.max(rx, ry)
+  if (distance > 1 + edge) return 0
+  if (distance <= 1 - edge) return 1
+  return Math.max(0, Math.min(1, (1 + edge - distance) / (2 * edge)))
+}
+
+/**
+ * A transparent monochrome status-item image for macOS.
+ *
+ * Template images take their colour from the system menu bar, which is the
+ * difference between a visible mark in both light and dark appearance and a
+ * dark tile that disappears at 22px. This is deliberately a silhouette rather
+ * than the app tile converted to alpha: at 22px the tile becomes one opaque
+ * square, while the open face, fringe and eyes still read as a character.
+ */
+export function waifuTemplatePng(size: number): Buffer {
+  const u = size / 64
+  return encodePng(size, size, (x, y) => {
+    const hair = Math.max(
+      ellipseCoverage(x, y, 32 * u, 29 * u, 22 * u, 20 * u, u),
+      ellipseCoverage(x, y, 14 * u, 38 * u, 7 * u, 13 * u, u),
+      ellipseCoverage(x, y, 50 * u, 38 * u, 7 * u, 13 * u, u)
+    )
+    if (hair <= 0) return [0, 0, 0, 0]
+
+    const face = ellipseCoverage(x, y, 32 * u, 36 * u, 15 * u, 13 * u, u)
+    let alpha = hair * (1 - face * 0.96)
+
+    const eyes = Math.max(
+      ellipseCoverage(x, y, 26 * u, 37 * u, 2.5 * u, 3.4 * u, u * 0.7),
+      ellipseCoverage(x, y, 38 * u, 37 * u, 2.5 * u, 3.4 * u, u * 0.7),
+      ellipseCoverage(x, y, 32 * u, 45 * u, 1.7 * u, 1.1 * u, u * 0.55)
+    )
+    alpha = Math.max(alpha, eyes)
+    return [0, 0, 0, Math.round(alpha * 255)]
+  })
+}

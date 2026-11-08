@@ -537,11 +537,6 @@ function installCliLauncher(): void {
 }
 
 async function boot(): Promise<void> {
-  if (isMac) {
-    // Background accessory: no Dock icon, the tray is the chrome.
-    app.setActivationPolicy('accessory')
-  }
-
   const instance = core ?? new Core(app.getVersion())
   core = instance
 
@@ -825,12 +820,11 @@ async function main(): Promise<void> {
   })
 
   app.on('window-all-closed', () => {
-    // macOS stays up as a background accessory. On Linux a window manager can
-    // close our frame behind our back (Alt+F4, "close all"), and with a tray
-    // icon up that must not kill the companion: the tray click brings her back.
-    // Where there is no tray there is nothing left to click, so we do quit.
-    if (isMac) return
-    if (isLinux && handle?.tray) return
+    // A tray or Dock can summon the app after its last window closes. A
+    // taskbar fallback cannot: once the window is destroyed there is no icon
+    // left, so that case quits normally instead of leaving an unreachable
+    // process behind.
+    if (handle?.stayResident) return
     app.quit()
   })
 

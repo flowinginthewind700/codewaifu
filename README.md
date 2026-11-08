@@ -81,11 +81,14 @@ what every agent is doing right now.
 - **A window that behaves.** Draggable anywhere, always-on-top, click-through
   when you want it ghosted, opacity and scale sliders, collapses to a 320px
   bubble and expands to a full panel with tabs.
-- **A tray that answers.** The tray menu shows or hides the stage, opens the
-  Bench with its attention count in the label, mutes the voice, repairs the
-  agent hooks and quits. On Linux a left click on the icon opens that menu,
-  because the platform delivers no click of its own; on macOS and Windows the
-  left click summons her and the right click opens the menu.
+- **A tray that answers, with a way back.** The tray menu shows or hides the
+  stage, opens the Bench with its attention count in the label, mutes the
+  voice, repairs the agent hooks and quits. On Linux a left click on the icon
+  opens that menu, because the platform delivers no click of its own; on macOS
+  and Windows the left click summons her and the right click opens the menu.
+  If the tray cannot be created, macOS keeps the Dock icon and Linux or Windows
+  keeps the window on the taskbar, so a failed status item never strands the
+  app without an entry point.
 - **Loopback only.** The relay binds `127.0.0.1`, every route except `/health`
   needs a per-install token, and the Host header is validated. No telemetry,
   no network egress, no sudo.

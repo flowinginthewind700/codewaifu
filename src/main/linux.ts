@@ -59,8 +59,11 @@ export function currentSession(): LinuxSession {
  * confusing Linux failure mode here: the companion hides and there is nothing
  * left to click, so the advice has to be somewhere the user will find it.
  */
-export function logDesktop(session: LinuxSession = currentSession(), surface?: string): void {
-  const watcher = statusNotifierPresent()
+export function logDesktop(
+  session: LinuxSession = currentSession(),
+  surface?: string,
+  watcher: boolean = statusNotifierPresent()
+): boolean {
   const advice = trayAdvice(watcher, session.desktop)
   log('info', 'linux session', {
     display: session.display,
@@ -70,4 +73,5 @@ export function logDesktop(session: LinuxSession = currentSession(), surface?: s
     tray: watcher
   })
   if (advice) log('warn', 'tray', advice)
+  return watcher
 }

@@ -1,5 +1,14 @@
 import path from 'node:path'
-import { BrowserWindow, Menu, Tray, globalShortcut, nativeImage, screen, type Display } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  globalShortcut,
+  nativeImage,
+  screen,
+  type Display
+} from 'electron'
 import {
   HEIGHT_CHAT,
   WINDOW_WIDTH,
@@ -24,7 +33,7 @@ import { isLinux, isMac } from './env'
 import { here } from './here'
 import { compositorProbe, currentSession, logDesktop } from './linux'
 import { log } from './log'
-import { badgeDigits, waifuIconPng } from './png'
+import { badgeDigits, waifuIconPng, waifuTemplatePng } from './png'
 import {
   trayInteraction,
   trayMenu,
@@ -32,6 +41,7 @@ import {
   type TrayAction,
   type TrayMenuState
 } from '../shared/trayMenu'
+import { desktopPresence, type DesktopPresence } from '../shared/desktopPresence'
 import type { Lang } from '../shared/protocol'
 
 export interface WindowHandlers {
@@ -71,6 +81,7 @@ export interface WindowHandlers {
 export interface WindowHandle {
   win: BrowserWindow
   tray: Tray | null
+  stayResident: boolean
   show: (focus: boolean) => void
   hide: () => void
   setExpanded: (expanded: boolean) => void
@@ -450,6 +461,7 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
 
   const trayHandle = createTray(win, handlers, summon, show)
   const tray = trayHandle.tray
+  const presence = applyDesktopPresence(win, trayHandle)
 
   /* ---- system-wide summon hotkey (rules in shared/hotkey.ts) ------------- */
   let inputActive = false
@@ -483,6 +495,7 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
   return {
     win,
     tray,
+    stayResident: presence.keepAliveWithoutWindows,
     show,
     hide: () => {
       if (!win.isDestroyed()) win.hide()
@@ -532,6 +545,8 @@ export function createWindow(config: AppConfig, handlers: WindowHandlers): Windo
 /** The tray, plus the two things the rest of main needs from it. */
 interface TrayHandle {
   tray: Tray | null
+  available: boolean
+  reason: 'tray-ready' | 'tray-construction-failed' | 'linux-no-status-notifier'
   setBadge: (count: number) => void
   refresh: () => void
 }
@@ -547,9 +562,52 @@ function trayIconSize(): number {
  * 128px and resampled stays a number.
  */
 function trayImage(size: number, badge: number): Electron.NativeImage {
+  if (isMac) {
+    // Template images carry alpha only; the system chooses the foreground
+    // colour for the current menu-bar appearance.
+    const image = nativeImage
+      .createFromBuffer(waifuTemplatePng(size * 4))
+      .resize({ width: size, height: size })
+    image.setTemplateImage(true)
+    return image
+  }
   return nativeImage
     .createFromBuffer(waifuIconPng(size * 4, badge))
     .resize({ width: size, height: size })
+}
+
+/**
+ * Apply the shell entry chosen above the window. In particular, a macOS Dock
+ * icon stays visible until this point: hiding it earlier made any slow or
+ * failed boot look like an app with no icon anywhere.
+ */
+function applyDesktopPresence(win: BrowserWindow, tray: TrayHandle): DesktopPresence {
+  const presence = desktopPresence({
+    platform: process.platform,
+    trayCreated: Boolean(tray.tray),
+    statusNotifierHost: isLinux ? tray.reason === 'tray-ready' : undefined
+  })
+  try {
+    if (presence.macActivationPolicy) {
+      app.setActivationPolicy(presence.macActivationPolicy)
+    }
+    if (!presence.hideFromTaskbar && !win.isDestroyed()) {
+      win.setSkipTaskbar(false)
+    }
+  } catch (error) {
+    log('warn', 'desktop presence fallback failed', {
+      mode: presence.mode,
+      reason: presence.reason,
+      error: String(error)
+    })
+  }
+  log('info', 'desktop presence', {
+    platform: process.platform,
+    mode: presence.mode,
+    tray: tray.available,
+    reason: tray.reason
+  })
+  return presence
 }
 
 function createTray(
@@ -558,15 +616,24 @@ function createTray(
   summon: (focus: boolean) => void,
   show: (focus: boolean) => void
 ): TrayHandle {
-  const dead: TrayHandle = { tray: null, setBadge: () => {}, refresh: () => {} }
+  const dead = (reason: TrayHandle['reason']): TrayHandle => ({
+    tray: null,
+    available: false,
+    reason,
+    setBadge: () => {},
+    refresh: () => {}
+  })
   try {
     const size = trayIconSize()
     const tray = new Tray(trayImage(size, 0))
+    let available = true
+    let reason: TrayHandle['reason'] = 'tray-ready'
     let badgeCount = 0
     if (isLinux) {
       // A Tray object is created even when no host will ever show it, so the
       // bus probe is the only way to tell the user why the icon is missing.
-      logDesktop()
+      available = logDesktop()
+      if (!available) reason = 'linux-no-status-notifier'
     }
     tray.setToolTip('CodeWaifu')
 
@@ -679,9 +746,9 @@ function createTray(
       // The bench row carries the same count, so it is part of the menu's state.
       refresh()
     }
-    return { tray, setBadge, refresh }
+    return { tray, available, reason, setBadge, refresh }
   } catch (error) {
     log('warn', 'tray unavailable (headless session?)', String(error))
-    return dead
+    return dead('tray-construction-failed')
   }
 }

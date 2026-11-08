@@ -341,8 +341,11 @@ describe.skipIf(!hasBash)('install.sh', () => {
       // `cp -a` met a mapped executable and the install died with "cannot
       // create regular file ...: Text file busy" -- which reads like a corrupt
       // download, and leaves the old code installed with no hint why.
-      const sleep = '/bin/sleep'
-      if (!existsSync(sleep)) return // no POSIX sleep to stand in for the app
+      // /bin/sh is a standalone ELF on Linux. Unlike multicall coreutils, it
+      // keeps working after being copied to the app's filename; copying
+      // /bin/sleep here made uutils exit as an unknown applet before install.
+      const shell = '/bin/sh'
+      if (!existsSync(shell)) return
 
       const sandbox = mkdtempSync(join(tmpdir(), 'cw-install-busy-'))
       const root = join(sandbox, 'share/CodeWaifu')
@@ -352,9 +355,12 @@ describe.skipIf(!hasBash)('install.sh', () => {
       // would prove nothing: bash only holds it open, cp truncates it happily,
       // and the collision this guards against would never happen.
       const installed = join(root, 'codewaifu')
-      copyFileSync(sleep, installed)
+      copyFileSync(shell, installed)
       chmodSync(installed, 0o755)
-      const running = spawn(installed, ['30'], { detached: true, stdio: 'ignore' })
+      const running = spawn(installed, ['-c', 'while :; do :; done'], {
+        detached: true,
+        stdio: 'ignore'
+      })
       await new Promise<void>((resolve) => running.once('spawn', resolve))
 
       const alive = (): boolean => {
