@@ -72,8 +72,9 @@ Gemini CLI、Antigravity、Kimi CLI、ZCode、OpenCode、Kiro、Pi 与 Trae,把�
 - **会答话的托盘,也留了后路。** 托盘菜单可以显示/收起舞台、打开工作台
   (菜单项上带着注意力计数)、静音、修复 agent hooks、退出。Linux 上左键点
   图标就是这份菜单——这个平台的托盘不投递点击事件,菜单即全部交互;macOS 与
-  Windows 上左键召唤她,右键才是菜单。托盘创建失败时,macOS 保留 Dock 图标,
-  Linux 与 Windows 把窗口留在任务栏,状态图标失效不会让应用失去入口。
+  Windows 上左键召唤她,右键才是菜单。macOS 还会始终保留 Dock 图标,因为
+  Electron 可能成功创建了系统并未实际显示的状态项。托盘创建失败时,Linux 与
+  Windows 把窗口留在任务栏,每个平台因此都保留一个看得见的入口。
 - **只走回环。** relay 只绑 `127.0.0.1`,除 `/health` 外所有路由都要带本机安装时
   生成的 token,并校验 Host 头。无遥测、无外联、不需要 sudo。
 
@@ -235,7 +236,8 @@ mkdir -p ~/.codex/skills/codewaifu && curl -fsSL \
 
 ### 首次启动
 
-1. 打开应用。它会跟你打招呼,然后停进菜单栏(macOS)或托盘(Windows、Linux)。
+1. 打开应用。它会跟你打招呼,macOS 上保留 Dock 图标并添加菜单栏图标,
+   Windows 与 Linux 上则停进托盘。
 2. Codex 对第三方 hook 有一次性信任确认:打开 Codex,执行 `/hooks`,信任
    CodeWaifu 的条目。其余 agent 都无需任何操作。
 3. 开一个 agent 会话。结束事件、权限请求、通知从此以语音和气泡到达。

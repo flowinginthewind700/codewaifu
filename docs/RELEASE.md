@@ -58,8 +58,9 @@ Open the dmg, drag to /Applications, launch, and check by hand:
 
 - she greets in the neural voice, not the OS voice (a silent Matcha load is
   exactly the failure `ensure-voice-runtime` exists to prevent);
-- the menubar icon: left click summons her, right click opens the menu, and the
-  bench row carries the attention count;
+- the Dock icon is present from launch through a hidden window, and the menubar
+  icon is also visible: left click summons her, right click opens the menu, and
+  the bench row carries the attention count;
 - the Bench opens and attaches to a running herdr, or shows the install card;
 - the packaged binary answers the CLI:
   `./release/mac-arm64/CodeWaifu.app/Contents/MacOS/CodeWaifu --cli help`.

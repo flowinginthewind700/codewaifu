@@ -2,17 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { desktopPresence } from '../src/shared/desktopPresence'
 
 describe('desktopPresence', () => {
-  it('uses the macOS status item and only then removes the Dock icon', () => {
+  it('keeps the macOS Dock even when the status item is constructed', () => {
     expect(desktopPresence({ platform: 'darwin', trayCreated: true })).toEqual({
-      mode: 'tray',
-      hideFromTaskbar: true,
-      macActivationPolicy: 'accessory',
+      mode: 'dock',
+      hideFromTaskbar: false,
+      macActivationPolicy: 'regular',
       keepAliveWithoutWindows: true,
       reason: 'tray-ready'
     })
   })
 
-  it('keeps the macOS Dock as the way back when the status item cannot be made', () => {
+  it('keeps the macOS Dock when the status item cannot be made', () => {
     expect(desktopPresence({ platform: 'darwin', trayCreated: false })).toEqual({
       mode: 'dock',
       hideFromTaskbar: false,
@@ -20,6 +20,15 @@ describe('desktopPresence', () => {
       keepAliveWithoutWindows: true,
       reason: 'tray-construction-failed'
     })
+  })
+
+  it('never lets a macOS Tray object become the only observable entry', () => {
+    for (const trayCreated of [false, true]) {
+      const presence = desktopPresence({ platform: 'darwin', trayCreated })
+      expect(presence.mode).toBe('dock')
+      expect(presence.hideFromTaskbar).toBe(false)
+      expect(presence.macActivationPolicy).toBe('regular')
+    }
   })
 
   it('uses a Windows tray without retaining a destroyed window lifecycle', () => {

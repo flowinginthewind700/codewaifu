@@ -86,9 +86,10 @@ what every agent is doing right now.
   voice, repairs the agent hooks and quits. On Linux a left click on the icon
   opens that menu, because the platform delivers no click of its own; on macOS
   and Windows the left click summons her and the right click opens the menu.
-  If the tray cannot be created, macOS keeps the Dock icon and Linux or Windows
-  keeps the window on the taskbar, so a failed status item never strands the
-  app without an entry point.
+  macOS always keeps its Dock icon too, because Electron can successfully
+  create a status item that macOS does not actually show. If the tray cannot be
+  created, Linux or Windows keeps the window on the taskbar, so every platform
+  retains a visible entry point.
 - **Loopback only.** The relay binds `127.0.0.1`, every route except `/health`
   needs a per-install token, and the Host header is validated. No telemetry,
   no network egress, no sudo.
@@ -275,8 +276,8 @@ the plugin commands both drive the same installer.
 
 ### First launch
 
-1. Open the app. It greets you and parks in the menu bar (macOS) or tray
-   (Windows, Linux).
+1. Open the app. It greets you, keeps its Dock icon and adds a menu-bar entry
+   (macOS), or parks in the tray (Windows, Linux).
 2. Codex gates third-party hooks behind a one-time trust prompt: open Codex,
    run `/hooks`, and trust the CodeWaifu entries. Every other agent needs
    nothing.
