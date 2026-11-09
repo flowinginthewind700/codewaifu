@@ -1835,9 +1835,10 @@ function tokenTotal(tokens: Record<string, string>): number {
 }
 
 /**
- * Tree order: tasks that need a decision float to the top of their group, and
- * otherwise the order is alphabetical and stable. Movement in a tree should
- * mean something, so the only thing that reorders a row is "it needs you now".
+ * Tree order: tasks that need a decision float to the top of their group, then
+ * filing status decides the remaining rungs, and title is stable inside each.
+ * Live work state is deliberately absent: agents flip `working` several times
+ * a minute, and a row moving under the pointer is an unreadable tree.
  */
 export function compareTasks(a: TaskView, b: TaskView): number {
   const rankA = taskSortRank(a)
@@ -1850,9 +1851,9 @@ export function compareTasks(a: TaskView, b: TaskView): number {
 
 function taskSortRank(task: TaskView): number {
   if (task.needsMe > 0) return 0
-  if (task.status === 'active') return task.liveStatus === 'working' ? 1 : 2
-  if (task.status === 'lost') return 3
-  return 4
+  if (task.status === 'active') return 1
+  if (task.status === 'lost') return 2
+  return 3
 }
 
 export function deriveGroups(views: readonly TaskView[]): GroupView[] {

@@ -14,11 +14,12 @@
  * 3. `imported` and `adopted` are one bucket to the filter and two to the badge.
  *    Both mean "not made here"; only the row can say which.
  *
- * The second half of the file is the other two promises the rail makes: a row
- * only moves when it needs you (`compareTasks`), and a heading only ever moves
- * when a directory is renamed (`deriveGroups`, `groupLabelFor`). Both are read
- * through `buildBench` rather than from hand-written views, so a fixture here
- * cannot describe a bench the projection could never produce.
+ * The second half of the file is the other two promises the rail makes: an
+ * active row keeps its place when the agent starts or stops working, and a
+ * heading only ever moves when a directory is renamed (`deriveGroups`,
+ * `groupLabelFor`). Both are read through `buildBench` rather than from
+ * hand-written views, so a fixture here cannot describe a bench the projection
+ * could never produce.
  *
  * Records come out of `parseTaskRecord` and groups out of `buildBench`, so a
  * fixture here cannot describe a bench the projection could never produce.
@@ -70,11 +71,10 @@ function snapshotWith(workspaceId: string, cwd: string): Snapshot {
 }
 
 /**
- * One live pane per entry, each with a status. The `working` rung of the tree
- * order can only be reached from a real herdr pane, and the cwds are a
- * directory no task claims so that binding happens by workspace rather than by
- * the workdir fallback (which would quietly make every task in the fixture
- * live, and the ladder untestable).
+ * One live pane per entry, each with a status. The cwds are a directory no task
+ * claims so that binding happens by workspace rather than by the workdir
+ * fallback (which would quietly make every task in the fixture live, and the
+ * ladder untestable).
  */
 function liveSnapshot(
   panes: readonly { workspaceId: string; status: string }[]
@@ -406,10 +406,12 @@ describe('treeFilterOf', () => {
 
 /**
  * Movement in a tree has to mean something. The ladder is: needs a decision,
- * then active and working, then active and quiet, then lost, then everything
- * the human put away - and only inside a rung does the title decide. Titles
- * below are deliberately reverse-alphabetical, so an order that came out
- * alphabetical would be an order that ignored the ranks.
+ * then active, then lost, then everything the human put away - and only inside
+ * a rung does the title decide. A live `working` light is not a rung: agents
+ * flip it several times a minute, and moving a row underneath the pointer is a
+ * broken navigation tree. Titles below are deliberately reverse-alphabetical,
+ * so an order that came out alphabetical would be an order that ignored the
+ * filing ranks.
  */
 describe('the tree order', () => {
   const ladder = (): BenchView =>
@@ -428,7 +430,7 @@ describe('the tree order', () => {
     )
 
   it('ranks by need, and only then by name', () => {
-    expect(ladder().tasks.map((task) => task.id)).toEqual(['t-e', 't-d', 't-c', 't-b', 't-a'])
+    expect(ladder().tasks.map((task) => task.id)).toEqual(['t-e', 't-c', 't-d', 't-b', 't-a'])
   })
 
   it('ranks the row needing a decision first even when it is finished', () => {
@@ -449,6 +451,27 @@ describe('the tree order', () => {
     expect(view.tasks.map((task) => task.id)).toEqual(['t-aaa', 't-zzz', 't-a', 't-b'])
   })
 
+  it('does not move an active row when its agent starts working', () => {
+    const tasks = [
+      liveTask({ id: 't-alpha', title: 'alpha', workspaceId: 'ws-alpha' }),
+      liveTask({ id: 't-zulu', title: 'zulu', workspaceId: 'ws-zulu' })
+    ]
+    const order = (statuses: readonly [string, string]): string[] =>
+      bench(tasks, {
+        snapshot: liveSnapshot([
+          { workspaceId: 'ws-alpha', status: statuses[0] },
+          { workspaceId: 'ws-zulu', status: statuses[1] }
+        ])
+      }).tasks.map((task) => task.id)
+
+    expect(order(['idle', 'idle'])).toEqual(['t-alpha', 't-zulu'])
+    // Clicking a row does not itself alter the projection. The status event
+    // that can arrive just after the click must not reorder the row either.
+    expect(order(['idle', 'working'])).toEqual(['t-alpha', 't-zulu'])
+    expect(order(['working', 'idle'])).toEqual(['t-alpha', 't-zulu'])
+    expect(order(['working', 'working'])).toEqual(['t-alpha', 't-zulu'])
+  })
+
   it('does not float a blocked task on its own: blocked is what the queue is for', () => {
     const view = bench(
       [
@@ -463,8 +486,7 @@ describe('the tree order', () => {
         ])
       }
     )
-    // `blocked` folds to the same rung as an active task with no live pane, so
-    // these two sort on title; the working row outranks both.
+    // Working, blocked and quiet are all active rows, so their titles decide.
     expect(view.tasks.map((task) => task.id)).toEqual(['t-working', 't-quiet', 't-blocked'])
   })
 
